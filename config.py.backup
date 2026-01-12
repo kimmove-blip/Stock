@@ -1,0 +1,23 @@
+
+def get_signal_kr(signal_code):
+    return SIGNAL_NAMES_KR.get(signal_code, signal_code)
+
+
+
+def calculate_signal_weight(signals):
+    from IndicatorWeights
+    
+    total_weight = 0
+    weights_dict = vars(IndicatorWeights)
+    
+    for signal in signals:
+        weight = weights_dict.get(signal, 0)
+        if weight:
+            total_weight += weight
+    
+    return total_weight
+
+
+def get_signal_kr(signal_code):
+def get_signal_description(signal_code):
+    return SIGNAL_DESCRIPTIONS.get(signal_code, '')

@@ -1,0 +1,15 @@
+[Unit]
+Description=Stock Analysis Dashboard (Streamlit)
+After=network.target
+
+[Service]
+Type=simple
+User=kimhc
+WorkingDirectory=/home/kimhc/Stock
+ExecStart=/home/kimhc/Stock/venv/bin/streamlit run dashboard.py --server.port 8501 --server.address 0.0.0.0
+Restart=always
+RestartSec=10
+Environment=PATH=/home/kimhc/Stock/venv/bin:/usr/local/bin:/usr/bin:/bin
+
+[Install]
+WantedBy=multi-user.target

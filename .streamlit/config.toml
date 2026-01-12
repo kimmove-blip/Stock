@@ -1,0 +1,25 @@
+[server]
+# 외부 접속 허용
+address = "0.0.0.0"
+# 포트 설정 (HTTPS는 리버스 프록시로 처리)
+port = 8501
+# CORS 설정
+enableCORS = false
+enableXsrfProtection = false
+# 헤드리스 모드
+headless = true
+# 최대 업로드 크기
+maxUploadSize = 200
+
+[browser]
+# 서버 주소
+serverAddress = "stock.kimhc.dedyn.io"
+# HTTPS 사용
+serverPort = 443
+# 자동 브라우저 열기 비활성화
+gatherUsageStats = false
+
+[theme]
+# 밝은 테마
+base = "light"
+primaryColor = "#667eea"

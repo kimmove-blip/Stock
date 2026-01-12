@@ -1,0 +1,32 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+venv/
+env/
+*.egg-info/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# 환경설정
+.env
+*.log
+
+# 출력물 (선택적 - 필요시 주석 해제)
+# output/
+
+# 시스템
+.DS_Store
+Thumbs.db
+
+# TA-Lib 빌드
+ta-lib/
+
+# 캐시
+.streamlit/secrets.toml
