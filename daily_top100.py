@@ -29,7 +29,7 @@ from config import (
 )
 from email_sender import send_daily_report
 from pdf_generator import generate_detailed_pdf
-from result_tracker import update_with_next_day_results
+from result_tracker import update_with_next_day_results, get_previous_result_file, get_yesterday_results, create_two_sheet_excel
 
 
 def run_screening(mode="quick", top_n=100):
@@ -75,18 +75,20 @@ def categorize_results(results):
     return categorized
 
 
-def save_results(results, top_n=100):
-    """결과 저장 (Excel, JSON, CSV, PDF)"""
+def save_results(results, top_n=100, yesterday_df=None, yesterday_summary=None):
+    """결과 저장 (Excel 2시트, JSON, CSV, PDF)"""
     print("\n[저장] 결과 파일 생성 중...")
 
     # 상위 N개만 추출
     top_results = results[:top_n]
 
-    # 1. Excel 저장
-    excel_path = OutputConfig.get_filepath("excel")
+    # DataFrame 생성 (CSV용)
     df = create_dataframe(top_results)
-    df.to_excel(excel_path, index=False, engine="openpyxl")
-    print(f"    → Excel: {excel_path}")
+
+    # 1. Excel 저장 (2개 시트: 내일의 관심종목 + 전일 결과)
+    excel_path = OutputConfig.get_filepath("excel")
+    create_two_sheet_excel(top_results, yesterday_df, yesterday_summary, excel_path)
+    print(f"    → Excel: {excel_path} (2개 시트)")
 
     # 2. JSON 저장
     json_path = OutputConfig.get_filepath("json")
@@ -258,10 +260,22 @@ def run_with_schedule(send_email=True):
 
         # 전날 결과 추적
         print("\n[1단계] 전날 선정 종목 실적 추적")
-        update_with_next_day_results()
+        print("-" * 50)
+        prev_file = get_previous_result_file()
+        yesterday_df, yesterday_summary = None, None
+        if prev_file:
+            yesterday_df, yesterday_summary = get_yesterday_results(prev_file)
+            if yesterday_summary:
+                print(f"[추적] 전날 파일: {prev_file}")
+                print(f"    - 총 투자금: {yesterday_summary.get('total_investment', 0):,}원")
+                print(f"    - 총 회수금: {yesterday_summary.get('total_returns', 0):,}원")
+                print(f"    - 총 수익금: {yesterday_summary.get('total_profit', 0):,}원 ({yesterday_summary.get('total_profit_rate', 0)}%)")
+        else:
+            print("[추적] 전날 파일 없음")
 
         # 스크리닝 실행
         print("\n[2단계] 오늘의 스크리닝 실행")
+        print("-" * 50)
         results = run_screening(mode=ScreeningConfig.MODE, top_n=ScreeningConfig.TOP_N)
 
         if not results:
@@ -269,7 +283,7 @@ def run_with_schedule(send_email=True):
             return
 
         categorized = categorize_results(results)
-        save_results(results, top_n=ScreeningConfig.TOP_N)
+        save_results(results, top_n=30, yesterday_df=yesterday_df, yesterday_summary=yesterday_summary)
         print_summary(results, categorized)
 
         # 이메일 발송
@@ -343,7 +357,19 @@ def main():
         # 전날 결과 추적 (다음날 실적 기록)
         print("\n[1단계] 전날 선정 종목 실적 추적")
         print("-" * 50)
-        update_with_next_day_results()
+        prev_file = get_previous_result_file()
+        yesterday_df, yesterday_summary = None, None
+        if prev_file:
+            yesterday_df, yesterday_summary = get_yesterday_results(prev_file)
+            if yesterday_summary:
+                print(f"[추적] 전날 파일: {prev_file}")
+                print(f"    - 총 투자금: {yesterday_summary.get('total_investment', 0):,}원")
+                print(f"    - 총 회수금: {yesterday_summary.get('total_returns', 0):,}원")
+                print(f"    - 총 수익금: {yesterday_summary.get('total_profit', 0):,}원 ({yesterday_summary.get('total_profit_rate', 0)}%)")
+                print(f"    - 수익 종목: {yesterday_summary.get('success_count', 0)}개")
+                print(f"    - 손실 종목: {yesterday_summary.get('fail_count', 0)}개")
+        else:
+            print("[추적] 전날 파일 없음")
 
         # 스크리닝 실행
         print("\n[2단계] 오늘의 스크리닝 실행")
@@ -357,9 +383,13 @@ def main():
         # 결과 분류
         categorized = categorize_results(results)
 
-        # 결과 저장
+        # 결과 저장 (상위 30개만, 2개 시트)
         if not args.no_save:
-            excel_path, json_path, csv_path = save_results(results, top_n=args.top)
+            excel_path, json_path, csv_path = save_results(
+                results, top_n=30,
+                yesterday_df=yesterday_df,
+                yesterday_summary=yesterday_summary
+            )
 
         # 요약 출력
         print_summary(results, categorized)
