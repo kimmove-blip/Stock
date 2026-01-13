@@ -860,11 +860,24 @@ else:
         with st.popover(f"👤{user_name[:3]}"):
             # 게스트가 아닌 경우에만 설정 표시
             if not is_guest:
-                menu_tab = st.radio("", ["로그아웃", "📱 텔레그램 알림"], label_visibility="collapsed", horizontal=True)
+                menu_tab = st.radio("", ["로그아웃", "📧 이메일", "📱 텔레그램"], label_visibility="collapsed", horizontal=True)
             else:
                 menu_tab = "로그아웃"
 
-            if menu_tab == "로그아웃":
+            if menu_tab == "📧 이메일":
+                st.markdown("#### 이메일 구독 설정")
+                current_user_id = auth.get_user_id()
+                email_subscribed = db.get_email_subscription(current_user_id) if current_user_id else False
+
+                new_subscription = st.toggle("📧 매일 AI 추천 종목 받기", value=email_subscribed, key="email_sub_toggle")
+                st.caption("매일 오전 9시 TOP 100 분석 리포트")
+
+                if new_subscription != email_subscribed:
+                    db.update_email_subscription(current_user_id, new_subscription)
+                    st.success("저장됨!" if new_subscription else "구독 해제됨")
+                    st.rerun()
+
+            elif menu_tab == "로그아웃":
                 st.write("로그아웃 하시겠습니까?")
                 if st.button("로그아웃", type="primary", use_container_width=True):
                     # 쿠키 삭제 (JavaScript)
@@ -880,7 +893,7 @@ else:
                     st.session_state['logout'] = True
                     st.rerun()
 
-            elif menu_tab == "📱 텔레그램 알림":
+            elif menu_tab == "📱 텔레그램":
                 st.markdown("#### 하락 알림 설정")
 
                 # 현재 설정 조회

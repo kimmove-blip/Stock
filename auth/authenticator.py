@@ -100,6 +100,10 @@ class StockAuthenticator:
             password = st.text_input("비밀번호", type="password")
             password2 = st.text_input("비밀번호 확인", type="password")
 
+            st.markdown("---")
+            email_subscription = st.checkbox("📧 매일 AI 추천 종목 이메일 받기", value=True)
+            st.caption("매일 오전 9시에 TOP 100 종목 분석 리포트를 이메일로 받아보세요.")
+
             submitted = st.form_submit_button("가입하기", type="primary", use_container_width=True)
 
             if submitted:
@@ -117,7 +121,7 @@ class StockAuthenticator:
                 password_hash = stauth.Hasher.hash(password)
 
                 # DB에 저장
-                self.db.create_user(email, username, password_hash, name)
+                self.db.create_user(email, username, password_hash, name, email_subscription)
 
                 # config 갱신
                 self.refresh_config()

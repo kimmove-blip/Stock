@@ -108,6 +108,9 @@ class DatabaseManager:
         if 'telegram_alerts_enabled' not in columns:
             conn.execute("ALTER TABLE users ADD COLUMN telegram_alerts_enabled BOOLEAN DEFAULT 0")
 
+        if 'email_subscription' not in columns:
+            conn.execute("ALTER TABLE users ADD COLUMN email_subscription BOOLEAN DEFAULT 0")
+
         conn.commit()
 
     # ==================== 사용자 관련 ====================
@@ -138,12 +141,12 @@ class DatabaseManager:
             row = cursor.fetchone()
             return dict(row) if row else None
 
-    def create_user(self, email, username, password_hash, name):
+    def create_user(self, email, username, password_hash, name, email_subscription=False):
         """사용자 생성"""
         with self.get_connection() as conn:
             cursor = conn.execute(
-                "INSERT INTO users (email, username, password_hash, name) VALUES (?, ?, ?, ?)",
-                (email, username, password_hash, name)
+                "INSERT INTO users (email, username, password_hash, name, email_subscription) VALUES (?, ?, ?, ?, ?)",
+                (email, username, password_hash, name, 1 if email_subscription else 0)
             )
             conn.commit()
             return cursor.lastrowid
@@ -368,3 +371,32 @@ class DatabaseManager:
                 (user_id, -days)
             )
             return [dict(row) for row in cursor.fetchall()]
+
+    # ==================== 이메일 구독 ====================
+
+    def get_email_subscribers(self):
+        """이메일 구독자 목록 (이메일 주소 리스트)"""
+        with self.get_connection() as conn:
+            cursor = conn.execute(
+                "SELECT email FROM users WHERE email_subscription = 1 AND is_active = 1"
+            )
+            return [row['email'] for row in cursor.fetchall()]
+
+    def update_email_subscription(self, user_id, subscribed):
+        """이메일 구독 설정 변경"""
+        with self.get_connection() as conn:
+            conn.execute(
+                "UPDATE users SET email_subscription = ? WHERE id = ?",
+                (1 if subscribed else 0, user_id)
+            )
+            conn.commit()
+
+    def get_email_subscription(self, user_id):
+        """이메일 구독 상태 조회"""
+        with self.get_connection() as conn:
+            cursor = conn.execute(
+                "SELECT email_subscription FROM users WHERE id = ?",
+                (user_id,)
+            )
+            row = cursor.fetchone()
+            return bool(row['email_subscription']) if row else False

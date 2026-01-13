@@ -19,17 +19,36 @@ load_dotenv()
 class EmailSender:
     """이메일 발송 클래스"""
 
-    def __init__(self):
+    def __init__(self, use_db_subscribers=False):
         # 환경변수에서 설정 로드
         self.smtp_server = os.getenv("SMTP_SERVER", "smtp.gmail.com")
         self.smtp_port = int(os.getenv("SMTP_PORT", "587"))
         self.sender_email = os.getenv("SENDER_EMAIL", "")
         self.sender_password = os.getenv("SENDER_PASSWORD", "")  # 앱 비밀번호
-        self.recipient_emails = os.getenv("RECIPIENT_EMAILS", "").split(",")
+
+        # DB 구독자 목록 또는 환경변수 수신자 목록
+        if use_db_subscribers:
+            self.recipient_emails = self._get_db_subscribers()
+        else:
+            self.recipient_emails = os.getenv("RECIPIENT_EMAILS", "").split(",")
+
+    def _get_db_subscribers(self):
+        """DB에서 이메일 구독자 목록 조회"""
+        try:
+            from database import DatabaseManager
+            db = DatabaseManager()
+            subscribers = db.get_email_subscribers()
+            # 환경변수의 기본 수신자도 포함
+            env_recipients = os.getenv("RECIPIENT_EMAILS", "").split(",")
+            all_recipients = list(set(subscribers + [e.strip() for e in env_recipients if e.strip()]))
+            return all_recipients if all_recipients else [""]
+        except Exception as e:
+            print(f"[이메일] DB 구독자 조회 실패: {e}")
+            return os.getenv("RECIPIENT_EMAILS", "").split(",")
 
     def is_configured(self):
         """이메일 설정이 완료되었는지 확인"""
-        return bool(self.sender_email and self.sender_password and self.recipient_emails[0])
+        return bool(self.sender_email and self.sender_password and self.recipient_emails and self.recipient_emails[0])
 
     def send_report(self, subject, body_html, attachments=None):
         """
@@ -222,7 +241,7 @@ def send_daily_report(results, pdf_path=None):
         results: 스크리닝 결과 리스트
         pdf_path: PDF 첨부파일 경로
     """
-    sender = EmailSender()
+    sender = EmailSender(use_db_subscribers=True)
 
     if not sender.is_configured():
         print("[이메일] 설정이 필요합니다. .env 파일에 다음 항목을 추가하세요:")
