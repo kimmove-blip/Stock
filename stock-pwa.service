@@ -1,0 +1,15 @@
+[Unit]
+Description=AI Stock Analysis PWA Server
+After=network.target
+
+[Service]
+Type=simple
+User=kimhc
+WorkingDirectory=/home/kimhc/Stock/pwa
+Environment=PORT=3000
+ExecStart=/usr/bin/node serve.js
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target

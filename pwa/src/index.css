@@ -1,0 +1,94 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* 모바일 최적화 */
+html {
+  -webkit-tap-highlight-color: transparent;
+  -webkit-text-size-adjust: 100%;
+}
+
+body {
+  margin: 0;
+  overscroll-behavior-y: contain;
+  -webkit-overflow-scrolling: touch;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* iOS Safari 뷰포트 높이 수정 */
+html, body, #root {
+  height: 100%;
+  min-height: 100%;
+  min-height: -webkit-fill-available;
+}
+
+/* iOS Safari flexbox 버그 수정 */
+.min-h-screen {
+  min-height: 100vh;
+  min-height: -webkit-fill-available;
+}
+
+/* 스크롤바 숨김 (모바일) */
+::-webkit-scrollbar {
+  display: none;
+}
+
+* {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+
+/* PWA 상태바 영역 */
+.safe-top {
+  padding-top: env(safe-area-inset-top);
+  padding-top: constant(safe-area-inset-top);
+}
+
+.safe-bottom {
+  padding-bottom: env(safe-area-inset-bottom);
+  padding-bottom: constant(safe-area-inset-bottom);
+}
+
+/* iOS Safari 입력 필드 스타일 수정 */
+input, textarea, select, button {
+  -webkit-appearance: none;
+  -moz-appearance: none;
+  appearance: none;
+  border-radius: 0;
+}
+
+input[type="text"],
+input[type="email"],
+input[type="password"],
+input[type="number"] {
+  border-radius: 0.5rem;
+}
+
+/* Google 로그인 버튼 iOS 수정 */
+#google-signin-button,
+.g_id_signin,
+[data-type="standard"] {
+  display: block !important;
+  visibility: visible !important;
+  opacity: 1 !important;
+}
+
+/* iOS Safari 버튼 스타일 */
+button {
+  cursor: pointer;
+  -webkit-touch-callout: none;
+}
+
+/* iOS 터치 하이라이트 제거 */
+a, button, input, select, textarea {
+  -webkit-tap-highlight-color: rgba(0, 0, 0, 0);
+}
+
+/* iOS Safari 그라데이션 렌더링 개선 */
+.bg-gradient-to-r,
+.bg-gradient-to-b,
+.bg-gradient-to-br {
+  -webkit-backface-visibility: hidden;
+  backface-visibility: hidden;
+}

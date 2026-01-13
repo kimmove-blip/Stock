@@ -1,0 +1,389 @@
+"""
+종목 API 라우터
+- 종목 검색, 상세 정보, 분석
+"""
+
+from fastapi import APIRouter, Depends, HTTPException, Query
+from typing import List, Optional
+import sys
+import os
+
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
+
+from api.schemas.stock import StockSearch, StockDetail, StockAnalysis
+from api.dependencies import get_current_user
+
+# 주식 데이터 라이브러리 지연 임포트
+_stock_utils = None
+
+
+def get_stock_libs():
+    """주식 데이터 라이브러리 로드"""
+    global _stock_utils
+    if _stock_utils is None:
+        try:
+            import FinanceDataReader as fdr
+
+            def get_all_krx():
+                return fdr.StockListing("KRX")
+
+            def get_ohlcv(code, days=120):
+                from datetime import datetime, timedelta
+                start = (datetime.now() - timedelta(days=days)).strftime("%Y-%m-%d")
+                df = fdr.DataReader(code, start)
+                if df is not None and not df.empty:
+                    # 컬럼명 한글로 변환 (기존 코드 호환)
+                    df = df.rename(columns={
+                        'Open': '시가',
+                        'High': '고가',
+                        'Low': '저가',
+                        'Close': '종가',
+                        'Volume': '거래량'
+                    })
+                return df
+
+            _stock_utils = {
+                'fdr': fdr,
+                'get_all_krx': get_all_krx,
+                'get_ohlcv': get_ohlcv
+            }
+        except Exception as e:
+            print(f"주식 라이브러리 로드 실패: {e}")
+            _stock_utils = {}
+    return _stock_utils
+
+
+router = APIRouter()
+
+
+@router.get("/search", response_model=List[StockSearch])
+async def search_stocks(
+    q: str = Query(..., min_length=1, description="검색어 (종목코드 또는 종목명)"),
+    limit: int = Query(20, ge=1, le=100, description="최대 결과 수")
+):
+    """종목 검색"""
+    libs = get_stock_libs()
+    if not libs:
+        raise HTTPException(status_code=503, detail="주식 데이터 서비스 이용 불가")
+
+    try:
+        get_all_krx = libs['get_all_krx']
+        krx = get_all_krx()
+
+        if krx is None or krx.empty:
+            return []
+
+        results = []
+
+        # 종목코드 정확 매칭
+        code_match = krx[krx['Code'] == q]
+        if not code_match.empty:
+            r = code_match.iloc[0]
+            market = r.get('Market', 'KOSPI') if 'Market' in krx.columns else None
+            return [StockSearch(code=r['Code'], name=r['Name'], market=market)]
+
+        # 종목명 검색
+        mask = krx['Name'].str.contains(q, case=False, na=False)
+        for _, r in krx[mask].head(limit).iterrows():
+            market = r.get('Market', None) if 'Market' in krx.columns else None
+            results.append(StockSearch(code=r['Code'], name=r['Name'], market=market))
+
+        return results
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"검색 오류: {str(e)}")
+
+
+def get_stock_name(code: str) -> str:
+    """TOP100 데이터 또는 FDR에서 종목명 조회"""
+    import json
+    from pathlib import Path
+
+    # 1. TOP100 JSON에서 조회
+    try:
+        json_files = list(Path("/home/kimhc/Stock/output").glob("top100_*.json"))
+        if json_files:
+            latest = max(json_files, key=lambda x: x.stat().st_mtime)
+            with open(latest) as f:
+                data = json.load(f)
+                for item in data.get('items', []):
+                    if item.get('code') == code:
+                        return item.get('name', code)
+    except:
+        pass
+
+    # 2. FDR에서 조회
+    try:
+        import FinanceDataReader as fdr
+        krx = fdr.StockListing("KRX")
+        match = krx[krx['Code'] == code]
+        if not match.empty:
+            return match.iloc[0]['Name']
+    except:
+        pass
+
+    return code
+
+
+@router.get("/{code}", response_model=StockDetail)
+async def get_stock_detail(code: str):
+    """종목 상세 정보 - KIS API 우선, FDR 보조"""
+    stock_name = get_stock_name(code)
+
+    try:
+        # 1. KIS API로 실시간 시세 조회 시도
+        from api.services.kis_client import KISClient
+        kis = KISClient()
+        kis_data = kis.get_current_price(code)
+
+        if kis_data:
+            # 시가총액: KIS는 억 단위로 반환, 원 단위로 변환
+            market_cap = kis_data.get('market_cap', 0)
+            if market_cap:
+                market_cap = market_cap * 100000000  # 억 -> 원
+
+            # KIS에서 종목명이 있으면 사용, 없으면 로컬 데이터 사용
+            name = kis_data.get('stock_name') or stock_name
+
+            return StockDetail(
+                code=code,
+                name=name,
+                market=None,
+                current_price=kis_data.get('current_price', 0),
+                change=kis_data.get('change', 0),
+                change_rate=kis_data.get('change_rate', 0),
+                volume=kis_data.get('volume', 0),
+                market_cap=market_cap,
+                ma5=None,
+                ma20=None,
+                ma60=None,
+                rsi=None
+            )
+    except Exception as kis_err:
+        print(f"KIS API 오류: {kis_err}")
+
+    # 2. FDR로 폴백
+    libs = get_stock_libs()
+    if not libs:
+        raise HTTPException(status_code=503, detail="주식 데이터 서비스 이용 불가")
+
+    try:
+        fdr = libs['fdr']
+        get_ohlcv = libs['get_ohlcv']
+
+        # OHLCV 데이터 직접 조회
+        ohlcv = get_ohlcv(code, 120)
+        if ohlcv is None or ohlcv.empty:
+            raise HTTPException(status_code=404, detail="가격 데이터를 가져올 수 없습니다")
+
+        latest = ohlcv.iloc[-1]
+        prev = ohlcv.iloc[-2] if len(ohlcv) > 1 else latest
+
+        current_price = int(latest['종가'])
+        change = int(current_price - prev['종가'])
+        change_rate = round((change / prev['종가']) * 100, 2) if prev['종가'] > 0 else 0
+
+        # 이동평균선
+        ma5 = round(ohlcv['종가'].tail(5).mean(), 0) if len(ohlcv) >= 5 else None
+        ma20 = round(ohlcv['종가'].tail(20).mean(), 0) if len(ohlcv) >= 20 else None
+        ma60 = round(ohlcv['종가'].tail(60).mean(), 0) if len(ohlcv) >= 60 else None
+
+        # RSI 계산
+        rsi = None
+        if len(ohlcv) >= 14:
+            delta = ohlcv['종가'].diff()
+            gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
+            loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
+            rs = gain / loss
+            rsi_series = 100 - (100 / (1 + rs))
+            rsi = round(rsi_series.iloc[-1], 2)
+
+        return StockDetail(
+            code=code,
+            name=stock_name,  # 이미 위에서 조회함
+            market=None,
+            current_price=current_price,
+            change=change,
+            change_rate=change_rate,
+            volume=int(latest['거래량']),
+            market_cap=None,
+            ma5=ma5,
+            ma20=ma20,
+            ma60=ma60,
+            rsi=rsi
+        )
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"조회 오류: {str(e)}")
+
+
+@router.get("/{code}/analysis", response_model=StockAnalysis)
+async def analyze_stock(code: str):
+    """종목 AI 분석"""
+    libs = get_stock_libs()
+    if not libs:
+        raise HTTPException(status_code=503, detail="주식 데이터 서비스 이용 불가")
+
+    try:
+        fdr = libs['fdr']
+        get_ohlcv = libs['get_ohlcv']
+
+        # 종목 정보
+        krx = fdr.StockListing("KRX")
+        stock_info = krx[krx['Code'] == code]
+        if stock_info.empty:
+            raise HTTPException(status_code=404, detail="종목을 찾을 수 없습니다")
+
+        name = stock_info.iloc[0]['Name']
+
+        # OHLCV 데이터
+        ohlcv = get_ohlcv(code, 365)
+        if ohlcv.empty:
+            raise HTTPException(status_code=404, detail="가격 데이터를 가져올 수 없습니다")
+
+        # 컬럼명 영문으로 변환 (TechnicalAnalyst는 영문 컬럼명 사용)
+        ohlcv = ohlcv.rename(columns={
+            '시가': 'Open',
+            '고가': 'High',
+            '저가': 'Low',
+            '종가': 'Close',
+            '거래량': 'Volume'
+        })
+
+        # 기술적 분석
+        from technical_analyst import TechnicalAnalyst
+        analyst = TechnicalAnalyst()
+        result = analyst.analyze_full(ohlcv)
+
+        if result is None:
+            # fallback: 기본 analyze 사용
+            score_tuple = analyst.analyze(ohlcv)
+            score = score_tuple[0] if isinstance(score_tuple, tuple) else 50
+            result = {'score': score, 'indicators': {}, 'signals': []}
+
+        score = result.get('score', 50)
+        indicators = result.get('indicators', {})
+        signal_list = result.get('signals', [])
+
+        # 점수 기반 의견 결정
+        if score >= 70:
+            opinion = '매수'
+        elif score >= 50:
+            opinion = '관망'
+        elif score >= 30:
+            opinion = '주의'
+        else:
+            opinion = '매도'
+
+        # 신호 정리
+        signals = {
+            'rsi': indicators.get('rsi'),
+            'macd': indicators.get('macd'),
+            'macd_signal': indicators.get('macd_signal'),
+            'bb_position': indicators.get('bb_position'),
+            'trend': 'bullish' if 'MA_ALIGNED' in signal_list else 'neutral',
+            'volume_signal': indicators.get('volume_signal'),
+            'candle_patterns': result.get('patterns', [])
+        }
+
+        # 신호를 전문적인 코멘트로 변환
+        signal_descriptions = {
+            'MA_ALIGNED': '✅ 이평선 정배열 (강한 상승 추세)',
+            'GOLDEN_CROSS_5_20': '✅ 단기 골든크로스 발생 (5/20일선)',
+            'GOLDEN_CROSS_20_60': '✅ 중기 골든크로스 발생 (20/60일선)',
+            'DEAD_CROSS_5_20': '⚠️ 단기 데드크로스 발생 (하락 주의)',
+            'RSI_OVERSOLD': '✅ RSI 과매도 구간 (반등 기대)',
+            'RSI_RECOVERING': '📈 RSI 회복 중 (상승 전환 가능성)',
+            'RSI_OVERBOUGHT': '⚠️ RSI 과매수 구간 (조정 주의)',
+            'MACD_GOLDEN_CROSS': '✅ MACD 골든크로스 (강력 매수 신호)',
+            'MACD_HIST_POSITIVE': '✅ MACD 히스토그램 양전환',
+            'MACD_HIST_RISING': '📈 MACD 히스토그램 상승 중',
+            'BB_LOWER_BOUNCE': '✅ 볼린저밴드 하단 반등 (저점 매수 기회)',
+            'BB_LOWER_TOUCH': '✅ 볼린저밴드 하단 터치 (반등 기대)',
+            'BB_UPPER_BREAK': '⚠️ 볼린저밴드 상단 돌파 (단기 과열)',
+            'STOCH_GOLDEN_OVERSOLD': '✅ 스토캐스틱 과매도 골든크로스 (강력 반등 신호)',
+            'STOCH_GOLDEN_CROSS': '✅ 스토캐스틱 골든크로스',
+            'STOCH_OVERSOLD': '✅ 스토캐스틱 과매도 구간',
+            'ADX_STRONG_UPTREND': '✅ ADX 강한 상승 추세 확인',
+            'ADX_UPTREND': '📈 ADX 상승 추세',
+            'CCI_OVERSOLD': '✅ CCI 과매도 구간',
+            'CCI_OVERBOUGHT': '⚠️ CCI 과매수 구간',
+            'WILLR_OVERSOLD': '✅ 윌리엄스 %R 과매도',
+            'WILLR_OVERBOUGHT': '⚠️ 윌리엄스 %R 과매수',
+            'VOLUME_SURGE': '🔥 거래량 급증 (평균 대비 2배 이상)',
+            'VOLUME_HIGH': '📊 거래량 증가 (평균 대비 1.5배)',
+            'VOLUME_ABOVE_AVG': '📊 평균 이상 거래량',
+            'OBV_ABOVE_MA': '✅ OBV 이평선 상회 (매집 진행)',
+            'OBV_RISING': '📈 OBV 상승 추세',
+            'MFI_OVERSOLD': '✅ MFI 과매도 (자금 유입 기대)',
+            'MFI_LOW': '📈 MFI 저점 구간',
+            'MFI_OVERBOUGHT': '⚠️ MFI 과매수 (자금 유출 주의)',
+            'SUPERTREND_BUY': '✅ 슈퍼트렌드 매수 신호 전환',
+            'SUPERTREND_UPTREND': '📈 슈퍼트렌드 상승 추세',
+            'PSAR_BUY_SIGNAL': '✅ PSAR 매수 신호',
+            'PSAR_UPTREND': '📈 PSAR 상승 추세',
+            'ROC_POSITIVE_CROSS': '✅ ROC 양전환 (모멘텀 회복)',
+            'ROC_STRONG_MOMENTUM': '📈 ROC 강한 모멘텀',
+            'ICHIMOKU_GOLDEN_CROSS': '✅ 일목균형표 전환선/기준선 골든크로스',
+            'ICHIMOKU_ABOVE_CLOUD': '✅ 가격이 구름대 위 (상승 추세)',
+            'CMF_STRONG_INFLOW': '✅ CMF 강한 자금 유입',
+            'CMF_POSITIVE': '📈 CMF 양수 (순매수)',
+            'CMF_STRONG_OUTFLOW': '⚠️ CMF 강한 자금 유출',
+            'HAMMER': '✅ 망치형 캔들 (반등 신호)',
+            'INVERTED_HAMMER': '✅ 역망치형 캔들 (반등 가능)',
+            'BULLISH_ENGULFING': '✅ 상승 장악형 캔들 (강력 매수)',
+            'BEARISH_ENGULFING': '⚠️ 하락 장악형 캔들 (하락 주의)',
+            'DOJI': '📊 도지 캔들 (변곡점 가능)',
+            'MORNING_STAR': '✅ 샛별형 패턴 (강력 반등 신호)',
+            'EVENING_STAR': '⚠️ 저녁별형 패턴 (하락 전환 주의)',
+        }
+
+        # 코멘트 생성
+        comments = []
+
+        # 신호 기반 코멘트 추가 (최대 5개)
+        for signal in signal_list[:5]:
+            if signal in signal_descriptions:
+                comments.append(signal_descriptions[signal])
+
+        # 캔들 패턴 추가
+        patterns = result.get('patterns', [])
+        for pattern in patterns[:2]:
+            if pattern in signal_descriptions:
+                comments.append(signal_descriptions[pattern])
+
+        # 신호가 없으면 기본 메시지
+        if not comments:
+            if score >= 70:
+                comments.append("✅ 기술적 지표 종합 매수 신호")
+            elif score >= 50:
+                comments.append("📊 현재 관망 권장")
+            elif score >= 30:
+                comments.append("⚠️ 기술적 지표 약세 구간")
+            else:
+                comments.append("🔻 기술적 지표 매도 신호")
+
+        # RSI 상세 정보 추가
+        rsi = indicators.get('rsi')
+        if rsi is not None and 'RSI_OVERSOLD' not in signal_list and 'RSI_OVERBOUGHT' not in signal_list:
+            if rsi < 40:
+                comments.append(f"📈 RSI {rsi:.1f} (저점 구간)")
+            elif rsi > 60:
+                comments.append(f"📊 RSI {rsi:.1f} (고점 구간)")
+
+        return StockAnalysis(
+            code=code,
+            name=name,
+            score=score,
+            opinion=opinion,
+            technical_score=score,
+            signals=signals,
+            comment="\n".join(comments)
+        )
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"분석 오류: {str(e)}")
