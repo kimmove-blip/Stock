@@ -16,6 +16,7 @@ const pageTitles = {
   '/about': '앱 소개',
   '/contact': '문의하기',
   '/settings': '설정',
+  '/telegram': '텔레그램 알림',
   '/login': '로그인',
   '/register': '회원가입',
 };
@@ -38,7 +39,7 @@ export default function Layout() {
   ];
 
   return (
-    <div className="min-h-screen bg-gray-50 flex flex-col pb-16">
+    <div className="h-screen bg-gray-50 flex flex-col overflow-hidden">
       {/* 공통 헤더 - 홈이 아닌 페이지에서만 표시 */}
       {!isHome && (
         <header className="bg-gradient-to-r from-purple-600 to-indigo-600 px-4 pt-12 pb-4 sticky top-0 z-40 flex-shrink-0">
@@ -58,7 +59,10 @@ export default function Layout() {
                   {user?.username?.charAt(0)?.toUpperCase() || 'U'}
                 </div>
               )}
-              <button className="relative p-2 text-white">
+              <button
+                onClick={() => navigate('/telegram')}
+                className="relative p-2 text-white hover:bg-white/10 rounded-full transition-colors"
+              >
                 <Bell size={20} />
                 <span className="absolute top-1 right-1 w-2 h-2 bg-red-500 rounded-full"></span>
               </button>
@@ -68,7 +72,7 @@ export default function Layout() {
       )}
 
       {/* 메인 컨텐츠 */}
-      <main className={`flex-1 ${isHome ? '' : 'p-4 pb-4'}`}>
+      <main className={`flex-1 overflow-y-auto pb-20 ${isHome ? '' : 'p-4'}`}>
         <Outlet />
       </main>
 

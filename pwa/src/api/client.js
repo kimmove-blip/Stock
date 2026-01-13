@@ -40,6 +40,7 @@ export const authAPI = {
   googleLogin: (credential) => api.post('/auth/google', { credential }),
   me: () => api.get('/auth/me'),
   refresh: () => api.post('/auth/refresh'),
+  updateSettings: (data) => api.put('/auth/settings', data),
 };
 
 // 종목 API
@@ -92,6 +93,12 @@ export const valueStocksAPI = {
 export const contactAPI = {
   // 문의 전송
   submit: (data) => api.post('/contact', data),
+  // 관리자: 문의 목록
+  adminList: (status) => api.get(`/contact/admin/list${status ? `?status=${status}` : ''}`),
+  // 관리자: 문의 상세
+  adminDetail: (id) => api.get(`/contact/admin/${id}`),
+  // 관리자: 문의 업데이트
+  adminUpdate: (id, data) => api.put(`/contact/admin/${id}`, data),
 };
 
 // 테마 API
@@ -114,6 +121,36 @@ export const popularAPI = {
   gainers: (limit = 20) => api.get(`/popular/gainers?limit=${limit}`),
   // 하락률 상위
   losers: (limit = 20) => api.get(`/popular/losers?limit=${limit}`),
+};
+
+// 뉴스 API (네이버 뉴스)
+export const newsAPI = {
+  // 뉴스 검색
+  search: (query = '주식 증시', display = 20) =>
+    api.get(`/news?query=${encodeURIComponent(query)}&display=${display}`),
+  // 카테고리별 뉴스
+  byCategory: (category, display = 10) =>
+    api.get(`/news/categories?category=${encodeURIComponent(category)}&display=${display}`),
+};
+
+// 시장 지수 API
+export const marketAPI = {
+  // 코스피/코스닥 지수
+  domestic: () => api.get('/market'),
+  // 해외 지수 및 환율
+  global: () => api.get('/market/global'),
+};
+
+// 텔레그램 알림 API
+export const telegramAPI = {
+  // 설정 조회
+  getSettings: () => api.get('/telegram'),
+  // 설정 업데이트
+  updateSettings: (data) => api.post('/telegram', data),
+  // Chat ID 검증 및 저장
+  verify: (chatId) => api.post('/telegram/verify', { chat_id: chatId }),
+  // 테스트 메시지 전송
+  test: (chatId) => api.post('/telegram/test', { chat_id: chatId }),
 };
 
 export default api;

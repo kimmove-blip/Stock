@@ -1,21 +1,37 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useAuth } from '../contexts/AuthContext';
 import {
   Bell,
+  Mail,
   Moon,
   LogOut,
   ChevronRight,
   User,
   Lock,
-  Trash2,
+  Shield,
+  MessageCircle,
 } from 'lucide-react';
+import { authAPI } from '../api/client';
 
 export default function Settings() {
-  const { user, logout } = useAuth();
+  const { user, logout, refreshUser } = useAuth();
   const navigate = useNavigate();
-  const [notifications, setNotifications] = useState(true);
+  const queryClient = useQueryClient();
   const [darkMode, setDarkMode] = useState(false);
+
+  // 이메일 구독 토글
+  const emailMutation = useMutation({
+    mutationFn: (enabled) => authAPI.updateSettings({ email_subscription: enabled }),
+    onSuccess: () => {
+      refreshUser && refreshUser();
+      queryClient.invalidateQueries(['user']);
+    },
+    onError: (error) => {
+      alert(error.response?.data?.detail || '설정 변경에 실패했습니다');
+    },
+  });
 
   const handleLogout = () => {
     if (confirm('로그아웃 하시겠습니까?')) {
@@ -35,6 +51,12 @@ export default function Settings() {
       label: '비밀번호 변경',
       action: () => alert('준비 중입니다'),
     },
+    // 관리자만 보이도록
+    ...(user?.is_admin ? [{
+      icon: Shield,
+      label: '문의 관리 (관리자)',
+      action: () => navigate('/admin'),
+    }] : []),
   ];
 
   return (
@@ -71,22 +93,53 @@ export default function Settings() {
         ))}
       </div>
 
-      {/* 토글 설정 */}
+      {/* 알림 설정 섹션 */}
       <div className="bg-white rounded-xl shadow-sm mb-4">
-        <div className="flex items-center justify-between p-4 border-b border-gray-100">
+        <div className="px-4 py-3 border-b border-gray-100">
+          <h3 className="font-semibold text-gray-700 text-sm">알림 설정</h3>
+        </div>
+
+        {/* 텔레그램 알림 */}
+        <button
+          onClick={() => navigate('/telegram')}
+          className="w-full flex items-center justify-between p-4 hover:bg-gray-50 transition-colors border-b border-gray-100"
+        >
           <div className="flex items-center gap-3">
-            <Bell size={20} className="text-gray-500" />
-            <span className="text-gray-700">알림 받기</span>
+            <MessageCircle size={20} className="text-blue-500" />
+            <div className="text-left">
+              <span className="text-gray-700 block">텔레그램 알림</span>
+              <span className="text-xs text-gray-400">하락/매도 신호 실시간 알림</span>
+            </div>
+          </div>
+          <ChevronRight size={20} className="text-gray-400" />
+        </button>
+
+        {/* TOP100 이메일 구독 */}
+        <div className="flex items-center justify-between p-4">
+          <div className="flex items-center gap-3">
+            <Mail size={20} className="text-purple-500" />
+            <div>
+              <span className="text-gray-700 block">TOP100 이메일 구독</span>
+              <span className="text-xs text-gray-400">매일 AI 추천 종목 리포트</span>
+            </div>
           </div>
           <label className="relative inline-flex items-center cursor-pointer">
             <input
               type="checkbox"
-              checked={notifications}
-              onChange={(e) => setNotifications(e.target.checked)}
+              checked={user?.email_subscription || false}
+              onChange={(e) => emailMutation.mutate(e.target.checked)}
+              disabled={emailMutation.isPending}
               className="sr-only peer"
             />
             <div className="w-11 h-6 bg-gray-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-purple-600"></div>
           </label>
+        </div>
+      </div>
+
+      {/* 앱 설정 */}
+      <div className="bg-white rounded-xl shadow-sm mb-4">
+        <div className="px-4 py-3 border-b border-gray-100">
+          <h3 className="font-semibold text-gray-700 text-sm">앱 설정</h3>
         </div>
         <div className="flex items-center justify-between p-4">
           <div className="flex items-center gap-3">

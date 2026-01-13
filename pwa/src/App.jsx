@@ -18,6 +18,8 @@ import MarketNews from './pages/MarketNews';
 import MarketStatus from './pages/MarketStatus';
 import GlobalMarkets from './pages/GlobalMarkets';
 import PopularStocks from './pages/PopularStocks';
+import Admin from './pages/Admin';
+import TelegramSettings from './pages/TelegramSettings';
 import Loading from './components/Loading';
 
 const queryClient = new QueryClient({
@@ -80,6 +82,8 @@ function AppRoutes() {
         <Route path="/about" element={<About />} />
         <Route path="/contact" element={<Contact />} />
         <Route path="/settings" element={<Settings />} />
+        <Route path="/telegram" element={<TelegramSettings />} />
+        <Route path="/admin" element={<Admin />} />
       </Route>
 
       {/* 404 리다이렉트 */}

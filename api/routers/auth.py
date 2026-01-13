@@ -121,7 +121,8 @@ async def get_me(current_user: dict = Depends(get_current_user_required)):
         username=current_user['username'],
         email=current_user.get('email'),
         name=current_user.get('name'),
-        email_subscription=bool(current_user.get('email_subscription', 0))
+        email_subscription=bool(current_user.get('email_subscription', 0)),
+        is_admin=bool(current_user.get('is_admin', 0))
     )
 
 
@@ -136,6 +137,40 @@ async def refresh_token(current_user: dict = Depends(get_current_user_required))
         access_token=access_token,
         token_type="bearer",
         expires_in=get_token_expiry_seconds()
+    )
+
+
+class UserSettingsUpdate(BaseModel):
+    """사용자 설정 업데이트"""
+    email_subscription: bool = None
+
+
+@router.put("/settings", response_model=UserResponse)
+async def update_user_settings(
+    settings: UserSettingsUpdate,
+    current_user: dict = Depends(get_current_user_required),
+    db: DatabaseManager = Depends(get_db)
+):
+    """사용자 설정 업데이트"""
+    user_id = current_user['id']
+
+    with db.get_connection() as conn:
+        if settings.email_subscription is not None:
+            conn.execute(
+                "UPDATE users SET email_subscription = ? WHERE id = ?",
+                (1 if settings.email_subscription else 0, user_id)
+            )
+        conn.commit()
+
+    user = db.get_user_by_id(user_id)
+
+    return UserResponse(
+        id=user['id'],
+        username=user['username'],
+        email=user.get('email'),
+        name=user.get('name'),
+        email_subscription=bool(user.get('email_subscription', 0)),
+        is_admin=bool(user.get('is_admin', 0))
     )
 
 

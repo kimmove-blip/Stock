@@ -170,7 +170,7 @@ export default function Portfolio() {
                 {analysisData.risk_stocks?.length > 0 && (
                   <div className="mb-3">
                     <p className="text-sm font-medium text-red-600 flex items-center gap-1 mb-2">
-                      <AlertTriangle size={14} /> 주의 필요 종목
+                      <AlertTriangle size={14} /> 검토 필요 종목
                     </p>
                     <div className="space-y-1">
                       {analysisData.risk_stocks.map((stock) => (

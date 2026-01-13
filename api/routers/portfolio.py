@@ -340,7 +340,7 @@ async def analyze_portfolio(
 
     # 추천 액션 생성
     if risk_stocks:
-        recommendations.append(f"주의 필요 종목 {len(risk_stocks)}개 확인")
+        recommendations.append(f"검토 필요 종목 {len(risk_stocks)}개 확인")
     if total_value > total_investment * 1.1:
         recommendations.append("수익 실현 타이밍 검토")
     elif total_value < total_investment * 0.9:
