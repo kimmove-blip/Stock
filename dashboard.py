@@ -3,23 +3,101 @@ import pandas as pd
 import os
 import time
 import json
-import plotly.graph_objects as go
-from plotly.subplots import make_subplots
 from datetime import datetime, timedelta
 from dotenv import load_dotenv
 
-# 모듈 가져오기
-from dart_analyst import FundamentalAnalyst
-from technical_analyst import TechnicalAnalyst
-from sentiment_analyst import SentimentAnalyst
-from stock_utils import get_kospi_top_list, get_all_krx_stocks, find_dart_code
+# 인증 및 DB 모듈 (가벼움)
+from auth import StockAuthenticator
+from database import DatabaseManager
 from config import get_signal_kr, get_signal_description
-import FinanceDataReader as fdr
+
+# 무거운 모듈은 lazy import (필요할 때만 로드)
+def get_analysts():
+    """분석 모듈 lazy import"""
+    if 'analysts_loaded' not in st.session_state:
+        from dart_analyst import FundamentalAnalyst
+        from technical_analyst import TechnicalAnalyst
+        from sentiment_analyst import SentimentAnalyst
+        st.session_state['FundamentalAnalyst'] = FundamentalAnalyst
+        st.session_state['TechnicalAnalyst'] = TechnicalAnalyst
+        st.session_state['SentimentAnalyst'] = SentimentAnalyst
+        st.session_state['analysts_loaded'] = True
+    return (st.session_state['FundamentalAnalyst'],
+            st.session_state['TechnicalAnalyst'],
+            st.session_state['SentimentAnalyst'])
+
+def get_stock_utils():
+    """주식 유틸 lazy import"""
+    if 'stock_utils_loaded' not in st.session_state:
+        from stock_utils import get_kospi_top_list, get_all_krx_stocks, find_dart_code
+        st.session_state['get_kospi_top_list'] = get_kospi_top_list
+        st.session_state['get_all_krx_stocks'] = get_all_krx_stocks
+        st.session_state['find_dart_code'] = find_dart_code
+        st.session_state['stock_utils_loaded'] = True
+    return (st.session_state['get_kospi_top_list'],
+            st.session_state['get_all_krx_stocks'],
+            st.session_state['find_dart_code'])
+
+def get_fdr():
+    """FinanceDataReader lazy import"""
+    if 'fdr' not in st.session_state:
+        import FinanceDataReader as fdr
+        st.session_state['fdr'] = fdr
+    return st.session_state['fdr']
+
+def get_plotly():
+    """Plotly lazy import"""
+    if 'plotly_loaded' not in st.session_state:
+        import plotly.graph_objects as go
+        from plotly.subplots import make_subplots
+        st.session_state['go'] = go
+        st.session_state['make_subplots'] = make_subplots
+        st.session_state['plotly_loaded'] = True
+    return st.session_state['go'], st.session_state['make_subplots']
 
 # --- [설정] ---
 load_dotenv()
-st.set_page_config(page_title="AI 주식 분석", page_icon="📈", layout="wide")
+st.set_page_config(page_title="Kim's AI 주식 분석", page_icon="📈", layout="wide")
+
+# 애플 홈 화면 아이콘 설정 (JavaScript로 head에 추가)
+st.markdown("""
+<script>
+(function() {
+    if (!document.querySelector('link[rel="apple-touch-icon"]')) {
+        var link = document.createElement('link');
+        link.rel = 'apple-touch-icon';
+        link.href = '/app/static/apple-touch-icon.png';
+        document.head.appendChild(link);
+
+        var meta1 = document.createElement('meta');
+        meta1.name = 'apple-mobile-web-app-capable';
+        meta1.content = 'yes';
+        document.head.appendChild(meta1);
+
+        var meta2 = document.createElement('meta');
+        meta2.name = 'apple-mobile-web-app-title';
+        meta2.content = 'AI주식분석';
+        document.head.appendChild(meta2);
+    }
+})();
+</script>
+""", unsafe_allow_html=True)
+
 WATCHLIST_FILE = "watchlist.json"
+
+# --- [인증 시스템 초기화] ---
+# session_state로 관리 (캐시 사용 시 위젯 경고 발생)
+def get_auth():
+    if 'auth' not in st.session_state:
+        st.session_state['auth'] = StockAuthenticator()
+    return st.session_state['auth']
+
+@st.cache_resource
+def get_db():
+    return DatabaseManager()
+
+auth = get_auth()
+db = get_db()
 
 # --- [세션 상태 초기화] ---
 defaults = {
@@ -27,6 +105,7 @@ defaults = {
     'selected_stock': None,
     'analysis_result': None,
     'quick_result': None,
+    'previous_tab': 0,  # 이전 탭 인덱스
 }
 for k, v in defaults.items():
     if k not in st.session_state:
@@ -35,9 +114,13 @@ for k, v in defaults.items():
 # --- [스타일] ---
 st.markdown("""
 <style>
+
 /* 기본 배경 */
 .main { background-color: #0E1117; }
-.block-container { padding-top: 1rem !important; padding-bottom: 3rem !important; }
+.block-container { padding-top: 0 !important; padding-bottom: 3rem !important; margin-top: 0 !important; }
+[data-testid="stAppViewContainer"] { padding-top: 0 !important; }
+[data-testid="stVerticalBlock"] { gap: 0.5rem !important; }
+.main > div:first-child { padding-top: 0 !important; }
 header[data-testid="stHeader"] { display: none; }
 #MainMenu { visibility: hidden; }
 
@@ -63,12 +146,12 @@ header[data-testid="stHeader"] { display: none; }
     background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
     border: 1px solid #30363d;
     border-radius: 12px;
-    padding: 25px;
-    margin-bottom: 20px;
+    padding: 15px 20px;
+    margin-bottom: 10px;
 }
 .search-title {
     font-size: 18px; font-weight: bold; color: #fff !important;
-    margin-bottom: 15px;
+    margin-bottom: 0;
 }
 
 /* 빠른 액션 카드 */
@@ -168,22 +251,52 @@ div.stButton > button {
 /* 탭 스타일 - 가독성 향상 */
 .stTabs [data-baseweb="tab-list"] {
     gap: 8px;
-    background-color: #2d333b;
-    padding: 5px;
-    border-radius: 10px;
+    background-color: #e8eaed;
+    position: relative;
+    overflow-x: auto;
+    scroll-behavior: smooth;
+    -webkit-overflow-scrolling: touch;
+}
+/* 탭 스크롤 힌트 (좌우 그라데이션) */
+.stTabs [data-baseweb="tab-list"]::before,
+.stTabs [data-baseweb="tab-list"]::after {
+    content: '';
+    position: sticky;
+    top: 0;
+    bottom: 0;
+    width: 30px;
+    min-width: 30px;
+    pointer-events: none;
+    z-index: 10;
+}
+.stTabs [data-baseweb="tab-list"]::before {
+    left: 0;
+    background: linear-gradient(to right, #e8eaed 30%, transparent);
+}
+.stTabs [data-baseweb="tab-list"]::after {
+    right: 0;
+    background: linear-gradient(to left, #e8eaed 30%, transparent);
 }
 .stTabs [data-baseweb="tab"] {
     border-radius: 8px;
-    padding: 10px 20px;
-    color: #fff !important;
+    padding: 12px 24px;
+    color: #333 !important;
+    font-weight: 600 !important;
+    background-color: transparent;
 }
 .stTabs [data-baseweb="tab"]:hover {
-    color: #ffffff !important;
-    background-color: #444c56;
+    color: #1a1a1a !important;
+    background-color: #fff;
 }
 .stTabs [aria-selected="true"] {
-    color: #ffffff !important;
-    background-color: #238636 !important;
+    color: #fff !important;
+    background-color: #4a7c59 !important;
+    box-shadow: 0 2px 4px rgba(0,0,0,0.15);
+}
+/* 탭 내부 텍스트 강제 적용 */
+.stTabs [data-baseweb="tab"] p,
+.stTabs [data-baseweb="tab"] span {
+    color: inherit !important;
 }
 
 /* Expander 스타일 */
@@ -268,13 +381,51 @@ section[data-testid="stSidebar"] * {
 
 # --- [데이터 관리] ---
 THEMES = {
-    "2차전지": ["373220", "006400", "051910", "247540", "086520", "003670"],
-    "AI/반도체": ["005930", "000660", "042700", "071050", "000210", "263750"],
-    "바이오": ["207940", "068270", "000100", "128940", "302440"],
-    "자동차": ["005380", "000270", "012330", "009900"],
-    "플랫폼": ["035420", "035720", "251270", "036570"]
+    "2차전지": ["373220", "006400", "051910", "247540", "086520", "003670", "096770", "012450", "298040", "064350"],
+    "AI/반도체": ["005930", "000660", "042700", "071050", "000210", "263750", "058470", "036930", "035420", "017670"],
+    "바이오": ["207940", "068270", "000100", "128940", "302440", "145020", "141080", "357780", "096530", "091990"],
+    "자동차/전기차": ["005380", "000270", "012330", "161390", "018880", "011210", "204320", "064350", "317280", "900140"],
+    "조선/해운": ["010140", "009540", "042660", "329180", "011200", "010620", "005880", "028670", "003490"],
+    "방산/우주항공": ["012450", "047810", "000880", "001340", "006260", "071970", "032350", "103140", "298040"],
+    "로봇/자동화": ["267260", "090460", "108320", "336370", "049800", "090470", "064290", "404950", "278280"],
+    "엔터/미디어": ["352820", "122870", "060300", "035900", "035420", "041510", "035760", "067160", "293480"],
+    "게임": ["036570", "251270", "263750", "112040", "078340", "194480", "069080", "348830"],
+    "금융/은행": ["105560", "055550", "086790", "024110", "316140", "138930", "003550", "000810"],
+    "건설/인프라": ["000720", "047040", "000210", "006360", "034220", "035150", "004220", "002380"],
+    "화장품/소비재": ["090430", "003600", "377300", "285130", "263060", "348210", "214150", "069960"],
+    "친환경/ESG": ["117580", "336260", "281740", "282690", "099220", "290650", "095700", "012320"],
+    "음식료": ["097950", "271560", "005180", "280360", "004370", "007310", "014680", "033780"],
+    "플랫폼/IT": ["035420", "035720", "251270", "036570", "030200", "017670", "259960", "053800"],
 }
 
+def load_watchlists_db(user_id):
+    """사용자별 관심종목 로드 (DB)"""
+    if not user_id:
+        return {"기본": []}
+    watchlists = db.get_watchlists(user_id)
+    # DB 결과를 기존 형식으로 변환
+    result = {}
+    for item in watchlists:
+        category = item['category']
+        if category not in result:
+            result[category] = []
+        result[category].append({
+            'code': item['stock_code'],
+            'name': item['stock_name']
+        })
+    if not result:
+        result = {"기본": []}
+    return result
+
+def add_to_watchlist_db(user_id, category, code, name):
+    """관심종목 추가 (DB)"""
+    return db.add_to_watchlist(user_id, category, code, name)
+
+def remove_from_watchlist_db(user_id, category, code):
+    """관심종목 삭제 (DB)"""
+    db.remove_from_watchlist(user_id, category, code)
+
+# 기존 파일 기반 함수 (마이그레이션용으로 유지)
 def load_watchlists():
     if not os.path.exists(WATCHLIST_FILE): return {"기본": []}
     try:
@@ -291,7 +442,8 @@ def search_stocks(keyword):
     """종목 검색"""
     if not keyword: return []
     try:
-        krx = get_all_krx_stocks()
+        _, get_all_krx, _ = get_stock_utils()
+        krx = get_all_krx()
         if krx is None: return []
 
         # 코드 정확 매칭
@@ -312,6 +464,7 @@ def search_stocks(keyword):
 def get_screening_targets(mode, limit=20):
     targets = []
     try:
+        fdr = get_fdr()
         if mode == "급등락":
             df = fdr.StockListing("KRX")
             col = 'ChagesRatio' if 'ChagesRatio' in df.columns else 'ChangeRate'
@@ -323,7 +476,8 @@ def get_screening_targets(mode, limit=20):
             for _, r in df.iterrows():
                 targets.append({"code": str(r['Code']), "name": r['Name']})
         elif mode in THEMES:
-            krx = get_all_krx_stocks()
+            _, get_all_krx, _ = get_stock_utils()
+            krx = get_all_krx()
             for c in THEMES[mode]:
                 f = krx[krx['Code'] == c]
                 if not f.empty:
@@ -334,6 +488,7 @@ def get_screening_targets(mode, limit=20):
 # --- [분석 엔진] ---
 @st.cache_resource(ttl=3600)  # 1시간마다 새로 로드
 def load_analysts():
+    FundamentalAnalyst, TechnicalAnalyst, SentimentAnalyst = get_analysts()
     return FundamentalAnalyst(os.getenv("DART_API_KEY", "")), TechnicalAnalyst(), SentimentAnalyst()
 
 def run_analysis(stock, fund, tech, sent):
@@ -346,7 +501,8 @@ def run_analysis(stock, fund, tech, sent):
         "signals": [], "patterns": []
     }
 
-    dart = stock.get('dart') or find_dart_code(stock['code'])
+    _, _, find_dart = get_stock_utils()
+    dart = stock.get('dart') or find_dart(stock['code'])
 
     # 1. 재무
     if dart:
@@ -439,7 +595,7 @@ def show_stock_card(stock, show_action=True, key_suffix=""):
     grade_emoji = {"강력매수": "💎", "매수": "💰", "관망": "🤔", "매도": "📉"}.get(stock['grade'], "")
     change_color = "#ff4b4b" if stock['change'] > 0 else "#4b89ff" if stock['change'] < 0 else "#888"
 
-    col1, col2 = st.columns([4, 1])
+    col1, col2 = st.columns([5, 1])
     with col1:
         st.markdown(f"""
         <div class="result-card">
@@ -460,7 +616,16 @@ def show_stock_card(stock, show_action=True, key_suffix=""):
     with col2:
         if show_action:
             unique_key = f"detail_{stock['code']}_{key_suffix}" if key_suffix else f"detail_{stock['code']}_{id(stock)}"
-            if st.button("상세보기", key=unique_key, use_container_width=True):
+            if st.button("🔍", key=unique_key, help="상세보기"):
+                # 이전 탭 저장 (key_suffix로 판단)
+                if key_suffix.startswith("quick"):
+                    st.session_state['previous_tab'] = 0
+                elif key_suffix.startswith("screen"):
+                    st.session_state['previous_tab'] = 1
+                elif key_suffix.startswith("watch"):
+                    st.session_state['previous_tab'] = 2
+                else:
+                    st.session_state['previous_tab'] = 0
                 st.session_state['selected_stock'] = stock
                 st.session_state['page'] = 'detail'
                 st.rerun()
@@ -468,6 +633,16 @@ def show_stock_card(stock, show_action=True, key_suffix=""):
 def show_detail_page(stock):
     """상세 페이지"""
     if st.button("← 뒤로가기", type="secondary"):
+        # 이전 탭으로 돌아가기 (JavaScript로 탭 클릭)
+        tab_idx = st.session_state.get('previous_tab', 0)
+        st.markdown(f"""
+        <script>
+        setTimeout(function() {{
+            var tabs = document.querySelectorAll('[data-baseweb="tab"]');
+            if (tabs && tabs[{tab_idx}]) tabs[{tab_idx}].click();
+        }}, 100);
+        </script>
+        """, unsafe_allow_html=True)
         st.session_state['page'] = 'home'
         st.session_state['selected_stock'] = None
         st.rerun()
@@ -549,20 +724,27 @@ def show_detail_page(stock):
             for k, v in stock.get('s_details', {}).items():
                 st.caption(f"{k}: {v}점")
 
-    # 관심종목 추가
-    watchlists = load_watchlists()
-    with st.expander("⭐ 관심종목에 추가"):
-        list_name = st.selectbox("리스트 선택", list(watchlists.keys()), label_visibility="collapsed")
-        if st.button("추가하기", type="primary"):
-            if not any(s['code'] == stock['code'] for s in watchlists[list_name]):
-                watchlists[list_name].append({"code": stock['code'], "name": stock['name']})
-                save_watchlists(watchlists)
-                st.success(f"'{list_name}'에 추가했습니다!")
-            else:
-                st.info("이미 추가된 종목입니다.")
+    # 관심종목 추가 (인증된 사용자만)
+    current_user_id = auth.get_user_id()
+    if current_user_id:
+        watchlists = load_watchlists_db(current_user_id)
+        with st.expander("⭐ 관심종목에 추가"):
+            # 카테고리 목록 + 새 카테고리 입력
+            categories = list(watchlists.keys())
+            list_name = st.selectbox("리스트 선택", categories, label_visibility="collapsed")
+            new_category = st.text_input("또는 새 리스트 이름", placeholder="새 리스트 만들기")
+
+            if st.button("추가하기", type="primary"):
+                target_category = new_category if new_category else list_name
+                if add_to_watchlist_db(current_user_id, target_category, stock['code'], stock['name']):
+                    st.success(f"'{target_category}'에 추가했습니다!")
+                else:
+                    st.info("이미 추가된 종목입니다.")
 
 def draw_chart(code):
     """주가 차트"""
+    go, make_subplots = get_plotly()
+    fdr = get_fdr()
     try:
         df = fdr.DataReader(code, datetime.now() - timedelta(days=180), datetime.now())
         if df.empty: return go.Figure()
@@ -594,6 +776,52 @@ def draw_chart(code):
 
     return fig
 
+# ============== 로그인/회원가입 페이지 ==============
+
+def show_login_page():
+    """로그인/회원가입 페이지"""
+    st.markdown("<div class='main-title'>📈 Kim's AI 주식 분석</div>", unsafe_allow_html=True)
+    st.markdown("<div class='sub-title'>로그인 후 이용해주세요</div>", unsafe_allow_html=True)
+
+    tab1, tab2 = st.tabs(["🔐 로그인", "📝 회원가입"])
+
+    with tab1:
+        auth.login()
+
+        if st.session_state.get('authentication_status') == False:
+            st.error("아이디 또는 비밀번호가 잘못되었습니다.")
+
+        # 게스트 로그인
+        st.markdown("---")
+        if st.button("👤 게스트로 둘러보기", use_container_width=True):
+            st.session_state['authentication_status'] = True
+            st.session_state['username'] = 'guest'
+            st.session_state['name'] = '게스트'
+            st.session_state['is_guest'] = True
+            st.rerun()
+
+    with tab2:
+        success, msg = auth.register_user()
+        if success:
+            st.success(msg)
+            st.info("로그인 탭에서 로그인해주세요.")
+        elif msg:
+            st.error(msg)
+
+# --- [인증 체크] ---
+if not auth.is_authenticated:
+    show_login_page()
+    st.stop()
+
+# 로그인된 사용자 정보
+is_guest = st.session_state.get('is_guest', False)
+if is_guest:
+    user_id = None
+    user_name = "게스트"
+else:
+    user_id = auth.get_user_id()
+    user_name = auth.current_name or "사용자"
+
 # ============== 메인 UI ==============
 
 # 상세 페이지
@@ -602,7 +830,28 @@ if st.session_state['page'] == 'detail' and st.session_state['selected_stock']:
 
 # 홈 페이지
 else:
-    st.markdown("<div class='main-title'>📈 AI 주식 분석</div>", unsafe_allow_html=True)
+    # 오른쪽 상단: 사용자 이름 (제일 위)
+    st.markdown("""<style>[data-testid="stPopover"] button { white-space: nowrap !important; }</style>""", unsafe_allow_html=True)
+    _, btn_user = st.columns([3, 1])
+    with btn_user:
+        with st.popover(f"👤{user_name[:3]}"):
+            st.write("로그아웃 하시겠습니까?")
+            if st.button("로그아웃", type="primary", use_container_width=True):
+                # 쿠키 삭제 (JavaScript)
+                st.markdown("""
+                <script>
+                document.cookie = 'stock_auth_cookie=; expires=Thu, 01 Jan 1970 00:00:00 UTC; path=/;';
+                </script>
+                """, unsafe_allow_html=True)
+                # session_state 초기화
+                st.session_state['authentication_status'] = None
+                st.session_state['username'] = None
+                st.session_state['name'] = None
+                st.session_state['logout'] = True
+                st.rerun()
+
+    # 상단 헤더
+    st.markdown("<div class='main-title'>📈 Kim's AI 주식 분석</div>", unsafe_allow_html=True)
     st.markdown("<div class='sub-title'>종목을 검색하거나 AI 추천을 받아보세요</div>", unsafe_allow_html=True)
 
     # === 메인 탭 ===
@@ -706,7 +955,11 @@ else:
 
     # --- 탭3: 관심종목 ---
     with tab3:
-        watchlists = load_watchlists()
+        if is_guest:
+            st.info("🔒 게스트는 관심종목 기능을 사용할 수 없습니다. 회원가입 후 이용해주세요.")
+            watchlists = {"기본": []}
+        else:
+            watchlists = load_watchlists_db(user_id)
 
         col1, col2 = st.columns([3, 1])
         with col1:
@@ -716,13 +969,12 @@ else:
                 new_name = st.text_input("새 리스트 이름")
                 if st.button("리스트 생성"):
                     if new_name and new_name not in watchlists:
-                        watchlists[new_name] = []
-                        save_watchlists(watchlists)
-                        st.rerun()
+                        # 빈 카테고리는 DB에 저장 안됨, 첫 종목 추가 시 자동 생성
+                        st.info(f"'{new_name}' 리스트가 준비되었습니다. 종목을 추가하면 생성됩니다.")
+                        st.session_state['new_category'] = new_name
                 if current_list != "기본":
                     if st.button("현재 리스트 삭제", type="secondary"):
-                        del watchlists[current_list]
-                        save_watchlists(watchlists)
+                        db.delete_watchlist_category(user_id, current_list)
                         st.rerun()
 
         stocks = watchlists.get(current_list, [])
@@ -753,8 +1005,7 @@ else:
                     st.markdown(f"**{stock['name']}** `{stock['code']}`")
                 with col2:
                     if st.button("삭제", key=f"del_{stock['code']}"):
-                        watchlists[current_list] = [s for s in stocks if s['code'] != stock['code']]
-                        save_watchlists(watchlists)
+                        remove_from_watchlist_db(user_id, current_list, stock['code'])
                         st.rerun()
 
             # 분석 결과 표시
@@ -766,102 +1017,54 @@ else:
 
     # --- 탭4: 내 포트폴리오 ---
     with tab4:
-        st.markdown("### 💼 보유 주식 분석")
-        st.caption("보유 중인 주식의 매도/보유/추가매수 의견을 확인하세요")
+        if is_guest:
+            st.info("🔒 게스트는 포트폴리오 기능을 사용할 수 없습니다. 회원가입 후 이용해주세요.")
+            portfolio_items = []
+        else:
+            # DB에서 포트폴리오 로드
+            portfolio_items = db.get_portfolio(user_id)
 
-        # 파일 업로드 또는 기존 파일 사용
-        col1, col2 = st.columns([2, 1])
-        with col1:
-            uploaded_file = st.file_uploader(
-                "포트폴리오 파일 업로드 (Excel/CSV)",
-                type=['xlsx', 'xls', 'csv'],
-                help="종목코드, 매수가, 수량 컬럼이 필요합니다"
-            )
-        with col2:
-            use_existing = st.checkbox("기존 파일 사용", value=True)
-            existing_file = "output/my_portfolio.xlsx"
+        # 새로고침 버튼으로 분석 시작 요청된 경우
+        if st.session_state.get('run_portfolio_analysis') and portfolio_items:
+            st.session_state['run_portfolio_analysis'] = False
+            from portfolio_advisor import PortfolioAdvisor
+            advisor = PortfolioAdvisor()
+            progress_bar = st.progress(0)
+            status_text = st.empty()
+            results = []
+            total = len(portfolio_items)
+            for idx, item in enumerate(portfolio_items):
+                code = item['stock_code']
+                name = item['stock_name'] or code
+                buy_price = float(item['buy_price'])
+                status_text.text(f"분석 중: {name} ({idx+1}/{total})")
+                analysis = advisor.analyze_stock(code, buy_price)
+                if analysis:
+                    results.append({
+                        'code': code, 'name': name, 'buy_price': buy_price,
+                        'quantity': int(item['quantity']), **analysis
+                    })
+                progress_bar.progress((idx + 1) / total)
+            progress_bar.empty()
+            status_text.empty()
+            st.session_state['portfolio_results'] = results
+            st.rerun()
 
-        # 포트폴리오 로드 (session_state에 저장하여 버튼 클릭 후에도 유지)
-        if 'portfolio_df' not in st.session_state:
-            st.session_state['portfolio_df'] = None
+        # 분석 결과가 있으면 먼저 표시
+        has_results = st.session_state.get('portfolio_results') is not None
 
-        if uploaded_file:
-            try:
-                if uploaded_file.name.endswith('.csv'):
-                    st.session_state['portfolio_df'] = pd.read_csv(uploaded_file, encoding='utf-8-sig')
-                else:
-                    st.session_state['portfolio_df'] = pd.read_excel(uploaded_file)
-                st.success(f"✅ {len(st.session_state['portfolio_df'])}개 종목 로드됨")
-            except Exception as e:
-                st.error(f"파일 로드 실패: {e}")
+        if has_results:
+            # 스크롤 처리 (iframe 방식)
+            if st.session_state.get('scroll_to_top'):
+                st.markdown("""
+                <iframe src="about:blank" style="display:none" onload="
+                    this.parentElement.scrollIntoView();
+                    window.parent.document.body.scrollTop = 0;
+                    window.parent.document.documentElement.scrollTop = 0;
+                "></iframe>
+                """, unsafe_allow_html=True)
+                st.session_state['scroll_to_top'] = False
 
-        elif use_existing and os.path.exists(existing_file):
-            # 기존 파일이 변경되었거나 아직 로드되지 않은 경우에만 다시 로드
-            if st.session_state['portfolio_df'] is None:
-                try:
-                    st.session_state['portfolio_df'] = pd.read_excel(existing_file)
-                    st.info(f"📁 기존 파일 사용: {existing_file} ({len(st.session_state['portfolio_df'])}종목)")
-                except Exception as e:
-                    st.warning(f"기존 파일 로드 실패: {e}")
-            else:
-                st.info(f"📁 포트폴리오 로드됨 ({len(st.session_state['portfolio_df'])}종목)")
-
-        portfolio_df = st.session_state['portfolio_df']
-
-        # 포트폴리오 미리보기
-        if portfolio_df is not None:
-            with st.expander("📋 포트폴리오 미리보기", expanded=False):
-                st.dataframe(portfolio_df, use_container_width=True)
-
-            # 분석 실행
-            if st.button("🚀 포트폴리오 분석 시작", type="primary", use_container_width=True):
-                from portfolio_advisor import PortfolioAdvisor
-
-                advisor = PortfolioAdvisor()
-
-                # DataFrame을 임시 파일로 저장 후 로드
-                import tempfile
-                with tempfile.NamedTemporaryFile(suffix='.xlsx', delete=False) as tmp:
-                    portfolio_df.to_excel(tmp.name, index=False)
-                    advisor.load_portfolio(tmp.name)
-
-                # 분석 실행
-                progress_bar = st.progress(0)
-                status_text = st.empty()
-
-                results = []
-                total = len(advisor.portfolio)
-
-                for idx, row in advisor.portfolio.iterrows():
-                    code = row['종목코드']
-                    name = row.get('종목명', code)
-                    buy_price = float(row.get('매수가', 0))
-
-                    status_text.text(f"분석 중: {name} ({idx+1}/{total})")
-
-                    analysis = advisor.analyze_stock(code, buy_price)
-                    if analysis:
-                        results.append({
-                            'code': code,
-                            'name': name,
-                            'buy_price': buy_price,
-                            'quantity': int(row.get('수량', 1)),
-                            **analysis
-                        })
-
-                    progress_bar.progress((idx + 1) / total)
-
-                progress_bar.empty()
-                status_text.empty()
-
-                # 결과 저장
-                st.session_state['portfolio_results'] = results
-
-                # 임시 파일 삭제
-                os.unlink(tmp.name)
-
-        # 분석 결과 표시
-        if st.session_state.get('portfolio_results'):
             results = st.session_state['portfolio_results']
 
             # 요약 계산
@@ -876,26 +1079,38 @@ else:
                 op = r['opinion']
                 opinion_counts[op] = opinion_counts.get(op, 0) + 1
 
-            st.markdown("---")
-            st.markdown("### 📊 분석 결과 요약")
+            # 제목 + 새로고침 (한 줄)
+            title_col, refresh_col = st.columns([6, 1])
+            with title_col:
+                st.markdown("### 📊 분석 결과 요약")
+            with refresh_col:
+                if st.button("🔄", key="refresh_analysis", help="분석 다시 실행"):
+                    st.session_state['run_portfolio_analysis'] = True
+                    st.rerun()
 
-            # 요약 테이블 (가로형)
+            # 요약 테이블 (세로형 - 모바일 친화적)
             profit_color = "#C53030" if total_profit < 0 else "#2F855A"
             summary_html = f"""
             <table style="width:100%;border-collapse:collapse;margin:15px 0;background:#fff;border-radius:10px;overflow:hidden;box-shadow:0 2px 8px rgba(0,0,0,0.1);">
-                <tr style="background:linear-gradient(135deg,#2c5282,#4299e1);color:white;">
-                    <th style="padding:12px;text-align:center;">종목수</th>
-                    <th style="padding:12px;text-align:center;">총 투자금</th>
-                    <th style="padding:12px;text-align:center;">총 평가금</th>
-                    <th style="padding:12px;text-align:center;">총 손익</th>
-                    <th style="padding:12px;text-align:center;">수익률</th>
+                <tr>
+                    <th style="padding:10px 15px;text-align:left;background:#f7fafc;border-bottom:1px solid #e2e8f0;width:40%;">종목수</th>
+                    <td style="padding:10px 15px;text-align:right;font-weight:bold;border-bottom:1px solid #e2e8f0;">{len(results)}개</td>
                 </tr>
                 <tr>
-                    <td style="padding:15px;text-align:center;font-size:18px;font-weight:bold;">{len(results)}개</td>
-                    <td style="padding:15px;text-align:center;font-size:16px;">{total_invest:,.0f}원</td>
-                    <td style="padding:15px;text-align:center;font-size:16px;">{total_current:,.0f}원</td>
-                    <td style="padding:15px;text-align:center;font-size:18px;font-weight:bold;color:{profit_color};">{total_profit:+,.0f}원</td>
-                    <td style="padding:15px;text-align:center;font-size:20px;font-weight:bold;color:{profit_color};">{profit_rate:+.1f}%</td>
+                    <th style="padding:10px 15px;text-align:left;background:#f7fafc;border-bottom:1px solid #e2e8f0;">총 투자금</th>
+                    <td style="padding:10px 15px;text-align:right;border-bottom:1px solid #e2e8f0;">{total_invest:,.0f}원</td>
+                </tr>
+                <tr>
+                    <th style="padding:10px 15px;text-align:left;background:#f7fafc;border-bottom:1px solid #e2e8f0;">총 평가금</th>
+                    <td style="padding:10px 15px;text-align:right;border-bottom:1px solid #e2e8f0;">{total_current:,.0f}원</td>
+                </tr>
+                <tr>
+                    <th style="padding:10px 15px;text-align:left;background:#f7fafc;border-bottom:1px solid #e2e8f0;">총 손익</th>
+                    <td style="padding:10px 15px;text-align:right;font-weight:bold;color:{profit_color};border-bottom:1px solid #e2e8f0;">{total_profit:+,.0f}원</td>
+                </tr>
+                <tr>
+                    <th style="padding:10px 15px;text-align:left;background:#f7fafc;">수익률</th>
+                    <td style="padding:10px 15px;text-align:right;font-size:20px;font-weight:bold;color:{profit_color};">{profit_rate:+.1f}%</td>
                 </tr>
             </table>
             """
@@ -938,11 +1153,10 @@ else:
                 </div>
                 """, unsafe_allow_html=True)
 
-            # 종목별 수익률 (확장/축소)
+            # 종목별 현황
             st.markdown("---")
             st.markdown("### 📈 종목별 현황")
 
-            # 정렬 옵션
             sort_by = st.selectbox("정렬", ["수익률 높은 순", "수익률 낮은 순", "점수 높은 순", "점수 낮은 순"], label_visibility="collapsed")
 
             if sort_by == "점수 높은 순":
@@ -954,34 +1168,26 @@ else:
             else:
                 results_sorted = sorted(results, key=lambda x: x['profit_rate'])
 
-            # 종목별 카드 (확장/축소)
             for i, r in enumerate(results_sorted):
                 profit_pct = r['profit_rate']
                 profit_color = "#C53030" if profit_pct < 0 else "#2F855A"
                 profit_bg = "#FFF5F5" if profit_pct < 0 else "#F0FFF4"
                 opinion_emoji = {'강력매도': '🚨', '매도': '📉', '손절': '⛔', '손절검토': '⚠️', '추가매수': '💰', '보유': '✅', '관망': '👀'}.get(r['opinion'], '📌')
 
-                # 헤더 (항상 표시)
                 header_html = f"""
-                <div style="display:flex;justify-content:space-between;align-items:center;background:{profit_bg};padding:10px 15px;border-radius:8px;margin:5px 0;">
-                    <div style="flex:2;">
+                <div style="background:{profit_bg};padding:12px 15px;border-radius:8px;margin:8px 0;border-left:4px solid {profit_color};">
+                    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">
                         <strong style="font-size:15px;">{r['name']}</strong>
-                        <span style="color:#718096;font-size:12px;margin-left:8px;">{r['code']}</span>
-                    </div>
-                    <div style="flex:1;text-align:center;">
                         <span style="font-size:18px;font-weight:bold;color:{profit_color};">{profit_pct:+.1f}%</span>
                     </div>
-                    <div style="flex:1;text-align:center;">
-                        <span style="font-size:14px;">점수: <strong>{r['score']}</strong></span>
-                    </div>
-                    <div style="flex:1;text-align:right;">
-                        <span style="font-size:14px;">{opinion_emoji} <strong>{r['opinion']}</strong></span>
+                    <div style="display:flex;justify-content:space-between;color:#555;font-size:13px;">
+                        <span>{r['code']} &nbsp; 점수: {r['score']}</span>
+                        <span>{opinion_emoji} {r['opinion']}</span>
                     </div>
                 </div>
                 """
                 st.markdown(header_html, unsafe_allow_html=True)
 
-                # 상세 (확장/축소)
                 with st.expander(f"상세 보기 - {r['name']}", expanded=False):
                     col1, col2 = st.columns(2)
                     with col1:
@@ -1022,5 +1228,193 @@ else:
                 use_container_width=True
             )
 
+            # 결과 초기화 버튼
+            if st.button("🔄 다시 분석하기", use_container_width=True):
+                st.session_state['portfolio_results'] = None
+                st.rerun()
+
+        # 보유 주식 관리 섹션 (분석 결과 아래 또는 결과 없을 때 위에)
+        st.markdown("---")
+        st.markdown("### 💼 보유 주식 관리")
+
+        # 파일 업로드
+        with st.expander("📂 파일로 일괄 등록"):
+            uploaded_file = st.file_uploader(
+                "Excel/CSV 파일",
+                type=['xlsx', 'xls', 'csv'],
+                help="종목코드, 매수가, 수량 컬럼 필요"
+            )
+
+            if uploaded_file:
+                try:
+                    if uploaded_file.name.endswith('.csv'):
+                        upload_df = pd.read_csv(uploaded_file, encoding='utf-8-sig')
+                    else:
+                        xl = pd.ExcelFile(uploaded_file)
+                        if '잔고' in xl.sheet_names:
+                            upload_df = pd.read_excel(uploaded_file, sheet_name='잔고')
+                        else:
+                            upload_df = pd.read_excel(uploaded_file)
+
+                    st.dataframe(upload_df, use_container_width=True)
+
+                    col1, col2 = st.columns(2)
+                    with col1:
+                        if st.button("기존 데이터에 추가", type="secondary"):
+                            count = 0
+                            for _, row in upload_df.iterrows():
+                                code = str(row.get('종목코드', '')).zfill(6)
+                                if not code or code == '000000':
+                                    continue
+                                name = row.get('종목명', '')
+                                buy_price = float(row.get('매수가', 0))
+                                qty = int(row.get('잔고수량', row.get('수량', 1)))
+                                buy_date = row.get('최종매수일', row.get('매수일'))
+                                if pd.notna(buy_date):
+                                    buy_date = str(buy_date)[:10]
+                                else:
+                                    buy_date = None
+                                if qty > 0:
+                                    db.add_portfolio_item(user_id, code, name, buy_price, qty, buy_date)
+                                    count += 1
+                            st.success(f"{count}개 종목 추가됨")
+                            st.rerun()
+                    with col2:
+                        if st.button("전체 교체", type="primary"):
+                            db.clear_portfolio(user_id)
+                            count = 0
+                            for _, row in upload_df.iterrows():
+                                code = str(row.get('종목코드', '')).zfill(6)
+                                if not code or code == '000000':
+                                    continue
+                                name = row.get('종목명', '')
+                                buy_price = float(row.get('매수가', 0))
+                                qty = int(row.get('잔고수량', row.get('수량', 1)))
+                                buy_date = row.get('최종매수일', row.get('매수일'))
+                                if pd.notna(buy_date):
+                                    buy_date = str(buy_date)[:10]
+                                else:
+                                    buy_date = None
+                                if qty > 0:
+                                    db.add_portfolio_item(user_id, code, name, buy_price, qty, buy_date)
+                                    count += 1
+                            st.success(f"포트폴리오 교체 완료 ({count}개 종목)")
+                            st.rerun()
+                except Exception as e:
+                    st.error(f"파일 로드 실패: {e}")
+
+        # 포트폴리오 다시 로드
+        portfolio_items = db.get_portfolio(user_id)
+
+        st.markdown("---")
+
+        if not portfolio_items:
+            st.info("포트폴리오가 비어있습니다. 종목을 추가하세요.")
+            # 빈 포트폴리오일 때 추가 버튼
+            with st.popover("➕ 종목 추가"):
+                add_code = st.text_input("종목코드", placeholder="005930", key="empty_add_code")
+                add_name = st.text_input("종목명", placeholder="삼성전자", key="empty_add_name")
+                add_price = st.number_input("매수가", min_value=0, step=100, key="empty_add_price")
+                add_qty = st.number_input("수량", min_value=1, step=1, value=1, key="empty_add_qty")
+                if st.button("추가", type="primary", use_container_width=True, key="empty_add_btn"):
+                    if add_code and add_qty > 0:
+                        db.add_portfolio_item(user_id, str(add_code).zfill(6), add_name, add_price, add_qty, None)
+                        st.success("추가됨")
+                        st.rerun()
         else:
-            st.info("포트폴리오 파일을 업로드하거나 기존 파일을 선택하세요.")
+            st.markdown(f"### 📋 보유 종목 ({len(portfolio_items)}개)")
+
+            # 표 형식으로 표시
+            portfolio_df = pd.DataFrame([{
+                '종목명': (p['stock_name'] or '')[:8],
+                '코드': p['stock_code'],
+                '매수가': f"{int(p['buy_price']):,}",
+                '수량': f"{int(p['quantity']):,}"
+            } for p in portfolio_items])
+
+            st.dataframe(
+                portfolio_df,
+                use_container_width=True,
+                hide_index=True,
+                height=(len(portfolio_items) + 1) * 35 + 10
+            )
+
+            # 버튼들 (추가/수정/삭제) - 모바일에서도 가로 배치
+            st.markdown("""
+            <style>
+            @media (max-width: 640px) {
+                [data-testid="stHorizontalBlock"] { flex-wrap: nowrap !important; gap: 0.5rem !important; }
+                [data-testid="stHorizontalBlock"] > div { min-width: 0 !important; }
+            }
+            </style>
+            """, unsafe_allow_html=True)
+            col_add, col_edit, col_del = st.columns(3)
+            with col_add:
+                with st.popover("➕ 추가"):
+                    add_code = st.text_input("종목코드", placeholder="005930", key="quick_add_code")
+                    add_name = st.text_input("종목명", placeholder="삼성전자", key="quick_add_name")
+                    add_price = st.number_input("매수가", min_value=0, step=100, key="quick_add_price")
+                    add_qty = st.number_input("수량", min_value=1, step=1, value=1, key="quick_add_qty")
+                    if st.button("추가", type="primary", use_container_width=True, key="quick_add_btn"):
+                        if add_code and add_qty > 0:
+                            db.add_portfolio_item(user_id, str(add_code).zfill(6), add_name, add_price, add_qty, None)
+                            st.success("추가됨")
+                            st.rerun()
+            with col_edit:
+                with st.popover("✏️ 수정"):
+                    edit_options = {f"{p['stock_name'] or p['stock_code']}": p for p in portfolio_items}
+                    edit_selected = st.selectbox("종목 선택", list(edit_options.keys()), key="edit_select")
+                    if edit_selected:
+                        edit_item = edit_options[edit_selected]
+                        new_price = st.number_input("매수가", value=int(edit_item['buy_price']), min_value=0, step=100, key="edit_price")
+                        new_qty = st.number_input("수량", value=int(edit_item['quantity']), min_value=1, step=1, key="edit_qty")
+                        if st.button("저장", type="primary", use_container_width=True, key="edit_save_btn"):
+                            db.update_portfolio_item(edit_item['id'], buy_price=new_price, quantity=new_qty)
+                            st.success("수정됨")
+                            st.rerun()
+            with col_del:
+                with st.popover("🗑️ 삭제"):
+                    del_options = {f"{p['stock_name'] or p['stock_code']}": p['id'] for p in portfolio_items}
+                    del_selected = st.selectbox("종목 선택", list(del_options.keys()), key="del_select")
+                    if st.button("삭제", type="secondary", use_container_width=True):
+                        db.delete_portfolio_item(del_options[del_selected])
+                        st.rerun()
+
+            # 분석 시작 버튼
+            st.markdown("")
+            if st.button("🚀 포트폴리오 분석 시작", type="primary", use_container_width=True):
+                from portfolio_advisor import PortfolioAdvisor
+
+                advisor = PortfolioAdvisor()
+
+                progress_bar = st.progress(0)
+                status_text = st.empty()
+
+                results = []
+                total = len(portfolio_items)
+
+                for idx, item in enumerate(portfolio_items):
+                    code = item['stock_code']
+                    name = item['stock_name'] or code
+                    buy_price = float(item['buy_price'])
+
+                    status_text.text(f"분석 중: {name} ({idx+1}/{total})")
+
+                    analysis = advisor.analyze_stock(code, buy_price)
+                    if analysis:
+                        results.append({
+                            'code': code,
+                            'name': name,
+                            'buy_price': buy_price,
+                            'quantity': int(item['quantity']),
+                            **analysis
+                        })
+
+                    progress_bar.progress((idx + 1) / total)
+
+                progress_bar.empty()
+                status_text.empty()
+
+                st.session_state['portfolio_results'] = results
+                st.session_state['scroll_to_top'] = True
+                st.rerun()

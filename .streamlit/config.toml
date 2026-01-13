@@ -10,6 +10,8 @@ enableXsrfProtection = false
 headless = true
 # 최대 업로드 크기
 maxUploadSize = 200
+# static 폴더 서빙 활성화
+enableStaticServing = true
 
 [browser]
 # 서버 주소
