@@ -229,24 +229,41 @@ class MarketScreener:
     ):
         """
         전체 스크리닝 파이프라인 실행
+        Returns: (top_stocks, stats) 튜플
         """
         print("\n" + "=" * 60)
         print(f"  전종목 스크리닝 시작: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
         print("=" * 60 + "\n")
         start_time = time.time()
+
+        # 통계 수집용 딕셔너리
+        stats = {}
+
         # 1. 전체 종목 로딩
         self.load_all_stocks()
+        stats['total_stocks'] = len(self.all_stocks) if self.all_stocks is not None else 0
+
         # 2. 유동성 필터링
         self.filter_by_liquidity(min_marcap=min_marcap, min_amount=min_amount)
+        stats['liquidity_passed'] = len(self.filtered_stocks) if self.filtered_stocks is not None else 0
+
         # 3. 특수종목 제외
         self.filter_special_stocks()
+        stats['special_excluded'] = len(self.filtered_stocks) if self.filtered_stocks is not None else 0
+
         # 4. 기술적 스크리닝
         results = self.screen_all(mode=mode)
+        stats['valid_analyzed'] = len(results)
+
         # 5. 상위 종목 추출
         top_stocks = self.get_top_stocks(results, top_n=top_n)
+        stats['final_selected'] = len(top_stocks)
+
         elapsed = time.time() - start_time
+        stats['elapsed_seconds'] = elapsed
         print(f"\n총 소요시간: {elapsed / 60:.1f}분")
-        return top_stocks
+
+        return top_stocks, stats
 class SignalFilter:
     """특정 신호 기반 필터링"""
     # 강력 매수 신호

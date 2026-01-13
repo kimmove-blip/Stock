@@ -606,7 +606,7 @@ else:
     st.markdown("<div class='sub-title'>종목을 검색하거나 AI 추천을 받아보세요</div>", unsafe_allow_html=True)
 
     # === 메인 탭 ===
-    tab1, tab2, tab3 = st.tabs(["🔍 종목 검색", "🏆 AI 추천", "⭐ 관심종목"])
+    tab1, tab2, tab3, tab4 = st.tabs(["🔍 종목 검색", "🏆 AI 추천", "⭐ 관심종목", "💼 내 포트폴리오"])
 
     # --- 탭1: 종목 검색 ---
     with tab1:
@@ -763,3 +763,264 @@ else:
                 st.markdown("### 📊 분석 결과")
                 for i, stock in enumerate(st.session_state['analysis_result']):
                     show_stock_card(stock, key_suffix=f"watch_{i}")
+
+    # --- 탭4: 내 포트폴리오 ---
+    with tab4:
+        st.markdown("### 💼 보유 주식 분석")
+        st.caption("보유 중인 주식의 매도/보유/추가매수 의견을 확인하세요")
+
+        # 파일 업로드 또는 기존 파일 사용
+        col1, col2 = st.columns([2, 1])
+        with col1:
+            uploaded_file = st.file_uploader(
+                "포트폴리오 파일 업로드 (Excel/CSV)",
+                type=['xlsx', 'xls', 'csv'],
+                help="종목코드, 매수가, 수량 컬럼이 필요합니다"
+            )
+        with col2:
+            use_existing = st.checkbox("기존 파일 사용", value=True)
+            existing_file = "output/my_portfolio.xlsx"
+
+        # 포트폴리오 로드 (session_state에 저장하여 버튼 클릭 후에도 유지)
+        if 'portfolio_df' not in st.session_state:
+            st.session_state['portfolio_df'] = None
+
+        if uploaded_file:
+            try:
+                if uploaded_file.name.endswith('.csv'):
+                    st.session_state['portfolio_df'] = pd.read_csv(uploaded_file, encoding='utf-8-sig')
+                else:
+                    st.session_state['portfolio_df'] = pd.read_excel(uploaded_file)
+                st.success(f"✅ {len(st.session_state['portfolio_df'])}개 종목 로드됨")
+            except Exception as e:
+                st.error(f"파일 로드 실패: {e}")
+
+        elif use_existing and os.path.exists(existing_file):
+            # 기존 파일이 변경되었거나 아직 로드되지 않은 경우에만 다시 로드
+            if st.session_state['portfolio_df'] is None:
+                try:
+                    st.session_state['portfolio_df'] = pd.read_excel(existing_file)
+                    st.info(f"📁 기존 파일 사용: {existing_file} ({len(st.session_state['portfolio_df'])}종목)")
+                except Exception as e:
+                    st.warning(f"기존 파일 로드 실패: {e}")
+            else:
+                st.info(f"📁 포트폴리오 로드됨 ({len(st.session_state['portfolio_df'])}종목)")
+
+        portfolio_df = st.session_state['portfolio_df']
+
+        # 포트폴리오 미리보기
+        if portfolio_df is not None:
+            with st.expander("📋 포트폴리오 미리보기", expanded=False):
+                st.dataframe(portfolio_df, use_container_width=True)
+
+            # 분석 실행
+            if st.button("🚀 포트폴리오 분석 시작", type="primary", use_container_width=True):
+                from portfolio_advisor import PortfolioAdvisor
+
+                advisor = PortfolioAdvisor()
+
+                # DataFrame을 임시 파일로 저장 후 로드
+                import tempfile
+                with tempfile.NamedTemporaryFile(suffix='.xlsx', delete=False) as tmp:
+                    portfolio_df.to_excel(tmp.name, index=False)
+                    advisor.load_portfolio(tmp.name)
+
+                # 분석 실행
+                progress_bar = st.progress(0)
+                status_text = st.empty()
+
+                results = []
+                total = len(advisor.portfolio)
+
+                for idx, row in advisor.portfolio.iterrows():
+                    code = row['종목코드']
+                    name = row.get('종목명', code)
+                    buy_price = float(row.get('매수가', 0))
+
+                    status_text.text(f"분석 중: {name} ({idx+1}/{total})")
+
+                    analysis = advisor.analyze_stock(code, buy_price)
+                    if analysis:
+                        results.append({
+                            'code': code,
+                            'name': name,
+                            'buy_price': buy_price,
+                            'quantity': int(row.get('수량', 1)),
+                            **analysis
+                        })
+
+                    progress_bar.progress((idx + 1) / total)
+
+                progress_bar.empty()
+                status_text.empty()
+
+                # 결과 저장
+                st.session_state['portfolio_results'] = results
+
+                # 임시 파일 삭제
+                os.unlink(tmp.name)
+
+        # 분석 결과 표시
+        if st.session_state.get('portfolio_results'):
+            results = st.session_state['portfolio_results']
+
+            # 요약 계산
+            total_invest = sum(r['buy_price'] * r['quantity'] for r in results if r['buy_price'] > 0)
+            total_current = sum(r['current_price'] * r['quantity'] for r in results)
+            total_profit = total_current - total_invest
+            profit_rate = (total_profit / total_invest * 100) if total_invest > 0 else 0
+
+            # 의견별 분류
+            opinion_counts = {}
+            for r in results:
+                op = r['opinion']
+                opinion_counts[op] = opinion_counts.get(op, 0) + 1
+
+            st.markdown("---")
+            st.markdown("### 📊 분석 결과 요약")
+
+            # 요약 테이블 (가로형)
+            profit_color = "#C53030" if total_profit < 0 else "#2F855A"
+            summary_html = f"""
+            <table style="width:100%;border-collapse:collapse;margin:15px 0;background:#fff;border-radius:10px;overflow:hidden;box-shadow:0 2px 8px rgba(0,0,0,0.1);">
+                <tr style="background:linear-gradient(135deg,#2c5282,#4299e1);color:white;">
+                    <th style="padding:12px;text-align:center;">종목수</th>
+                    <th style="padding:12px;text-align:center;">총 투자금</th>
+                    <th style="padding:12px;text-align:center;">총 평가금</th>
+                    <th style="padding:12px;text-align:center;">총 손익</th>
+                    <th style="padding:12px;text-align:center;">수익률</th>
+                </tr>
+                <tr>
+                    <td style="padding:15px;text-align:center;font-size:18px;font-weight:bold;">{len(results)}개</td>
+                    <td style="padding:15px;text-align:center;font-size:16px;">{total_invest:,.0f}원</td>
+                    <td style="padding:15px;text-align:center;font-size:16px;">{total_current:,.0f}원</td>
+                    <td style="padding:15px;text-align:center;font-size:18px;font-weight:bold;color:{profit_color};">{total_profit:+,.0f}원</td>
+                    <td style="padding:15px;text-align:center;font-size:20px;font-weight:bold;color:{profit_color};">{profit_rate:+.1f}%</td>
+                </tr>
+            </table>
+            """
+            st.markdown(summary_html, unsafe_allow_html=True)
+
+            # 의견 분포 (가로형 뱃지)
+            opinion_badges = ""
+            opinion_colors = {
+                '강력매도': '#C53030', '매도': '#E53E3E', '손절': '#C53030', '손절검토': '#DD6B20',
+                '추가매수': '#2F855A', '보유': '#3182CE', '관망': '#718096'
+            }
+            for op, count in opinion_counts.items():
+                color = opinion_colors.get(op, '#718096')
+                opinion_badges += f'<span style="display:inline-block;background:{color};color:white;padding:6px 14px;border-radius:20px;margin:4px;font-weight:bold;">{op}: {count}개</span>'
+
+            st.markdown(f"""
+            <div style="margin:15px 0;">
+                <strong>의견 분포:</strong><br>
+                {opinion_badges}
+            </div>
+            """, unsafe_allow_html=True)
+
+            # 경고/추천 알림
+            sell_list = [r for r in results if r['opinion'] in ['강력매도', '매도', '손절', '손절검토']]
+            buy_list = [r for r in results if r['opinion'] == '추가매수']
+
+            if sell_list:
+                sell_names = ", ".join([s['name'] for s in sell_list])
+                st.markdown(f"""
+                <div style="background:#FED7D7;padding:12px 15px;border-radius:8px;border-left:4px solid #C53030;margin:10px 0;">
+                    <strong style="color:#C53030;">⚠️ 매도/손절 검토:</strong> {sell_names}
+                </div>
+                """, unsafe_allow_html=True)
+
+            if buy_list:
+                buy_names = ", ".join([s['name'] for s in buy_list])
+                st.markdown(f"""
+                <div style="background:#C6F6D5;padding:12px 15px;border-radius:8px;border-left:4px solid #2F855A;margin:10px 0;">
+                    <strong style="color:#2F855A;">💡 추가매수 고려:</strong> {buy_names}
+                </div>
+                """, unsafe_allow_html=True)
+
+            # 종목별 수익률 (확장/축소)
+            st.markdown("---")
+            st.markdown("### 📈 종목별 현황")
+
+            # 정렬 옵션
+            sort_by = st.selectbox("정렬", ["수익률 높은 순", "수익률 낮은 순", "점수 높은 순", "점수 낮은 순"], label_visibility="collapsed")
+
+            if sort_by == "점수 높은 순":
+                results_sorted = sorted(results, key=lambda x: x['score'], reverse=True)
+            elif sort_by == "점수 낮은 순":
+                results_sorted = sorted(results, key=lambda x: x['score'])
+            elif sort_by == "수익률 높은 순":
+                results_sorted = sorted(results, key=lambda x: x['profit_rate'], reverse=True)
+            else:
+                results_sorted = sorted(results, key=lambda x: x['profit_rate'])
+
+            # 종목별 카드 (확장/축소)
+            for i, r in enumerate(results_sorted):
+                profit_pct = r['profit_rate']
+                profit_color = "#C53030" if profit_pct < 0 else "#2F855A"
+                profit_bg = "#FFF5F5" if profit_pct < 0 else "#F0FFF4"
+                opinion_emoji = {'강력매도': '🚨', '매도': '📉', '손절': '⛔', '손절검토': '⚠️', '추가매수': '💰', '보유': '✅', '관망': '👀'}.get(r['opinion'], '📌')
+
+                # 헤더 (항상 표시)
+                header_html = f"""
+                <div style="display:flex;justify-content:space-between;align-items:center;background:{profit_bg};padding:10px 15px;border-radius:8px;margin:5px 0;">
+                    <div style="flex:2;">
+                        <strong style="font-size:15px;">{r['name']}</strong>
+                        <span style="color:#718096;font-size:12px;margin-left:8px;">{r['code']}</span>
+                    </div>
+                    <div style="flex:1;text-align:center;">
+                        <span style="font-size:18px;font-weight:bold;color:{profit_color};">{profit_pct:+.1f}%</span>
+                    </div>
+                    <div style="flex:1;text-align:center;">
+                        <span style="font-size:14px;">점수: <strong>{r['score']}</strong></span>
+                    </div>
+                    <div style="flex:1;text-align:right;">
+                        <span style="font-size:14px;">{opinion_emoji} <strong>{r['opinion']}</strong></span>
+                    </div>
+                </div>
+                """
+                st.markdown(header_html, unsafe_allow_html=True)
+
+                # 상세 (확장/축소)
+                with st.expander(f"상세 보기 - {r['name']}", expanded=False):
+                    col1, col2 = st.columns(2)
+                    with col1:
+                        st.markdown(f"**매수가:** {r['buy_price']:,.0f}원")
+                        st.markdown(f"**현재가:** {r['current_price']:,.0f}원")
+                        st.markdown(f"**수량:** {r['quantity']}주")
+                    with col2:
+                        profit_amount = (r['current_price'] - r['buy_price']) * r['quantity']
+                        st.markdown(f"**평가손익:** {profit_amount:+,.0f}원")
+                        st.markdown(f"**기술점수:** {r['score']}점")
+
+                    st.markdown(f"**💡 의견 사유:** {r['reason']}")
+
+                    signals = r.get('signals', [])
+                    if signals:
+                        signals_kr = [get_signal_kr(s) for s in signals[:5]]
+                        st.markdown(f"**📊 신호:** {', '.join(signals_kr)}")
+
+            # CSV 다운로드
+            st.markdown("---")
+            df_download = pd.DataFrame([{
+                '종목코드': r['code'],
+                '종목명': r['name'],
+                '매수가': r['buy_price'],
+                '현재가': int(r['current_price']),
+                '수익률(%)': round(r['profit_rate'], 2),
+                '점수': r['score'],
+                '의견': r['opinion'],
+                '사유': r['reason']
+            } for r in results])
+
+            csv = df_download.to_csv(index=False, encoding='utf-8-sig')
+            st.download_button(
+                "📥 결과 다운로드 (CSV)",
+                csv,
+                file_name=f"portfolio_advice_{datetime.now().strftime('%Y%m%d')}.csv",
+                mime="text/csv",
+                use_container_width=True
+            )
+
+        else:
+            st.info("포트폴리오 파일을 업로드하거나 기존 파일을 선택하세요.")

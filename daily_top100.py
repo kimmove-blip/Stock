@@ -33,7 +33,9 @@ from result_tracker import update_with_next_day_results, get_previous_result_fil
 
 
 def run_screening(mode="quick", top_n=100):
-    """스크리닝 실행"""
+    """스크리닝 실행
+    Returns: (results, stats) 튜플
+    """
     print("\n" + "=" * 70)
     print(f"  내일 관심 종목 {top_n}선 스크리닝")
     print(f"  실행시간: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
@@ -43,15 +45,15 @@ def run_screening(mode="quick", top_n=100):
     # 스크리너 초기화
     screener = MarketScreener(max_workers=ScreeningConfig.MAX_WORKERS)
 
-    # 스크리닝 실행
-    results = screener.run_full_screening(
+    # 스크리닝 실행 (통계도 함께 반환)
+    results, stats = screener.run_full_screening(
         top_n=top_n * 2,  # 필터링 여유분
         mode=mode,
         min_marcap=ScreeningConfig.MIN_MARKET_CAP,
         min_amount=ScreeningConfig.MIN_TRADING_AMOUNT,
     )
 
-    return results
+    return results, stats
 
 
 def categorize_results(results):
@@ -75,7 +77,7 @@ def categorize_results(results):
     return categorized
 
 
-def save_results(results, top_n=100, yesterday_df=None, yesterday_summary=None):
+def save_results(results, top_n=100, yesterday_df=None, yesterday_summary=None, stats=None):
     """결과 저장 (Excel 2시트, JSON, CSV, PDF)"""
     print("\n[저장] 결과 파일 생성 중...")
 
@@ -92,7 +94,7 @@ def save_results(results, top_n=100, yesterday_df=None, yesterday_summary=None):
 
     # 2. JSON 저장
     json_path = OutputConfig.get_filepath("json")
-    save_json(top_results, json_path)
+    save_json(top_results, json_path, stats=stats)
     print(f"    → JSON: {json_path}")
 
     # 3. CSV 저장
@@ -100,9 +102,9 @@ def save_results(results, top_n=100, yesterday_df=None, yesterday_summary=None):
     df.to_csv(csv_path, index=False, encoding="utf-8-sig")
     print(f"    → CSV: {csv_path}")
 
-    # 4. PDF 저장
+    # 4. PDF 저장 (통계 포함)
     pdf_path = OutputConfig.get_filepath("pdf")
-    generate_detailed_pdf(top_results, pdf_path)
+    generate_detailed_pdf(top_results, pdf_path, stats=stats)
     print(f"    → PDF: {pdf_path}")
 
     return excel_path, json_path, csv_path
@@ -174,11 +176,12 @@ def create_dataframe(results):
     return pd.DataFrame(rows)
 
 
-def save_json(results, filepath):
+def save_json(results, filepath, stats=None):
     """JSON 형식으로 저장"""
     output = {
         "generated_at": datetime.now().isoformat(),
         "total_count": len(results),
+        "screening_stats": stats or {},
         "stocks": [],
     }
 
@@ -276,14 +279,14 @@ def run_with_schedule(send_email=True):
         # 스크리닝 실행
         print("\n[2단계] 오늘의 스크리닝 실행")
         print("-" * 50)
-        results = run_screening(mode=ScreeningConfig.MODE, top_n=ScreeningConfig.TOP_N)
+        results, stats = run_screening(mode=ScreeningConfig.MODE, top_n=ScreeningConfig.TOP_N)
 
         if not results:
             print("[스케줄] 스크리닝 결과 없음")
             return
 
         categorized = categorize_results(results)
-        save_results(results, top_n=30, yesterday_df=yesterday_df, yesterday_summary=yesterday_summary)
+        save_results(results, top_n=30, yesterday_df=yesterday_df, yesterday_summary=yesterday_summary, stats=stats)
         print_summary(results, categorized)
 
         # 이메일 발송
@@ -374,7 +377,7 @@ def main():
         # 스크리닝 실행
         print("\n[2단계] 오늘의 스크리닝 실행")
         print("-" * 50)
-        results = run_screening(mode=mode, top_n=args.top)
+        results, stats = run_screening(mode=mode, top_n=args.top)
 
         if not results:
             print("\n[오류] 스크리닝 결과가 없습니다.")
@@ -388,7 +391,8 @@ def main():
             excel_path, json_path, csv_path = save_results(
                 results, top_n=30,
                 yesterday_df=yesterday_df,
-                yesterday_summary=yesterday_summary
+                yesterday_summary=yesterday_summary,
+                stats=stats
             )
 
         # 요약 출력
