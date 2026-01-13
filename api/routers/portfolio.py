@@ -203,18 +203,70 @@ async def delete_portfolio_item(
     db.delete_portfolio_item(item_id)
 
 
+def analyze_stock_technical(code: str) -> dict:
+    """기술적 분석 기반 종목 분석 - 종목 상세와 동일한 로직"""
+    try:
+        libs = get_stock_libs()
+        if not libs:
+            return None
+
+        fdr = libs['fdr']
+        get_ohlcv = libs['get_ohlcv']
+
+        # OHLCV 데이터
+        ohlcv = get_ohlcv(code, 365)
+        if ohlcv is None or ohlcv.empty:
+            return None
+
+        current_price = int(ohlcv.iloc[-1]['종가'])
+
+        # 컬럼명 영문으로 변환
+        ohlcv = ohlcv.rename(columns={
+            '시가': 'Open',
+            '고가': 'High',
+            '저가': 'Low',
+            '종가': 'Close',
+            '거래량': 'Volume'
+        })
+
+        # 기술적 분석
+        from technical_analyst import TechnicalAnalyst
+        analyst = TechnicalAnalyst()
+        result = analyst.analyze_full(ohlcv)
+
+        if result is None:
+            score_tuple = analyst.analyze(ohlcv)
+            score = score_tuple[0] if isinstance(score_tuple, tuple) else 50
+        else:
+            score = result.get('score', 50)
+
+        # 점수 기반 의견 결정 (종목 상세와 동일)
+        if score >= 70:
+            opinion = '매수'
+        elif score >= 50:
+            opinion = '관망'
+        elif score >= 30:
+            opinion = '주의'
+        else:
+            opinion = '매도'
+
+        return {
+            'current_price': current_price,
+            'opinion': opinion,
+            'score': score
+        }
+
+    except Exception as e:
+        print(f"기술적 분석 실패 [{code}]: {e}")
+        return None
+
+
 @router.get("/analysis", response_model=PortfolioAnalysis)
 async def analyze_portfolio(
     current_user: dict = Depends(get_current_user_required),
     db: DatabaseManager = Depends(get_db)
 ):
     """포트폴리오 분석"""
-    try:
-        from portfolio_advisor import PortfolioAdvisor
-        advisor = PortfolioAdvisor()
-    except ImportError:
-        raise HTTPException(status_code=503, detail="분석 서비스 이용 불가")
-
     items = db.get_portfolio(current_user['id'])
     if not items:
         return PortfolioAnalysis(
@@ -227,7 +279,7 @@ async def analyze_portfolio(
             ),
             items=[],
             risk_stocks=[],
-            recommendations=["포트폴리오에 종목을 추가해주세요."]
+            recommendations=["보유종목을 추가해주세요."]
         )
 
     # 분석 실행
@@ -239,75 +291,70 @@ async def analyze_portfolio(
     total_value = 0
 
     for item in items:
-        try:
-            result = advisor.analyze_stock(item['stock_code'])
-            opinion = result.get('opinion', '보유')
-            score = result.get('score', 50)
+        buy_price = int(item['buy_price'] or 0)
+        quantity = int(item['quantity'] or 1)
 
-            buy_price = item['buy_price'] or 0
-            quantity = item['quantity'] or 1
-            current_price = result.get('current_price') or get_current_price(item['stock_code']) or buy_price
+        # 기술적 분석 실행 (종목 상세와 동일)
+        result = analyze_stock_technical(item['stock_code'])
 
-            investment = buy_price * quantity
-            current_value = current_price * quantity
-            profit_loss = current_value - investment
-            profit_loss_rate = round((profit_loss / investment * 100), 2) if investment > 0 else 0
+        if result:
+            opinion = result['opinion']
+            score = result['score']
+            current_price = int(result['current_price'])
+        else:
+            opinion = '분석불가'
+            score = 0
+            current_price = buy_price
 
-            total_investment += investment
-            total_value += current_value
+        investment = buy_price * quantity
+        current_value = current_price * quantity
+        profit_loss = int(current_value - investment)
+        profit_loss_rate = round((profit_loss / investment * 100), 2) if investment > 0 else 0
 
-            analysis_results.append(PortfolioItemResponse(
-                id=item['id'],
-                user_id=current_user['id'],
-                stock_code=item['stock_code'],
-                stock_name=item['stock_name'] or '',
-                buy_price=buy_price,
-                quantity=quantity,
-                buy_date=item.get('buy_date'),
-                current_price=current_price,
-                profit_loss=profit_loss,
-                profit_loss_rate=profit_loss_rate,
-                ai_opinion=opinion,
-                ai_score=score
-            ))
+        total_investment += investment
+        total_value += current_value
 
-            # 위험 종목 판별
-            if opinion in ['매도', '손절'] or profit_loss_rate < -10:
-                risk_stocks.append({
-                    'code': item['stock_code'],
-                    'name': item['stock_name'],
-                    'opinion': opinion,
-                    'profit_loss_rate': profit_loss_rate
-                })
+        analysis_results.append(PortfolioItemResponse(
+            id=item['id'],
+            user_id=current_user['id'],
+            stock_code=item['stock_code'],
+            stock_name=item['stock_name'] or '',
+            buy_price=buy_price,
+            quantity=quantity,
+            buy_date=item.get('buy_date'),
+            current_price=current_price,
+            profit_loss=profit_loss,
+            profit_loss_rate=profit_loss_rate,
+            ai_opinion=opinion,
+            ai_score=score
+        ))
 
-        except Exception as e:
-            # 분석 실패 시 기본값
-            analysis_results.append(PortfolioItemResponse(
-                id=item['id'],
-                user_id=current_user['id'],
-                stock_code=item['stock_code'],
-                stock_name=item['stock_name'] or '',
-                buy_price=item['buy_price'] or 0,
-                quantity=item['quantity'] or 1,
-                buy_date=item.get('buy_date'),
-                ai_opinion='분석불가'
-            ))
+        # 위험 종목 판별
+        if opinion in ['매도', '손절', '손절검토'] or profit_loss_rate < -10:
+            risk_stocks.append({
+                'code': item['stock_code'],
+                'name': item['stock_name'],
+                'opinion': opinion,
+                'profit_loss_rate': profit_loss_rate
+            })
 
     # 추천 액션 생성
     if risk_stocks:
-        recommendations.append(f"위험 종목 {len(risk_stocks)}개 확인 필요")
-    if total_value > total_investment:
-        recommendations.append("전체 수익 상태 - 익절 시점 검토")
+        recommendations.append(f"주의 필요 종목 {len(risk_stocks)}개 확인")
+    if total_value > total_investment * 1.1:
+        recommendations.append("수익 실현 타이밍 검토")
     elif total_value < total_investment * 0.9:
-        recommendations.append("전체 손실 상태 - 손절 또는 추가 매수 검토")
+        recommendations.append("손절 또는 물타기 검토 필요")
+    else:
+        recommendations.append("전체적으로 안정적인 상태")
 
-    total_profit_loss = total_value - total_investment
+    total_profit_loss = int(total_value - total_investment)
     total_profit_loss_rate = round((total_profit_loss / total_investment * 100), 2) if total_investment > 0 else 0
 
     return PortfolioAnalysis(
         summary=PortfolioSummary(
-            total_investment=total_investment,
-            total_value=total_value,
+            total_investment=int(total_investment),
+            total_value=int(total_value),
             total_profit_loss=total_profit_loss,
             total_profit_loss_rate=total_profit_loss_rate,
             stock_count=len(analysis_results)

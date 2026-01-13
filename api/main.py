@@ -12,7 +12,7 @@ import os
 # 프로젝트 루트 경로 추가
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from api.routers import auth, stocks, portfolio, watchlist, top100, realtime, value_stocks, contact, themes
+from api.routers import auth, stocks, portfolio, watchlist, top100, realtime, value_stocks, contact, themes, popular
 
 
 @asynccontextmanager
@@ -74,6 +74,7 @@ app.include_router(realtime.router, prefix="/api/realtime", tags=["실시간 시
 app.include_router(value_stocks.router, prefix="/api/value-stocks", tags=["가치주"])
 app.include_router(contact.router, prefix="/api/contact", tags=["문의"])
 app.include_router(themes.router, prefix="/api/themes", tags=["테마"])
+app.include_router(popular.router, prefix="/api/popular", tags=["인기종목"])
 
 
 @app.get("/", tags=["헬스체크"])

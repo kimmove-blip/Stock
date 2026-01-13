@@ -19,10 +19,13 @@ export default function Home() {
   const { user } = useAuth();
   const navigate = useNavigate();
 
-  // 포트폴리오 데이터
+  // 포트폴리오 데이터 (화면 표시될 때마다 새로고침)
   const { data: portfolio } = useQuery({
     queryKey: ['portfolio'],
     queryFn: () => portfolioAPI.list().then((res) => res.data),
+    staleTime: 0,  // 항상 새 데이터 가져오기
+    refetchOnMount: 'always',  // 마운트 시 항상 새로고침
+    refetchOnWindowFocus: true,  // 창 포커스 시 새로고침
   });
 
   // 퀵 액션 목록 - 배경색과 아이콘색 분리
@@ -70,25 +73,39 @@ export default function Home() {
 
       {/* 메인 컨텐츠 영역 */}
       <div className="px-4 -mt-8 flex-1 flex flex-col pb-20">
-        {/* 포트폴리오 바 - 간단한 스타일 */}
+        {/* 포트폴리오 카드 */}
         <div
-          className="bg-gradient-to-r from-purple-600 to-indigo-600 rounded-2xl px-4 py-3 text-white shadow-lg flex-shrink-0 cursor-pointer flex items-center justify-between"
+          className="bg-gradient-to-br from-purple-500 via-purple-600 to-indigo-600 rounded-2xl p-4 text-white shadow-lg flex-shrink-0 cursor-pointer"
           onClick={() => navigate('/portfolio')}
         >
-          <div className="flex items-center gap-2">
-            <Briefcase size={18} />
-            <span className="text-sm font-semibold">내 보유종목</span>
+          {/* 상단: 제목 + 아이콘 */}
+          <div className="flex items-center justify-between mb-2">
+            <div className="flex items-center gap-2">
+              <Briefcase size={18} className="opacity-90" />
+              <span className="text-sm font-medium opacity-90">내 보유종목</span>
+            </div>
           </div>
-          <div className="text-right">
-            <span className="font-bold">{summary.total_profit_loss >= 0 ? '+' : ''}{summary.total_profit_loss.toLocaleString()}원</span>
-            <span className={`text-sm ml-2 ${isPositive ? 'text-green-300' : 'text-red-300'}`}>
-              ({isPositive ? '+' : ''}{summary.total_profit_loss_rate.toFixed(2)}%)
-            </span>
+          {/* 총 평가금액 */}
+          <p className="text-2xl font-bold mb-3">
+            {summary.total_value.toLocaleString()}원
+          </p>
+          {/* 하단: 투자금액 / 수익률 */}
+          <div className="flex justify-between text-sm">
+            <div>
+              <p className="text-white/60 text-xs">투자금액</p>
+              <p className="font-semibold">{summary.total_investment.toLocaleString()}원</p>
+            </div>
+            <div className="text-right">
+              <p className="text-white/60 text-xs">수익률</p>
+              <p className={`font-semibold ${isPositive ? 'text-green-300' : 'text-red-300'}`}>
+                {isPositive ? '+' : ''}{summary.total_profit_loss_rate.toFixed(2)}%
+              </p>
+            </div>
           </div>
         </div>
 
         {/* 퀵 액션 그리드 - 카드 스타일 */}
-        <div className="mt-6 flex-shrink-0 flex-1">
+        <div className="mt-6 flex-shrink-0">
           <div className="grid grid-cols-3 gap-3">
             {quickActions.map(({ icon: Icon, label, bgColor, iconColor, path }) => (
               <button
@@ -105,12 +122,11 @@ export default function Home() {
               </button>
             ))}
           </div>
+          {/* 면책 조항 - 아이콘 바로 아래 */}
+          <p className="text-center text-xs text-gray-400 mt-3">
+            본 서비스의 정보는 투자 권유가 아니며, 투자 책임은 본인에게 있습니다.
+          </p>
         </div>
-
-        {/* 면책 조항 */}
-        <p className="text-center text-xs text-gray-400 mt-4 flex-shrink-0">
-          본 서비스의 정보는 투자 권유가 아니며, 투자 책임은 본인에게 있습니다.
-        </p>
       </div>
     </div>
   );

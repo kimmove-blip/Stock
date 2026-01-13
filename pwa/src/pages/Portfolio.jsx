@@ -3,21 +3,33 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useNavigate } from 'react-router-dom';
 import { portfolioAPI, stockAPI } from '../api/client';
 import Loading from '../components/Loading';
-import { Plus, Trash2, TrendingUp, TrendingDown, Search } from 'lucide-react';
+import { Plus, Trash2, TrendingUp, TrendingDown, Search, Activity, AlertTriangle, CheckCircle } from 'lucide-react';
 
 export default function Portfolio() {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const [showAddModal, setShowAddModal] = useState(false);
+  const [showDiagnosis, setShowDiagnosis] = useState(false);
   const [searchKeyword, setSearchKeyword] = useState('');
   const [searchResults, setSearchResults] = useState([]);
   const [selectedStock, setSelectedStock] = useState(null);
   const [buyPrice, setBuyPrice] = useState('');
   const [quantity, setQuantity] = useState(1);
 
-  const { data, isLoading, error } = useQuery({
+  // 포트폴리오 목록 (화면 표시될 때마다 새로고침)
+  const { data, isLoading, error, refetch } = useQuery({
     queryKey: ['portfolio'],
     queryFn: () => portfolioAPI.list().then((res) => res.data),
+    staleTime: 0,  // 항상 새 데이터 가져오기
+    refetchOnMount: 'always',  // 마운트 시 항상 새로고침
+    refetchOnWindowFocus: true,  // 창 포커스 시 새로고침
+  });
+
+  // 포트폴리오 분석 (진단 버튼 클릭 시)
+  const { data: analysisData, isLoading: analysisLoading, refetch: refetchAnalysis } = useQuery({
+    queryKey: ['portfolio-analysis'],
+    queryFn: () => portfolioAPI.analysis().then((res) => res.data),
+    enabled: showDiagnosis,
   });
 
   const addMutation = useMutation({
@@ -60,6 +72,13 @@ export default function Portfolio() {
       buy_price: parseInt(buyPrice) || 0,
       quantity: parseInt(quantity) || 1,
     });
+  };
+
+  const handleDiagnosis = () => {
+    setShowDiagnosis(true);
+    if (analysisData) {
+      refetchAnalysis();
+    }
   };
 
   if (isLoading) return <Loading text="보유종목 불러오는 중..." />;
@@ -115,26 +134,146 @@ export default function Portfolio() {
         </div>
       </div>
 
-      {/* 종목 추가 버튼 */}
-      <button
-        onClick={() => setShowAddModal(true)}
-        className="btn btn-primary btn-sm mb-4"
-      >
-        <Plus size={16} /> 종목 추가
-      </button>
+      {/* 버튼 영역 */}
+      <div className="flex gap-2 mb-4">
+        <button
+          onClick={() => setShowAddModal(true)}
+          className="btn btn-primary btn-sm"
+        >
+          <Plus size={16} /> 종목 추가
+        </button>
+        <button
+          onClick={handleDiagnosis}
+          className="btn btn-secondary btn-sm"
+          disabled={!data?.items?.length}
+        >
+          <Activity size={16} /> 보유종목 진단
+        </button>
+      </div>
+
+      {/* 진단 결과 */}
+      {showDiagnosis && (
+        <div className="card bg-gradient-to-br from-purple-50 to-indigo-50 shadow mb-4">
+          <div className="card-body p-4">
+            <h3 className="font-bold text-purple-700 flex items-center gap-2 mb-3">
+              <Activity size={18} /> AI 보유종목 진단
+            </h3>
+
+            {analysisLoading ? (
+              <div className="text-center py-4">
+                <span className="loading loading-spinner loading-md text-purple-600"></span>
+                <p className="text-sm text-purple-600 mt-2">분석 중...</p>
+              </div>
+            ) : analysisData ? (
+              <>
+                {/* 위험 종목 */}
+                {analysisData.risk_stocks?.length > 0 && (
+                  <div className="mb-3">
+                    <p className="text-sm font-medium text-red-600 flex items-center gap-1 mb-2">
+                      <AlertTriangle size={14} /> 주의 필요 종목
+                    </p>
+                    <div className="space-y-1">
+                      {analysisData.risk_stocks.map((stock) => (
+                        <div
+                          key={stock.code}
+                          className="bg-red-50 rounded-lg p-2 flex justify-between items-center cursor-pointer"
+                          onClick={() => navigate(`/stock/${stock.code}`)}
+                        >
+                          <span className="text-sm font-medium">{stock.name}</span>
+                          <span className="text-xs text-red-600">
+                            {stock.opinion} ({stock.profit_loss_rate >= 0 ? '+' : ''}{stock.profit_loss_rate?.toFixed(1)}%)
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {/* 추천 액션 */}
+                {analysisData.recommendations?.length > 0 && (
+                  <div className="mb-3">
+                    <p className="text-sm font-medium text-purple-600 flex items-center gap-1 mb-2">
+                      <CheckCircle size={14} /> 추천 액션
+                    </p>
+                    <ul className="text-sm text-gray-600 space-y-1">
+                      {analysisData.recommendations.map((rec, idx) => (
+                        <li key={idx} className="flex items-start gap-2">
+                          <span className="text-purple-500">•</span>
+                          {rec}
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
+
+                {/* 종목별 AI 의견 */}
+                {analysisData.items?.length > 0 && (
+                  <div>
+                    <p className="text-sm font-medium text-gray-700 mb-2">종목별 AI 의견</p>
+                    <div className="space-y-1">
+                      {analysisData.items.map((item) => (
+                        <div
+                          key={item.id}
+                          className="bg-white rounded-lg p-2 flex justify-between items-center cursor-pointer hover:bg-gray-50"
+                          onClick={() => navigate(`/stock/${item.stock_code}`)}
+                        >
+                          <div>
+                            <span className="text-sm font-medium">{item.stock_name}</span>
+                            <span className="text-xs text-gray-500 ml-2">
+                              {item.profit_loss_rate >= 0 ? '+' : ''}{item.profit_loss_rate?.toFixed(1)}%
+                            </span>
+                          </div>
+                          <span className={`badge badge-sm ${
+                            item.ai_opinion === '매수' ? 'badge-success' :
+                            item.ai_opinion === '매도' || item.ai_opinion === '손절' ? 'badge-error' :
+                            item.ai_opinion === '보유' ? 'badge-warning' :
+                            'badge-ghost'
+                          }`}>
+                            {item.ai_opinion}
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {analysisData.risk_stocks?.length === 0 && analysisData.recommendations?.length === 0 && (
+                  <p className="text-sm text-green-600 flex items-center gap-2">
+                    <CheckCircle size={16} /> 포트폴리오가 안정적입니다
+                  </p>
+                )}
+              </>
+            ) : (
+              <p className="text-sm text-gray-500">분석 결과가 없습니다</p>
+            )}
+
+            <button
+              onClick={() => setShowDiagnosis(false)}
+              className="btn btn-sm btn-ghost mt-2"
+            >
+              닫기
+            </button>
+          </div>
+        </div>
+      )}
 
       {/* 종목 리스트 */}
       <div className="space-y-3">
         {data?.items?.map((item) => (
-          <div key={item.id} className="card bg-base-100 shadow-sm">
+          <div
+            key={item.id}
+            className="card bg-base-100 shadow-sm cursor-pointer hover:shadow-md transition-shadow"
+            onClick={() => navigate(`/stock/${item.stock_code}`)}
+          >
             <div className="card-body p-4">
               <div className="flex justify-between items-start">
-                <div onClick={() => navigate(`/stock/${item.stock_code}`)} className="cursor-pointer">
+                <div>
                   <h3 className="font-bold">{item.stock_name}</h3>
                   <p className="text-xs text-base-content/60">{item.stock_code}</p>
                 </div>
                 <button
-                  onClick={() => {
+                  onClick={(e) => {
+                    e.stopPropagation();
                     if (confirm('삭제하시겠습니까?')) {
                       deleteMutation.mutate(item.id);
                     }

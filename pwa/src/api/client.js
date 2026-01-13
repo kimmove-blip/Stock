@@ -106,4 +106,14 @@ export const themeAPI = {
   detail: (id) => api.get(`/themes/${id}`),
 };
 
+// 인기종목 API (실제 거래량/등락률 기준)
+export const popularAPI = {
+  // 거래량 상위
+  volume: (limit = 20) => api.get(`/popular/volume?limit=${limit}`),
+  // 상승률 상위
+  gainers: (limit = 20) => api.get(`/popular/gainers?limit=${limit}`),
+  // 하락률 상위
+  losers: (limit = 20) => api.get(`/popular/losers?limit=${limit}`),
+};
+
 export default api;

@@ -198,15 +198,32 @@ async def get_stock_detail(code: str):
             rsi_series = 100 - (100 / (1 + rs))
             rsi = round(rsi_series.iloc[-1], 2)
 
+        # 시가총액 조회 (FDR StockListing에서)
+        market_cap = None
+        market_type = None
+        try:
+            krx = fdr.StockListing("KRX")
+            stock_info = krx[krx['Code'] == code]
+            if not stock_info.empty:
+                row = stock_info.iloc[0]
+                # 시가총액 (Marcap 컬럼)
+                if 'Marcap' in row.index and row['Marcap']:
+                    market_cap = int(row['Marcap'])
+                # 시장 구분
+                if 'Market' in row.index:
+                    market_type = row['Market']
+        except Exception as mc_err:
+            print(f"시가총액 조회 실패: {mc_err}")
+
         return StockDetail(
             code=code,
             name=stock_name,  # 이미 위에서 조회함
-            market=None,
+            market=market_type,
             current_price=current_price,
             change=change,
             change_rate=change_rate,
             volume=int(latest['거래량']),
-            market_cap=None,
+            market_cap=market_cap,
             ma5=ma5,
             ma20=ma20,
             ma60=ma60,
