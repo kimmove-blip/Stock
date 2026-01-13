@@ -533,12 +533,16 @@ class TechnicalAnalyst:
             pass  # TA-Lib 미설치 또는 패턴 분석 실패시 조용히 무시
 
     def get_quick_score(self, df):
-        """빠른 스크리닝용 간소화된 점수 (속도 우선)"""
+        """빠른 스크리닝용 간소화된 점수 (속도 우선)
+        Returns: dict with score, signals, indicators, close, volume, change_pct
+        """
         if df is None or len(df) < 60:
             return None
 
         try:
             score = 0
+            signals = []
+            indicators = {}
             curr = df.iloc[-1]
             prev = df.iloc[-2]
 
@@ -549,42 +553,83 @@ class TechnicalAnalyst:
 
             if sma5 > sma20 > sma60:
                 score += 15
+                signals.append('MA_ALIGNED')
+
+            # 골든크로스 체크 (5/20)
+            prev_sma5 = ta.sma(df['Close'], length=5).iloc[-2]
+            prev_sma20 = ta.sma(df['Close'], length=20).iloc[-2]
+            if prev_sma5 < prev_sma20 and sma5 > sma20:
+                score += 15
+                signals.append('GOLDEN_CROSS_5_20')
 
             # RSI
-            rsi = ta.rsi(df['Close'], length=14).iloc[-1]
-            if pd.notna(rsi):
-                if rsi < 30:
+            rsi_val = ta.rsi(df['Close'], length=14).iloc[-1]
+            if pd.notna(rsi_val):
+                indicators['rsi'] = float(rsi_val)
+                if rsi_val < 30:
                     score += 15
-                elif rsi < 50:
+                    signals.append('RSI_OVERSOLD')
+                elif rsi_val < 50:
                     score += 5
-                elif rsi > 70:
+                elif rsi_val > 70:
                     score -= 10
+                    signals.append('RSI_OVERBOUGHT')
 
             # 거래량
             vol_ma = ta.sma(df['Volume'], length=20).iloc[-1]
+            vol_ratio = 1.0
             if vol_ma > 0:
                 vol_ratio = curr['Volume'] / vol_ma
+                indicators['volume_ratio'] = float(vol_ratio)
                 if vol_ratio >= 2:
                     score += 15
+                    signals.append('VOLUME_SURGE')
                 elif vol_ratio >= 1.5:
                     score += 10
+                    signals.append('VOLUME_HIGH')
 
             # MACD
             macd = ta.macd(df['Close'], fast=12, slow=26, signal=9)
             if macd is not None:
                 hist_col = [c for c in macd.columns if 'MACDh' in c][0]
+                macd_col = [c for c in macd.columns if c.startswith('MACD_')][0]
+                signal_col = [c for c in macd.columns if 'MACDs' in c][0]
+                curr_macd = macd.iloc[-1][macd_col]
+                prev_macd = macd.iloc[-2][macd_col]
+                curr_signal = macd.iloc[-1][signal_col]
+                prev_signal = macd.iloc[-2][signal_col]
                 curr_hist = macd.iloc[-1][hist_col]
                 prev_hist = macd.iloc[-2][hist_col]
+                indicators['macd'] = float(curr_macd)
 
-                if prev_hist < 0 and curr_hist > 0:
+                # MACD 골든크로스
+                if prev_macd < prev_signal and curr_macd > curr_signal:
+                    score += 20
+                    signals.append('MACD_GOLDEN_CROSS')
+                elif prev_hist < 0 and curr_hist > 0:
                     score += 15
+                    signals.append('MACD_HIST_POSITIVE')
                 elif curr_hist > prev_hist:
                     score += 5
+
+            # 기본 지표 저장
+            indicators['close'] = float(curr['Close'])
+            indicators['volume'] = float(curr['Volume'])
+            indicators['change_pct'] = ((curr['Close'] - prev['Close']) / prev['Close']) * 100
 
             # Quick 모드는 4개 지표만 사용하므로 점수 부스트 (최대 60 → 최대 80)
             # 점수에 1.33 배수를 적용하여 full 모드와 비슷한 범위로 조정
             boosted_score = int(score * 1.33)
-            return max(0, min(100, boosted_score))
+            final_score = max(0, min(100, boosted_score))
+
+            return {
+                'score': final_score,
+                'signals': signals,
+                'indicators': indicators,
+                'close': curr['Close'],
+                'volume': curr['Volume'],
+                'change_pct': indicators['change_pct']
+            }
 
         except Exception:
             return None

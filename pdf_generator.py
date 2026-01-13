@@ -681,7 +681,7 @@ def create_detailed_html(results, stats=None, date_str=None):
             <strong>생성일시:</strong> {date_str}
             <strong>분석 모드:</strong> 기술적 분석 (18개 지표 + 캔들패턴)
             <strong>분석 대상:</strong> KRX 전종목 (KOSPI + KOSDAQ)
-            <strong>필터 조건:</strong> 시가총액 500억 이상, 거래대금 10억 이상
+            <strong>필터 조건:</strong> 시가총액 300억~1조, 거래대금 3억 이상, 주가 10만원 이하
         </div>
 
         <h2>요약</h2>

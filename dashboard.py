@@ -724,10 +724,19 @@ def show_detail_page(stock):
             for k, v in stock.get('s_details', {}).items():
                 st.caption(f"{k}: {v}점")
 
-    # 관심종목 추가 (인증된 사용자만)
+    # 관심종목 추가 (로그인 사용자 - 게스트 포함)
+    is_logged_in = st.session_state.get('authentication_status', False)
+    is_guest_user = st.session_state.get('is_guest', False)
     current_user_id = auth.get_user_id()
-    if current_user_id:
-        watchlists = load_watchlists_db(current_user_id)
+
+    if is_logged_in:
+        if is_guest_user:
+            if 'guest_watchlists' not in st.session_state:
+                st.session_state['guest_watchlists'] = {"기본": []}
+            watchlists = st.session_state['guest_watchlists']
+        else:
+            watchlists = load_watchlists_db(current_user_id)
+
         with st.expander("⭐ 관심종목에 추가"):
             # 카테고리 목록 + 새 카테고리 입력
             categories = list(watchlists.keys())
@@ -736,10 +745,24 @@ def show_detail_page(stock):
 
             if st.button("추가하기", type="primary"):
                 target_category = new_category if new_category else list_name
-                if add_to_watchlist_db(current_user_id, target_category, stock['code'], stock['name']):
-                    st.success(f"'{target_category}'에 추가했습니다!")
+                if is_guest_user:
+                    # 게스트용 세션 기반 관심종목 추가
+                    if target_category not in st.session_state['guest_watchlists']:
+                        st.session_state['guest_watchlists'][target_category] = []
+                    existing_codes = [s['code'] for s in st.session_state['guest_watchlists'][target_category]]
+                    if stock['code'] not in existing_codes:
+                        st.session_state['guest_watchlists'][target_category].append({
+                            'code': stock['code'],
+                            'name': stock['name']
+                        })
+                        st.success(f"'{target_category}'에 추가했습니다!")
+                    else:
+                        st.info("이미 추가된 종목입니다.")
                 else:
-                    st.info("이미 추가된 종목입니다.")
+                    if add_to_watchlist_db(current_user_id, target_category, stock['code'], stock['name']):
+                        st.success(f"'{target_category}'에 추가했습니다!")
+                    else:
+                        st.info("이미 추가된 종목입니다.")
 
 def draw_chart(code):
     """주가 차트"""
@@ -835,20 +858,100 @@ else:
     _, btn_user = st.columns([3, 1])
     with btn_user:
         with st.popover(f"👤{user_name[:3]}"):
-            st.write("로그아웃 하시겠습니까?")
-            if st.button("로그아웃", type="primary", use_container_width=True):
-                # 쿠키 삭제 (JavaScript)
-                st.markdown("""
-                <script>
-                document.cookie = 'stock_auth_cookie=; expires=Thu, 01 Jan 1970 00:00:00 UTC; path=/;';
-                </script>
-                """, unsafe_allow_html=True)
-                # session_state 초기화
-                st.session_state['authentication_status'] = None
-                st.session_state['username'] = None
-                st.session_state['name'] = None
-                st.session_state['logout'] = True
-                st.rerun()
+            # 게스트가 아닌 경우에만 설정 표시
+            if not is_guest:
+                menu_tab = st.radio("", ["로그아웃", "📱 텔레그램 알림"], label_visibility="collapsed", horizontal=True)
+            else:
+                menu_tab = "로그아웃"
+
+            if menu_tab == "로그아웃":
+                st.write("로그아웃 하시겠습니까?")
+                if st.button("로그아웃", type="primary", use_container_width=True):
+                    # 쿠키 삭제 (JavaScript)
+                    st.markdown("""
+                    <script>
+                    document.cookie = 'stock_auth_cookie=; expires=Thu, 01 Jan 1970 00:00:00 UTC; path=/;';
+                    </script>
+                    """, unsafe_allow_html=True)
+                    # session_state 초기화
+                    st.session_state['authentication_status'] = None
+                    st.session_state['username'] = None
+                    st.session_state['name'] = None
+                    st.session_state['logout'] = True
+                    st.rerun()
+
+            elif menu_tab == "📱 텔레그램 알림":
+                st.markdown("#### 하락 알림 설정")
+
+                # 현재 설정 조회
+                current_user_id = auth.get_user_id()
+                telegram_settings = db.get_telegram_settings(current_user_id) if current_user_id else {'chat_id': '', 'enabled': False}
+
+                # 이미 연동된 경우
+                if telegram_settings['chat_id']:
+                    st.success(f"✅ 연동됨: {telegram_settings['chat_id']}")
+                    enabled_input = st.toggle("알림 활성화", value=telegram_settings['enabled'], key="telegram_enabled_toggle")
+
+                    col1, col2 = st.columns(2)
+                    with col1:
+                        if st.button("📤 테스트 전송", use_container_width=True):
+                            from telegram_notifier import TelegramNotifier
+                            notifier = TelegramNotifier()
+                            if notifier.verify_chat_id(telegram_settings['chat_id']):
+                                st.success("✅ 전송됨!")
+                            else:
+                                st.error("❌ 실패")
+                    with col2:
+                        if st.button("🔄 재연동", use_container_width=True):
+                            db.update_telegram_settings(current_user_id, '', False)
+                            st.rerun()
+
+                    # 활성화 상태 변경 시 자동 저장
+                    if enabled_input != telegram_settings['enabled']:
+                        db.update_telegram_settings(current_user_id, telegram_settings['chat_id'], enabled_input)
+                        st.rerun()
+
+                # 연동 안 된 경우
+                else:
+                    st.markdown("""
+**연동 방법:**
+1. 아래 링크 클릭 → 텔레그램 봇 열기
+2. **시작** 버튼 누르기
+3. **연동 확인** 버튼 클릭
+                    """)
+
+                    # 텔레그램 봇 링크
+                    st.link_button("📱 텔레그램 봇 열기", "https://t.me/fa_hckim0402_bot", use_container_width=True)
+
+                    # 연동 확인 버튼
+                    if st.button("🔗 연동 확인", type="primary", use_container_width=True):
+                        from telegram_notifier import TelegramNotifier
+                        from config import TelegramConfig
+                        import requests
+
+                        # getUpdates로 최근 메시지 확인
+                        try:
+                            response = requests.get(
+                                f"https://api.telegram.org/bot{TelegramConfig.BOT_TOKEN}/getUpdates",
+                                timeout=10
+                            )
+                            data = response.json()
+                            if data.get('ok') and data.get('result'):
+                                # 가장 최근 메시지의 chat_id
+                                latest = data['result'][-1]
+                                chat_id = str(latest['message']['chat']['id'])
+                                user_name = latest['message']['from'].get('first_name', '')
+
+                                # 저장 및 테스트 메시지 전송
+                                db.update_telegram_settings(current_user_id, chat_id, True)
+                                notifier = TelegramNotifier()
+                                notifier.send_message(chat_id, f"🎉 {user_name}님, 연동 완료!\n포트폴리오 하락 알림을 받으실 수 있습니다.")
+                                st.success(f"✅ 연동 완료! ({user_name})")
+                                st.rerun()
+                            else:
+                                st.warning("⚠️ 봇에 메시지를 보내주세요")
+                        except Exception as e:
+                            st.error(f"❌ 연동 실패: {e}")
 
     # 상단 헤더
     st.markdown("<div class='main-title'>📈 Kim's AI 주식 분석</div>", unsafe_allow_html=True)
@@ -956,8 +1059,11 @@ else:
     # --- 탭3: 관심종목 ---
     with tab3:
         if is_guest:
-            st.info("🔒 게스트는 관심종목 기능을 사용할 수 없습니다. 회원가입 후 이용해주세요.")
-            watchlists = {"기본": []}
+            st.caption("💡 게스트 모드: 데이터는 세션 종료 시 사라집니다.")
+            # 게스트용 세션 기반 관심종목
+            if 'guest_watchlists' not in st.session_state:
+                st.session_state['guest_watchlists'] = {"기본": []}
+            watchlists = st.session_state['guest_watchlists']
         else:
             watchlists = load_watchlists_db(user_id)
 
@@ -969,12 +1075,19 @@ else:
                 new_name = st.text_input("새 리스트 이름")
                 if st.button("리스트 생성"):
                     if new_name and new_name not in watchlists:
-                        # 빈 카테고리는 DB에 저장 안됨, 첫 종목 추가 시 자동 생성
-                        st.info(f"'{new_name}' 리스트가 준비되었습니다. 종목을 추가하면 생성됩니다.")
-                        st.session_state['new_category'] = new_name
+                        if is_guest:
+                            st.session_state['guest_watchlists'][new_name] = []
+                            st.success(f"'{new_name}' 리스트 생성됨")
+                            st.rerun()
+                        else:
+                            st.info(f"'{new_name}' 리스트가 준비되었습니다. 종목을 추가하면 생성됩니다.")
+                            st.session_state['new_category'] = new_name
                 if current_list != "기본":
                     if st.button("현재 리스트 삭제", type="secondary"):
-                        db.delete_watchlist_category(user_id, current_list)
+                        if is_guest:
+                            del st.session_state['guest_watchlists'][current_list]
+                        else:
+                            db.delete_watchlist_category(user_id, current_list)
                         st.rerun()
 
         stocks = watchlists.get(current_list, [])
@@ -1005,7 +1118,13 @@ else:
                     st.markdown(f"**{stock['name']}** `{stock['code']}`")
                 with col2:
                     if st.button("삭제", key=f"del_{stock['code']}"):
-                        remove_from_watchlist_db(user_id, current_list, stock['code'])
+                        if is_guest:
+                            st.session_state['guest_watchlists'][current_list] = [
+                                s for s in st.session_state['guest_watchlists'][current_list]
+                                if s['code'] != stock['code']
+                            ]
+                        else:
+                            remove_from_watchlist_db(user_id, current_list, stock['code'])
                         st.rerun()
 
             # 분석 결과 표시
@@ -1018,8 +1137,11 @@ else:
     # --- 탭4: 내 포트폴리오 ---
     with tab4:
         if is_guest:
-            st.info("🔒 게스트는 포트폴리오 기능을 사용할 수 없습니다. 회원가입 후 이용해주세요.")
-            portfolio_items = []
+            st.caption("💡 게스트 모드: 데이터는 세션 종료 시 사라집니다.")
+            # 게스트용 세션 기반 포트폴리오
+            if 'guest_portfolio' not in st.session_state:
+                st.session_state['guest_portfolio'] = []
+            portfolio_items = st.session_state['guest_portfolio']
         else:
             # DB에서 포트폴리오 로드
             portfolio_items = db.get_portfolio(user_id)
@@ -1304,7 +1426,10 @@ else:
                     st.error(f"파일 로드 실패: {e}")
 
         # 포트폴리오 다시 로드
-        portfolio_items = db.get_portfolio(user_id)
+        if is_guest:
+            portfolio_items = st.session_state.get('guest_portfolio', [])
+        else:
+            portfolio_items = db.get_portfolio(user_id)
 
         st.markdown("---")
 
@@ -1318,7 +1443,18 @@ else:
                 add_qty = st.number_input("수량", min_value=1, step=1, value=1, key="empty_add_qty")
                 if st.button("추가", type="primary", use_container_width=True, key="empty_add_btn"):
                     if add_code and add_qty > 0:
-                        db.add_portfolio_item(user_id, str(add_code).zfill(6), add_name, add_price, add_qty, None)
+                        if is_guest:
+                            import uuid
+                            new_item = {
+                                'id': str(uuid.uuid4()),
+                                'stock_code': str(add_code).zfill(6),
+                                'stock_name': add_name,
+                                'buy_price': add_price,
+                                'quantity': add_qty
+                            }
+                            st.session_state['guest_portfolio'].append(new_item)
+                        else:
+                            db.add_portfolio_item(user_id, str(add_code).zfill(6), add_name, add_price, add_qty, None)
                         st.success("추가됨")
                         st.rerun()
         else:
@@ -1357,7 +1493,18 @@ else:
                     add_qty = st.number_input("수량", min_value=1, step=1, value=1, key="quick_add_qty")
                     if st.button("추가", type="primary", use_container_width=True, key="quick_add_btn"):
                         if add_code and add_qty > 0:
-                            db.add_portfolio_item(user_id, str(add_code).zfill(6), add_name, add_price, add_qty, None)
+                            if is_guest:
+                                import uuid
+                                new_item = {
+                                    'id': str(uuid.uuid4()),
+                                    'stock_code': str(add_code).zfill(6),
+                                    'stock_name': add_name,
+                                    'buy_price': add_price,
+                                    'quantity': add_qty
+                                }
+                                st.session_state['guest_portfolio'].append(new_item)
+                            else:
+                                db.add_portfolio_item(user_id, str(add_code).zfill(6), add_name, add_price, add_qty, None)
                             st.success("추가됨")
                             st.rerun()
             with col_edit:
@@ -1369,7 +1516,14 @@ else:
                         new_price = st.number_input("매수가", value=int(edit_item['buy_price']), min_value=0, step=100, key="edit_price")
                         new_qty = st.number_input("수량", value=int(edit_item['quantity']), min_value=1, step=1, key="edit_qty")
                         if st.button("저장", type="primary", use_container_width=True, key="edit_save_btn"):
-                            db.update_portfolio_item(edit_item['id'], buy_price=new_price, quantity=new_qty)
+                            if is_guest:
+                                for p in st.session_state['guest_portfolio']:
+                                    if p['id'] == edit_item['id']:
+                                        p['buy_price'] = new_price
+                                        p['quantity'] = new_qty
+                                        break
+                            else:
+                                db.update_portfolio_item(edit_item['id'], buy_price=new_price, quantity=new_qty)
                             st.success("수정됨")
                             st.rerun()
             with col_del:
@@ -1377,12 +1531,18 @@ else:
                     del_options = {f"{p['stock_name'] or p['stock_code']}": p['id'] for p in portfolio_items}
                     del_selected = st.selectbox("종목 선택", list(del_options.keys()), key="del_select")
                     if st.button("삭제", type="secondary", use_container_width=True):
-                        db.delete_portfolio_item(del_options[del_selected])
-                        st.rerun()
+                        if is_guest:
+                            st.session_state['guest_portfolio'] = [
+                                p for p in st.session_state['guest_portfolio']
+                                if p['id'] != del_options[del_selected]
+                            ]
+                        else:
+                            db.delete_portfolio_item(del_options[del_selected])
+                            st.rerun()
 
-            # 분석 시작 버튼
+            # 분석 시작 버튼 (컬럼 밖에서 전체 너비)
             st.markdown("")
-            if st.button("🚀 포트폴리오 분석 시작", type="primary", use_container_width=True):
+            if st.button("🚀 포트폴리오 분석 시작", type="primary", use_container_width=True, key="portfolio_analyze_btn"):
                 from portfolio_advisor import PortfolioAdvisor
 
                 advisor = PortfolioAdvisor()
@@ -1416,5 +1576,4 @@ else:
                 status_text.empty()
 
                 st.session_state['portfolio_results'] = results
-                st.session_state['scroll_to_top'] = True
                 st.rerun()

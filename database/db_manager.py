@@ -73,13 +73,42 @@ class DatabaseManager:
                     FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
                 );
 
+                -- 알림 기록 테이블
+                CREATE TABLE IF NOT EXISTS alert_history (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    user_id INTEGER NOT NULL,
+                    stock_code TEXT NOT NULL,
+                    alert_type TEXT NOT NULL,
+                    message TEXT,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+                );
+
                 -- 인덱스
                 CREATE INDEX IF NOT EXISTS idx_watchlists_user ON watchlists(user_id);
                 CREATE INDEX IF NOT EXISTS idx_portfolios_user ON portfolios(user_id);
                 CREATE INDEX IF NOT EXISTS idx_users_username ON users(username);
                 CREATE INDEX IF NOT EXISTS idx_users_email ON users(email);
+                CREATE INDEX IF NOT EXISTS idx_alert_history_user ON alert_history(user_id);
+                CREATE UNIQUE INDEX IF NOT EXISTS idx_alert_daily ON alert_history(user_id, stock_code, alert_type, date(created_at));
             """)
             conn.commit()
+
+            # 기존 users 테이블에 telegram 컬럼 추가 (마이그레이션)
+            self._migrate_telegram_columns(conn)
+
+    def _migrate_telegram_columns(self, conn):
+        """users 테이블에 telegram 관련 컬럼 추가 (마이그레이션)"""
+        cursor = conn.execute("PRAGMA table_info(users)")
+        columns = [row[1] for row in cursor.fetchall()]
+
+        if 'telegram_chat_id' not in columns:
+            conn.execute("ALTER TABLE users ADD COLUMN telegram_chat_id TEXT")
+
+        if 'telegram_alerts_enabled' not in columns:
+            conn.execute("ALTER TABLE users ADD COLUMN telegram_alerts_enabled BOOLEAN DEFAULT 0")
+
+        conn.commit()
 
     # ==================== 사용자 관련 ====================
 
@@ -272,3 +301,70 @@ class DatabaseManager:
                      item.get('buy_price', 0), item.get('quantity', 1), item.get('buy_date'))
                 )
             conn.commit()
+
+    # ==================== 텔레그램 알림 설정 ====================
+
+    def update_telegram_settings(self, user_id, chat_id, enabled):
+        """텔레그램 설정 업데이트"""
+        with self.get_connection() as conn:
+            conn.execute(
+                "UPDATE users SET telegram_chat_id = ?, telegram_alerts_enabled = ? WHERE id = ?",
+                (chat_id, 1 if enabled else 0, user_id)
+            )
+            conn.commit()
+
+    def get_telegram_settings(self, user_id):
+        """텔레그램 설정 조회"""
+        with self.get_connection() as conn:
+            cursor = conn.execute(
+                "SELECT telegram_chat_id, telegram_alerts_enabled FROM users WHERE id = ?",
+                (user_id,)
+            )
+            row = cursor.fetchone()
+            if row:
+                return {
+                    'chat_id': row['telegram_chat_id'] or '',
+                    'enabled': bool(row['telegram_alerts_enabled'])
+                }
+            return {'chat_id': '', 'enabled': False}
+
+    def get_users_with_telegram_enabled(self):
+        """텔레그램 알림이 활성화된 사용자 목록"""
+        with self.get_connection() as conn:
+            cursor = conn.execute(
+                "SELECT id, username, name, telegram_chat_id FROM users WHERE telegram_alerts_enabled = 1 AND telegram_chat_id IS NOT NULL AND is_active = 1"
+            )
+            return [dict(row) for row in cursor.fetchall()]
+
+    # ==================== 알림 기록 ====================
+
+    def add_alert_history(self, user_id, stock_code, alert_type, message=None):
+        """알림 기록 추가"""
+        with self.get_connection() as conn:
+            try:
+                conn.execute(
+                    "INSERT INTO alert_history (user_id, stock_code, alert_type, message) VALUES (?, ?, ?, ?)",
+                    (user_id, stock_code, alert_type, message)
+                )
+                conn.commit()
+                return True
+            except sqlite3.IntegrityError:
+                return False  # 오늘 이미 알림 전송됨
+
+    def was_alert_sent_today(self, user_id, stock_code, alert_type):
+        """오늘 해당 알림이 이미 전송되었는지 확인"""
+        with self.get_connection() as conn:
+            cursor = conn.execute(
+                "SELECT 1 FROM alert_history WHERE user_id = ? AND stock_code = ? AND alert_type = ? AND date(created_at) = date('now')",
+                (user_id, stock_code, alert_type)
+            )
+            return cursor.fetchone() is not None
+
+    def get_alert_history(self, user_id, days=7):
+        """사용자의 최근 알림 기록 조회"""
+        with self.get_connection() as conn:
+            cursor = conn.execute(
+                "SELECT stock_code, alert_type, message, created_at FROM alert_history WHERE user_id = ? AND created_at >= datetime('now', ? || ' days') ORDER BY created_at DESC",
+                (user_id, -days)
+            )
+            return [dict(row) for row in cursor.fetchall()]

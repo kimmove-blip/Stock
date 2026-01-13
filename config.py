@@ -19,8 +19,10 @@ class ScreeningConfig:
     MODE = "quick"  # "quick" 또는 "full"
     TOP_N = 100  # 상위 N개 종목 선정
     MAX_WORKERS = 10  # 병렬 처리 워커 수
-    MIN_MARKET_CAP = 50_000_000_000  # 최소 시가총액 (500억)
-    MIN_TRADING_AMOUNT = 1_000_000_000  # 최소 거래대금 (10억)
+    MIN_MARKET_CAP = 30_000_000_000  # 최소 시가총액 (300억)
+    MAX_MARKET_CAP = 1_000_000_000_000  # 최대 시가총액 (1조) - 대형 우량주 제외
+    MIN_TRADING_AMOUNT = 300_000_000  # 최소 거래대금 (3억)
+    MAX_PRICE = 100_000  # 최대 주가 (10만원)
 
 
 class OutputConfig:
@@ -86,6 +88,13 @@ class ScheduleConfig:
     RUN_HOUR = 18  # 실행 시각 (시)
     RUN_MINUTE = 0  # 실행 시각 (분)
     RUN_ON_WEEKEND = False  # 주말 실행 여부
+
+
+class TelegramConfig:
+    """텔레그램 봇 설정"""
+    BOT_TOKEN = "8524957427:AAFnkZJACCJWm_pm0TXp-aXbsoZtnhJWjhM"
+    CHAT_ID = "5411684999"
+    ENABLED = True  # 텔레그램 알림 활성화 여부
 
 
 class IndicatorWeights:

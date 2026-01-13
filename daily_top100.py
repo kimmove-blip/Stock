@@ -50,7 +50,9 @@ def run_screening(mode="quick", top_n=100):
         top_n=top_n * 2,  # 필터링 여유분
         mode=mode,
         min_marcap=ScreeningConfig.MIN_MARKET_CAP,
+        max_marcap=ScreeningConfig.MAX_MARKET_CAP,
         min_amount=ScreeningConfig.MIN_TRADING_AMOUNT,
+        max_price=ScreeningConfig.MAX_PRICE,
     )
 
     return results, stats
@@ -286,7 +288,7 @@ def run_with_schedule(send_email=True):
             return
 
         categorized = categorize_results(results)
-        save_results(results, top_n=30, yesterday_df=yesterday_df, yesterday_summary=yesterday_summary, stats=stats)
+        save_results(results, top_n=ScreeningConfig.TOP_N, yesterday_df=yesterday_df, yesterday_summary=yesterday_summary, stats=stats)
         print_summary(results, categorized)
 
         # 이메일 발송
@@ -386,10 +388,10 @@ def main():
         # 결과 분류
         categorized = categorize_results(results)
 
-        # 결과 저장 (상위 30개만, 2개 시트)
+        # 결과 저장 (args.top 개수만큼)
         if not args.no_save:
             excel_path, json_path, csv_path = save_results(
-                results, top_n=30,
+                results, top_n=args.top,
                 yesterday_df=yesterday_df,
                 yesterday_summary=yesterday_summary,
                 stats=stats

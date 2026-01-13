@@ -30,8 +30,8 @@ class MarketScreener:
         try:
             # KOSPI + KOSDAQ 전체 종목 가져오기
             krx = fdr.StockListing("KRX")
-            # 필요한 컬럼만 선택
-            columns_needed = ["Code", "Name", "Market", "Marcap", "Volume", "Amount"]
+            # 필요한 컬럼만 선택 (Close 추가: 주가 필터용)
+            columns_needed = ["Code", "Name", "Market", "Marcap", "Volume", "Amount", "Close"]
             available_cols = [c for c in columns_needed if c in krx.columns]
             self.all_stocks = krx[available_cols].copy()
             # 종목코드 6자리 맞추기
@@ -41,24 +41,36 @@ class MarketScreener:
         except Exception as e:
             print(f"    → 종목 로딩 실패: {e}")
             return None
-    def filter_by_liquidity(self, min_marcap=50_000_000_000, min_amount=1_000_000_000):
+    def filter_by_liquidity(self, min_marcap=30_000_000_000, max_marcap=1_000_000_000_000, min_amount=300_000_000, max_price=100_000):
         """
         1차 필터링: 유동성 기준
-        - min_marcap: 최소 시가총액 (기본 500억)
-        - min_amount: 최소 거래대금 (기본 10억)
+        - min_marcap: 최소 시가총액 (기본 300억)
+        - max_marcap: 최대 시가총액 (대형 우량주 제외용, 기본 1조)
+        - min_amount: 최소 거래대금 (기본 3억)
+        - max_price: 최대 주가 (기본 None)
         """
-        print(
-            f"[2/5] 유동성 필터링 (시총>{min_marcap / 1e8:.0f}억, 거래대금>{min_amount / 1e8:.0f}억)..."
-        )
+        filter_desc = f"시총>{min_marcap / 1e8:.0f}억"
+        if max_marcap:
+            filter_desc += f", 시총<{max_marcap / 1e12:.0f}조"
+        filter_desc += f", 거래대금>{min_amount / 1e8:.0f}억"
+        if max_price:
+            filter_desc += f", 주가<{max_price / 10000:.0f}만원"
+        print(f"[2/5] 유동성 필터링 ({filter_desc})...")
         if self.all_stocks is None:
             self.load_all_stocks()
         df = self.all_stocks.copy()
         # 시가총액 필터 (Marcap 컬럼이 있는 경우)
         if "Marcap" in df.columns:
             df = df[df["Marcap"] >= min_marcap]
+            if max_marcap:
+                df = df[df["Marcap"] <= max_marcap]
         # 거래대금 필터 (Amount 컬럼이 있는 경우)
         if "Amount" in df.columns:
             df = df[df["Amount"] >= min_amount]
+        # 주가 필터 (Close 컬럼이 있는 경우)
+        if max_price and "Close" in df.columns:
+            df["Close"] = pd.to_numeric(df["Close"], errors='coerce')
+            df = df[df["Close"] <= max_price]
         self.filtered_stocks = df
         print(f"    → {len(df):,}개 종목 통과")
         return df
@@ -116,21 +128,19 @@ class MarketScreener:
                 return None
             # 분석 수행
             if mode == "quick":
-                score = self.tech_analyst.get_quick_score(df)
-                if score is None:
+                result = self.tech_analyst.get_quick_score(df)
+                if result is None:
                     return None
                 return {
                     "code": code,
                     "name": name,
                     "market": stock_info.get("Market", ""),
-                    "score": score,
-                    "close": df.iloc[-1]["Close"],
-                    "volume": df.iloc[-1]["Volume"],
-                    "change_pct": (
-                        (df.iloc[-1]["Close"] - df.iloc[-2]["Close"])
-                        / df.iloc[-2]["Close"]
-                    )
-                    * 100,
+                    "score": result["score"],
+                    "signals": result["signals"],
+                    "indicators": result["indicators"],
+                    "close": result["close"],
+                    "volume": result["volume"],
+                    "change_pct": result["change_pct"],
                 }
             else:
                 result = self.tech_analyst.analyze_full(df)
@@ -225,7 +235,9 @@ class MarketScreener:
         top_n=100,
         mode="quick",
         min_marcap=50_000_000_000,
+        max_marcap=None,
         min_amount=1_000_000_000,
+        max_price=None,
     ):
         """
         전체 스크리닝 파이프라인 실행
@@ -244,7 +256,7 @@ class MarketScreener:
         stats['total_stocks'] = len(self.all_stocks) if self.all_stocks is not None else 0
 
         # 2. 유동성 필터링
-        self.filter_by_liquidity(min_marcap=min_marcap, min_amount=min_amount)
+        self.filter_by_liquidity(min_marcap=min_marcap, max_marcap=max_marcap, min_amount=min_amount, max_price=max_price)
         stats['liquidity_passed'] = len(self.filtered_stocks) if self.filtered_stocks is not None else 0
 
         # 3. 특수종목 제외
@@ -362,8 +374,8 @@ if __name__ == "__main__":
     top_stocks = screener.run_full_screening(
         top_n=100,
         mode="quick",
-        min_marcap=50_000_000_000,  # 시총 500억 이상
-        min_amount=1_000_000_000,  # 거래대금 10억 이상
+        min_marcap=30_000_000_000,  # 시총 300억 이상
+        min_amount=300_000_000,  # 거래대금 3억 이상
     )
     # 결과 출력
     format_result_table(top_stocks, max_rows=30)
