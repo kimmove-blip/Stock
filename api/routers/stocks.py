@@ -91,7 +91,8 @@ async def search_stocks(
         return results
 
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"검색 오류: {str(e)}")
+        print(f"[Stock Search Error] {e}")
+        raise HTTPException(status_code=500, detail="종목 검색 중 오류가 발생했습니다")
 
 
 def get_stock_name(code: str) -> str:
@@ -233,7 +234,8 @@ async def get_stock_detail(code: str):
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"조회 오류: {str(e)}")
+        print(f"[Stock Detail Error] {e}")
+        raise HTTPException(status_code=500, detail="종목 정보 조회 중 오류가 발생했습니다")
 
 
 @router.get("/{code}/analysis", response_model=StockAnalysis)
@@ -403,4 +405,5 @@ async def analyze_stock(code: str):
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"분석 오류: {str(e)}")
+        print(f"[Stock Analysis Error] {e}")
+        raise HTTPException(status_code=500, detail="종목 분석 중 오류가 발생했습니다")

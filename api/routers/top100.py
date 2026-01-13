@@ -59,7 +59,8 @@ async def get_top100(
         with open(filepath, 'r', encoding='utf-8') as f:
             raw_data = json.load(f)
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"파일 읽기 오류: {str(e)}")
+        print(f"[TOP100 Error] {e}")
+        raise HTTPException(status_code=500, detail="데이터 파일 읽기 중 오류가 발생했습니다")
 
     # 파일명에서 날짜 추출
     filename = os.path.basename(filepath)

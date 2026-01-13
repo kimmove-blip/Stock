@@ -3,14 +3,21 @@ FastAPI Backend for AI Stock Analysis System
 앱스토어/플레이스토어 출시를 위한 REST API
 """
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from contextlib import asynccontextmanager
+from slowapi import Limiter, _rate_limit_exceeded_handler
+from slowapi.util import get_remote_address
+from slowapi.errors import RateLimitExceeded
 import sys
 import os
 
 # 프로젝트 루트 경로 추가
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+# Rate Limiter 설정
+limiter = Limiter(key_func=get_remote_address)
 
 from api.routers import auth, stocks, portfolio, watchlist, top100, realtime, value_stocks, contact, themes, popular
 
@@ -50,7 +57,11 @@ app = FastAPI(
     redoc_url="/redoc",
 )
 
-# CORS 설정 (PWA에서 접근 허용)
+# Rate Limiter 등록
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+
+# CORS 설정 (PWA에서 접근 허용) - 보안 강화
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
@@ -59,9 +70,20 @@ app.add_middleware(
         "https://stock.kimhc.dedyn.io",    # 프로덕션 도메인
     ],
     allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+    allow_headers=["Authorization", "Content-Type", "Accept"],
 )
+
+
+# 보안 헤더 미들웨어
+@app.middleware("http")
+async def add_security_headers(request: Request, call_next):
+    response = await call_next(request)
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["X-Frame-Options"] = "DENY"
+    response.headers["X-XSS-Protection"] = "1; mode=block"
+    response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+    return response
 
 
 # 라우터 등록

@@ -123,7 +123,8 @@ async def get_value_stocks(limit: int = 30):
         from api.services.kis_client import KISClient
         kis = KISClient()
     except Exception as e:
-        raise HTTPException(status_code=503, detail=f"KIS API 초기화 실패: {str(e)}")
+        print(f"[Value Stocks Error] {e}")
+        raise HTTPException(status_code=503, detail="시세 API 서비스를 이용할 수 없습니다")
 
     value_stocks = []
 

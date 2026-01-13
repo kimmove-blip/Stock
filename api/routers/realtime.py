@@ -81,7 +81,8 @@ async def get_realtime_price(stock_code: str):
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"시세 조회 오류: {str(e)}")
+        print(f"[Realtime Error] {e}")
+        raise HTTPException(status_code=500, detail="시세 조회 중 오류가 발생했습니다")
 
 
 @router.post("/prices", response_model=RealtimePriceList)
@@ -113,7 +114,8 @@ async def get_multiple_realtime_prices(stock_codes: List[str]):
         )
 
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"시세 조회 오류: {str(e)}")
+        print(f"[Realtime Error] {e}")
+        raise HTTPException(status_code=500, detail="시세 조회 중 오류가 발생했습니다")
 
 
 @router.get("/top100-prices", response_model=RealtimePriceList)
@@ -176,4 +178,5 @@ async def get_top100_realtime_prices():
     except json.JSONDecodeError:
         raise HTTPException(status_code=500, detail="TOP100 파일 파싱 오류")
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"시세 조회 오류: {str(e)}")
+        print(f"[Realtime Error] {e}")
+        raise HTTPException(status_code=500, detail="시세 조회 중 오류가 발생했습니다")

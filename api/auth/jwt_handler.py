@@ -11,10 +11,13 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-# 비밀키 (환경변수에서 로드하거나 기본값 사용)
-SECRET_KEY = os.getenv("JWT_SECRET_KEY", "your-super-secret-key-change-in-production")
+# 비밀키 (환경변수에서 필수 로드)
+SECRET_KEY = os.getenv("JWT_SECRET_KEY")
+if not SECRET_KEY:
+    raise ValueError("JWT_SECRET_KEY 환경변수가 설정되지 않았습니다. .env 파일을 확인하세요.")
+
 ALGORITHM = "HS256"
-ACCESS_TOKEN_EXPIRE_MINUTES = 60 * 24 * 7  # 7일
+ACCESS_TOKEN_EXPIRE_MINUTES = 60 * 4  # 4시간 (보안 강화)
 
 # 비밀번호 해싱 - bcrypt가 문제 있을 경우 sha256으로 폴백
 try:

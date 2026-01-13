@@ -3,13 +3,18 @@
 - 회원가입, 로그인, 사용자 정보 조회, Google OAuth
 """
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status, Request
 from fastapi.security import OAuth2PasswordRequestForm
 from pydantic import BaseModel
+from slowapi import Limiter
+from slowapi.util import get_remote_address
 import sys
 import os
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
+
+# Rate Limiter
+limiter = Limiter(key_func=get_remote_address)
 
 from api.schemas.user import UserCreate, UserLogin, UserResponse, Token
 from api.auth.jwt_handler import (
@@ -38,8 +43,9 @@ router = APIRouter()
 
 
 @router.post("/register", response_model=UserResponse, status_code=status.HTTP_201_CREATED)
-async def register(user: UserCreate, db: DatabaseManager = Depends(get_db)):
-    """회원가입"""
+@limiter.limit("5/minute")  # 분당 5회 제한
+async def register(request: Request, user: UserCreate, db: DatabaseManager = Depends(get_db)):
+    """회원가입 (Rate Limited: 분당 5회)"""
     # 중복 확인
     if db.get_user_by_username(user.username):
         raise HTTPException(
@@ -73,8 +79,9 @@ async def register(user: UserCreate, db: DatabaseManager = Depends(get_db)):
 
 
 @router.post("/login", response_model=Token)
-async def login(form_data: OAuth2PasswordRequestForm = Depends(), db: DatabaseManager = Depends(get_db)):
-    """로그인 (JWT 토큰 발급)"""
+@limiter.limit("10/minute")  # 분당 10회 제한
+async def login(request: Request, form_data: OAuth2PasswordRequestForm = Depends(), db: DatabaseManager = Depends(get_db)):
+    """로그인 (JWT 토큰 발급) - Rate Limited: 분당 10회"""
     user = db.get_user_by_username(form_data.username)
 
     if not user:
@@ -133,8 +140,9 @@ async def refresh_token(current_user: dict = Depends(get_current_user_required))
 
 
 @router.post("/google", response_model=Token)
-async def google_login(request: GoogleLoginRequest, db: DatabaseManager = Depends(get_db)):
-    """Google 로그인"""
+@limiter.limit("10/minute")  # 분당 10회 제한
+async def google_login(request: Request, login_request: GoogleLoginRequest, db: DatabaseManager = Depends(get_db)):
+    """Google 로그인 - Rate Limited: 분당 10회"""
     if not GOOGLE_CLIENT_ID:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -144,7 +152,7 @@ async def google_login(request: GoogleLoginRequest, db: DatabaseManager = Depend
     try:
         # Google ID 토큰 검증 (시간 오차 60초 허용)
         idinfo = id_token.verify_oauth2_token(
-            request.credential,
+            login_request.credential,
             google_requests.Request(),
             GOOGLE_CLIENT_ID,
             clock_skew_in_seconds=60
@@ -205,14 +213,15 @@ async def google_login(request: GoogleLoginRequest, db: DatabaseManager = Depend
         )
 
     except ValueError as e:
+        # 서버 로그에만 상세 기록 (사용자에게는 노출 안함)
         print(f"[Google Login Error] {type(e).__name__}: {e}")
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail=f"유효하지 않은 Google 토큰입니다: {str(e)}"
+            detail="Google 인증에 실패했습니다"
         )
     except Exception as e:
         print(f"[Google Login Error] {type(e).__name__}: {e}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Google 로그인 오류: {str(e)}"
+            detail="Google 로그인 처리 중 오류가 발생했습니다"
         )
