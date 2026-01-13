@@ -124,10 +124,10 @@ class DatabaseManager:
             return [dict(row) for row in cursor.fetchall()]
 
     def get_user_by_username(self, username):
-        """username으로 사용자 조회"""
+        """username으로 사용자 조회 (대소문자 무시)"""
         with self.get_connection() as conn:
             cursor = conn.execute(
-                "SELECT * FROM users WHERE username = ?", (username,)
+                "SELECT * FROM users WHERE LOWER(username) = LOWER(?)", (username,)
             )
             row = cursor.fetchone()
             return dict(row) if row else None

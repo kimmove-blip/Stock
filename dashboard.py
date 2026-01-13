@@ -836,13 +836,24 @@ if not auth.is_authenticated:
     show_login_page()
     st.stop()
 
-# 로그인된 사용자 정보
-is_guest = st.session_state.get('is_guest', False)
+# 로그인된 사용자 정보 (username이 'guest'면 게스트)
+is_guest = st.session_state.get('username') == 'guest'
 if is_guest:
     user_id = None
     user_name = "게스트"
 else:
-    user_id = auth.get_user_id()
+    # user_id를 session_state에 캐시하여 안정적으로 사용
+    if 'cached_user_id' not in st.session_state or st.session_state.get('cached_user_id') is None:
+        # auth.get_user_id() 시도, 실패하면 username으로 직접 조회
+        uid = auth.get_user_id()
+        if uid is None:
+            username = st.session_state.get('username')
+            if username:
+                user_data = db.get_user_by_username(username)
+                if user_data:
+                    uid = user_data['id']
+        st.session_state['cached_user_id'] = uid
+    user_id = st.session_state['cached_user_id']
     user_name = auth.current_name or "사용자"
 
 # ============== 메인 UI ==============
@@ -890,6 +901,7 @@ else:
                     st.session_state['authentication_status'] = None
                     st.session_state['username'] = None
                     st.session_state['name'] = None
+                    st.session_state['cached_user_id'] = None
                     st.session_state['logout'] = True
                     st.rerun()
 
@@ -1449,27 +1461,50 @@ else:
         if not portfolio_items:
             st.info("포트폴리오가 비어있습니다. 종목을 추가하세요.")
             # 빈 포트폴리오일 때 추가 버튼
-            with st.popover("➕ 종목 추가"):
-                add_code = st.text_input("종목코드", placeholder="005930", key="empty_add_code")
-                add_name = st.text_input("종목명", placeholder="삼성전자", key="empty_add_name")
-                add_price = st.number_input("매수가", min_value=0, step=100, key="empty_add_price")
-                add_qty = st.number_input("수량", min_value=1, step=1, value=1, key="empty_add_qty")
-                if st.button("추가", type="primary", use_container_width=True, key="empty_add_btn"):
-                    if add_code and add_qty > 0:
-                        if is_guest:
-                            import uuid
-                            new_item = {
-                                'id': str(uuid.uuid4()),
-                                'stock_code': str(add_code).zfill(6),
-                                'stock_name': add_name,
-                                'buy_price': add_price,
-                                'quantity': add_qty
-                            }
-                            st.session_state['guest_portfolio'].append(new_item)
-                        else:
-                            db.add_portfolio_item(user_id, str(add_code).zfill(6), add_name, add_price, add_qty, None)
-                        st.success("추가됨")
-                        st.rerun()
+            with st.expander("➕ 종목 추가", expanded=False):
+                # 종목 검색
+                search_keyword = st.text_input("종목코드 또는 종목명", placeholder="삼성전자 또는 005930", key="empty_search")
+                search_results = search_stocks(search_keyword) if search_keyword else []
+
+                if search_results:
+                    options = {f"{s['name']} ({s['code']})": s for s in search_results}
+                    selected = st.selectbox("검색 결과", list(options.keys()), key="empty_select")
+                    selected_stock = options[selected]
+
+                    with st.form("empty_add_form"):
+                        st.text(f"📌 {selected_stock['name']} ({selected_stock['code']})")
+                        add_price = st.number_input("매수가", min_value=0, step=100, value=None, placeholder="매수가 입력")
+                        add_qty = st.number_input("수량", min_value=1, step=1, value=1)
+                        submitted = st.form_submit_button("추가", type="primary", use_container_width=True)
+                        if submitted and add_qty > 0:
+                            final_price = add_price if add_price is not None else 0
+                            current_username = st.session_state.get('username')
+                            if current_username == 'guest':
+                                import uuid
+                                new_item = {
+                                    'id': str(uuid.uuid4()),
+                                    'stock_code': selected_stock['code'],
+                                    'stock_name': selected_stock['name'],
+                                    'buy_price': final_price,
+                                    'quantity': add_qty
+                                }
+                                if 'guest_portfolio' not in st.session_state:
+                                    st.session_state['guest_portfolio'] = []
+                                st.session_state['guest_portfolio'].append(new_item)
+                                st.success("추가됨")
+                                st.rerun()
+                            elif current_username:
+                                user_data = db.get_user_by_username(current_username)
+                                if user_data:
+                                    db.add_portfolio_item(user_data['id'], selected_stock['code'], selected_stock['name'], final_price, add_qty, None)
+                                    st.success("추가됨")
+                                    st.rerun()
+                                else:
+                                    st.error(f"사용자를 찾을 수 없습니다: {current_username}")
+                            else:
+                                st.error("로그인이 필요합니다")
+                elif search_keyword:
+                    st.warning("검색 결과가 없습니다")
         else:
             st.markdown(f"### 📋 보유 종목 ({len(portfolio_items)}개)")
 
@@ -1497,29 +1532,53 @@ else:
             }
             </style>
             """, unsafe_allow_html=True)
-            col_add, col_edit, col_del = st.columns(3)
-            with col_add:
-                with st.popover("➕ 추가"):
-                    add_code = st.text_input("종목코드", placeholder="005930", key="quick_add_code")
-                    add_name = st.text_input("종목명", placeholder="삼성전자", key="quick_add_name")
-                    add_price = st.number_input("매수가", min_value=0, step=100, key="quick_add_price")
-                    add_qty = st.number_input("수량", min_value=1, step=1, value=1, key="quick_add_qty")
-                    if st.button("추가", type="primary", use_container_width=True, key="quick_add_btn"):
-                        if add_code and add_qty > 0:
-                            if is_guest:
+            # 종목 추가 (expander로 변경 - 모바일 키보드 문제 해결)
+            with st.expander("➕ 종목 추가", expanded=False):
+                # 종목 검색
+                search_keyword = st.text_input("종목코드 또는 종목명", placeholder="삼성전자 또는 005930", key="quick_search")
+                search_results = search_stocks(search_keyword) if search_keyword else []
+
+                if search_results:
+                    options = {f"{s['name']} ({s['code']})": s for s in search_results}
+                    selected = st.selectbox("검색 결과", list(options.keys()), key="quick_select")
+                    selected_stock = options[selected]
+
+                    with st.form("quick_add_form"):
+                        st.text(f"📌 {selected_stock['name']} ({selected_stock['code']})")
+                        add_price = st.number_input("매수가", min_value=0, step=100, value=None, placeholder="매수가 입력")
+                        add_qty = st.number_input("수량", min_value=1, step=1, value=1)
+                        submitted = st.form_submit_button("추가", type="primary", use_container_width=True)
+                        if submitted and add_qty > 0:
+                            final_price = add_price if add_price is not None else 0
+                            current_username = st.session_state.get('username')
+                            if current_username == 'guest':
                                 import uuid
                                 new_item = {
                                     'id': str(uuid.uuid4()),
-                                    'stock_code': str(add_code).zfill(6),
-                                    'stock_name': add_name,
-                                    'buy_price': add_price,
+                                    'stock_code': selected_stock['code'],
+                                    'stock_name': selected_stock['name'],
+                                    'buy_price': final_price,
                                     'quantity': add_qty
                                 }
+                                if 'guest_portfolio' not in st.session_state:
+                                    st.session_state['guest_portfolio'] = []
                                 st.session_state['guest_portfolio'].append(new_item)
+                                st.success("추가됨")
+                                st.rerun()
+                            elif current_username:
+                                user_data = db.get_user_by_username(current_username)
+                                if user_data:
+                                    db.add_portfolio_item(user_data['id'], selected_stock['code'], selected_stock['name'], final_price, add_qty, None)
+                                    st.success("추가됨")
+                                    st.rerun()
+                                else:
+                                    st.error(f"사용자를 찾을 수 없습니다: {current_username}")
                             else:
-                                db.add_portfolio_item(user_id, str(add_code).zfill(6), add_name, add_price, add_qty, None)
-                            st.success("추가됨")
-                            st.rerun()
+                                st.error("로그인이 필요합니다")
+                elif search_keyword:
+                    st.warning("검색 결과가 없습니다")
+
+            col_edit, col_del = st.columns(2)
             with col_edit:
                 with st.popover("✏️ 수정"):
                     edit_options = {f"{p['stock_name'] or p['stock_code']}": p for p in portfolio_items}
