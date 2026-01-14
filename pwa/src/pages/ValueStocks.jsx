@@ -147,8 +147,7 @@ export default function ValueStocks() {
           return (
             <div
               key={stock.code}
-              onClick={() => navigate(`/stock/${stock.code}`)}
-              className="bg-white rounded-xl p-4 shadow-sm cursor-pointer hover:shadow-md transition-shadow"
+              className="bg-white rounded-xl p-4 shadow-sm"
             >
               <div className="flex justify-between items-start mb-2">
                 <div>

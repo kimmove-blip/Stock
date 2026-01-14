@@ -20,6 +20,7 @@ import GlobalMarkets from './pages/GlobalMarkets';
 import PopularStocks from './pages/PopularStocks';
 import Admin from './pages/Admin';
 import TelegramSettings from './pages/TelegramSettings';
+import Privacy from './pages/Privacy';
 import Loading from './components/Loading';
 
 const queryClient = new QueryClient({
@@ -65,6 +66,7 @@ function AppRoutes() {
       {/* 공개 라우트 */}
       <Route path="/login" element={<PublicRoute><Login /></PublicRoute>} />
       <Route path="/register" element={<PublicRoute><Register /></PublicRoute>} />
+      <Route path="/privacy" element={<Privacy />} />
 
       {/* 보호된 라우트 */}
       <Route element={<ProtectedRoute><Layout /></ProtectedRoute>}>

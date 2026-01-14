@@ -30,6 +30,7 @@ class UserResponse(UserBase):
     id: int
     name: Optional[str] = None
     email_subscription: bool = False
+    is_admin: bool = False
     created_at: Optional[datetime] = None
 
     class Config:

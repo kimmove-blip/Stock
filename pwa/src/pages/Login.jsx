@@ -1,19 +1,44 @@
 import { useState, useEffect, useRef } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, Link } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
-import { TrendingUp, BarChart3, Shield, Zap, Brain, Target } from 'lucide-react';
+import { TrendingUp, BarChart3, Shield, Brain, Target, ExternalLink, Copy, Check } from 'lucide-react';
 
 const GOOGLE_CLIENT_ID = import.meta.env.VITE_GOOGLE_CLIENT_ID;
+
+// 인앱 브라우저 감지
+const isInAppBrowser = () => {
+  const ua = navigator.userAgent || navigator.vendor || window.opera;
+  // 카카오톡, 네이버, 라인, 페이스북, 인스타그램, 기타 인앱 브라우저 감지
+  const inAppPatterns = [
+    /KAKAOTALK/i,
+    /NAVER/i,
+    /LINE/i,
+    /FBAN|FBAV/i,  // Facebook
+    /Instagram/i,
+    /Twitter/i,
+    /Snapchat/i,
+    /musical_ly/i,  // TikTok
+    /BytedanceWebview/i,
+    /DaumApps/i,
+    /KAKAO/i,
+  ];
+  return inAppPatterns.some(pattern => pattern.test(ua));
+};
 
 export default function Login() {
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
+  const [isInApp, setIsInApp] = useState(false);
+  const [copied, setCopied] = useState(false);
   const googleButtonRef = useRef(null);
   const { googleLogin } = useAuth();
   const navigate = useNavigate();
 
   useEffect(() => {
-    if (GOOGLE_CLIENT_ID) {
+    // 인앱 브라우저 감지
+    setIsInApp(isInAppBrowser());
+
+    if (GOOGLE_CLIENT_ID && !isInAppBrowser()) {
       const existingScript = document.querySelector('script[src="https://accounts.google.com/gsi/client"]');
       if (existingScript) {
         initializeGoogle();
@@ -71,6 +96,32 @@ export default function Login() {
     }
   };
 
+  // URL 복사
+  const copyUrl = async () => {
+    try {
+      await navigator.clipboard.writeText(window.location.href);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    } catch (err) {
+      // 클립보드 API 실패 시 대체 방법
+      const textArea = document.createElement('textarea');
+      textArea.value = window.location.href;
+      document.body.appendChild(textArea);
+      textArea.select();
+      document.execCommand('copy');
+      document.body.removeChild(textArea);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    }
+  };
+
+  // 외부 브라우저로 열기 (Android intent)
+  const openInBrowser = () => {
+    const url = window.location.href;
+    // Android intent 방식 시도
+    window.location.href = `intent://${url.replace(/^https?:\/\//, '')}#Intent;scheme=https;package=com.android.chrome;end`;
+  };
+
   const features = [
     { icon: Brain, text: 'AI 기반 종목 분석', color: 'text-purple-500' },
     { icon: Target, text: '실시간 매매 추천', color: 'text-red-500' },
@@ -99,9 +150,57 @@ export default function Login() {
         <h1 className="text-3xl font-bold text-white text-center mb-2">
           Kim's AI 주식분석
         </h1>
-        <p className="text-white/80 text-center mb-8">
+        <p className="text-white/80 text-center mb-6">
           인공지능 기반 스마트 투자 도우미
         </p>
+
+        {/* 구글 로그인 버튼 - 제목 바로 아래 */}
+        <div className="bg-white rounded-2xl px-6 py-4 mb-8 shadow-lg">
+          {error && (
+            <div className="bg-red-50 text-red-600 text-sm p-3 rounded-xl mb-4 text-center">
+              {error}
+            </div>
+          )}
+
+          {isInApp ? (
+            // 인앱 브라우저 경고
+            <div className="text-center">
+              <div className="bg-amber-50 text-amber-700 text-sm p-3 rounded-xl mb-4">
+                <p className="font-medium mb-1">외부 브라우저에서 열어주세요</p>
+                <p className="text-xs text-amber-600">
+                  카카오톡, 네이버 등 인앱 브라우저에서는<br />
+                  Google 로그인이 지원되지 않습니다.
+                </p>
+              </div>
+              <div className="flex flex-col gap-2">
+                <button
+                  onClick={openInBrowser}
+                  className="w-full flex items-center justify-center gap-2 bg-purple-600 text-white py-3 px-4 rounded-xl font-medium hover:bg-purple-700 transition-colors"
+                >
+                  <ExternalLink size={18} />
+                  Chrome으로 열기
+                </button>
+                <button
+                  onClick={copyUrl}
+                  className="w-full flex items-center justify-center gap-2 bg-gray-100 text-gray-700 py-3 px-4 rounded-xl font-medium hover:bg-gray-200 transition-colors"
+                >
+                  {copied ? <Check size={18} className="text-green-500" /> : <Copy size={18} />}
+                  {copied ? '복사됨!' : 'URL 복사 후 브라우저에서 열기'}
+                </button>
+              </div>
+            </div>
+          ) : loading ? (
+            <div className="flex justify-center py-2">
+              <span className="loading loading-spinner loading-lg text-purple-600"></span>
+            </div>
+          ) : (
+            <div
+              ref={googleButtonRef}
+              className="flex justify-center items-center"
+              style={{ minHeight: '44px' }}
+            />
+          )}
+        </div>
 
         {/* 차트 애니메이션 시각화 */}
         <div className="w-full max-w-xs bg-white/10 backdrop-blur-sm rounded-2xl p-6 mb-8">
@@ -125,46 +224,31 @@ export default function Login() {
           </div>
         </div>
 
-        {/* 기능 소개 */}
-        <div className="grid grid-cols-2 gap-3 w-full max-w-xs mb-8">
-          {features.map(({ icon: Icon, text, color }) => (
-            <div
-              key={text}
-              className="bg-white/10 backdrop-blur-sm rounded-xl p-3 flex items-center gap-2"
-            >
-              <Icon size={20} className={color} />
-              <span className="text-white text-xs font-medium">{text}</span>
-            </div>
-          ))}
+        {/* 주요 기능 소개 */}
+        <div className="w-full max-w-xs mb-8">
+          <p className="text-white/50 text-xs text-center mb-3">주요 기능</p>
+          <div className="grid grid-cols-2 gap-2">
+            {features.map(({ icon: Icon, text, color }) => (
+              <div
+                key={text}
+                className="bg-white/5 rounded-lg p-2.5 flex items-center gap-2 pointer-events-none"
+              >
+                <Icon size={16} className={`${color} opacity-70`} />
+                <span className="text-white/70 text-xs">{text}</span>
+              </div>
+            ))}
+          </div>
         </div>
       </div>
 
-      {/* 하단 로그인 영역 */}
-      <div className="bg-white rounded-t-3xl px-6 pt-8 pb-10 relative z-10">
-        <p className="text-center text-gray-600 mb-4 font-medium">
-          시작하기
-        </p>
-
-        {error && (
-          <div className="bg-red-50 text-red-600 text-sm p-3 rounded-xl mb-4 text-center">
-            {error}
-          </div>
-        )}
-
-        {loading ? (
-          <div className="flex justify-center py-4">
-            <span className="loading loading-spinner loading-lg text-purple-600"></span>
-          </div>
-        ) : (
-          <div
-            ref={googleButtonRef}
-            className="flex justify-center items-center"
-            style={{ minHeight: '44px' }}
-          />
-        )}
-
-        <p className="text-center text-xs text-gray-400 mt-6 leading-relaxed">
-          로그인 시 서비스 이용약관에 동의하게 됩니다.<br />
+      {/* 하단 면책 조항 */}
+      <div className="bg-white/10 backdrop-blur-sm px-6 py-4 relative z-10">
+        <p className="text-center text-xs text-white/60 leading-relaxed">
+          로그인 시{' '}
+          <Link to="/privacy" className="underline text-white/80">
+            개인정보처리방침
+          </Link>
+          에 동의하게 됩니다.<br />
           본 서비스의 정보는 투자 권유가 아닙니다.
         </p>
       </div>

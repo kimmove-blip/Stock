@@ -147,10 +147,24 @@ export const telegramAPI = {
   getSettings: () => api.get('/telegram'),
   // 설정 업데이트
   updateSettings: (data) => api.post('/telegram', data),
-  // Chat ID 검증 및 저장
-  verify: (chatId) => api.post('/telegram/verify', { chat_id: chatId }),
+  // 인증 코드 생성
+  generateCode: () => api.post('/telegram/generate-code'),
+  // 인증 상태 확인
+  checkVerification: () => api.post('/telegram/check-verification'),
+  // 연동 해제
+  disconnect: () => api.post('/telegram/disconnect'),
   // 테스트 메시지 전송
-  test: (chatId) => api.post('/telegram/test', { chat_id: chatId }),
+  test: () => api.post('/telegram/test'),
+};
+
+// 관리자 API
+export const adminAPI = {
+  // 회원 목록
+  getUsers: () => api.get('/admin/users'),
+  // 회원 정보 수정
+  updateUser: (userId, data) => api.put(`/admin/users/${userId}`, data),
+  // 통계
+  getStats: () => api.get('/admin/stats'),
 };
 
 export default api;

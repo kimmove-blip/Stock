@@ -1,3 +1,4 @@
+import { useState } from 'react';
 import { useParams, useNavigate, useLocation } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { stockAPI, portfolioAPI, watchlistAPI } from '../api/client';
@@ -9,6 +10,11 @@ export default function StockDetail() {
   const navigate = useNavigate();
   const location = useLocation();
   const queryClient = useQueryClient();
+
+  // 보유종목 추가 모달 상태
+  const [showAddModal, setShowAddModal] = useState(false);
+  const [buyPrice, setBuyPrice] = useState('');
+  const [quantity, setQuantity] = useState('1');
 
   // RealtimePicks에서 전달된 TOP100 점수 (있으면 사용)
   const top100Score = location.state?.top100Score;
@@ -25,18 +31,44 @@ export default function StockDetail() {
   });
 
   const addToPortfolioMutation = useMutation({
-    mutationFn: () =>
+    mutationFn: (data) =>
       portfolioAPI.add({
         stock_code: code,
         stock_name: detail?.name || '',
-        buy_price: detail?.current_price || 0,
-        quantity: 1,
+        buy_price: data.buyPrice,
+        quantity: data.quantity,
       }),
     onSuccess: () => {
       queryClient.invalidateQueries(['portfolio']);
+      setShowAddModal(false);
+      setBuyPrice('');
+      setQuantity('1');
       alert('보유종목에 추가되었습니다');
     },
+    onError: (error) => {
+      alert(error.response?.data?.detail || '추가에 실패했습니다');
+    },
   });
+
+  // 모달 열기 (현재가를 기본 매수가로 설정)
+  const handleOpenAddModal = () => {
+    setBuyPrice(detail?.current_price?.toString() || '');
+    setQuantity('1');
+    setShowAddModal(true);
+  };
+
+  // 보유종목 추가 제출
+  const handleAddToPortfolio = () => {
+    const price = parseInt(buyPrice) || 0;
+    const qty = parseInt(quantity) || 1;
+
+    if (price <= 0) {
+      alert('매수가를 입력해주세요');
+      return;
+    }
+
+    addToPortfolioMutation.mutate({ buyPrice: price, quantity: qty });
+  };
 
   const addToWatchlistMutation = useMutation({
     mutationFn: () =>
@@ -98,9 +130,8 @@ export default function StockDetail() {
           {/* 액션 버튼 */}
           <div className="flex gap-2 mt-4">
             <button
-              onClick={() => addToPortfolioMutation.mutate()}
+              onClick={handleOpenAddModal}
               className="btn btn-primary btn-sm flex-1"
-              disabled={addToPortfolioMutation.isPending}
             >
               <Plus size={16} /> 보유종목
             </button>
@@ -184,6 +215,70 @@ export default function StockDetail() {
                 ))}
               </div>
             )}
+          </div>
+        </div>
+      )}
+
+      {/* 보유종목 추가 모달 */}
+      {showAddModal && (
+        <div className="modal modal-open">
+          <div className="modal-box">
+            <h3 className="font-bold text-lg">보유종목 추가</h3>
+
+            <div className="mt-4 p-3 bg-base-200 rounded">
+              <p className="font-bold">{detail?.name}</p>
+              <p className="text-sm text-base-content/60">{detail?.code}</p>
+            </div>
+
+            <div className="form-control mt-4">
+              <label className="label">
+                <span className="label-text">매수가</span>
+              </label>
+              <input
+                type="number"
+                value={buyPrice}
+                onChange={(e) => setBuyPrice(e.target.value)}
+                className="input input-bordered"
+                placeholder="매수가 입력"
+              />
+            </div>
+
+            <div className="form-control mt-4">
+              <label className="label">
+                <span className="label-text">수량</span>
+              </label>
+              <input
+                type="number"
+                value={quantity}
+                onChange={(e) => setQuantity(e.target.value)}
+                className="input input-bordered"
+                min="1"
+              />
+            </div>
+
+            <div className="modal-action">
+              <button
+                onClick={() => {
+                  setShowAddModal(false);
+                  setBuyPrice('');
+                  setQuantity('1');
+                }}
+                className="btn btn-ghost"
+              >
+                취소
+              </button>
+              <button
+                onClick={handleAddToPortfolio}
+                className="btn btn-primary"
+                disabled={addToPortfolioMutation.isPending}
+              >
+                {addToPortfolioMutation.isPending ? (
+                  <span className="loading loading-spinner"></span>
+                ) : (
+                  '추가'
+                )}
+              </button>
+            </div>
           </div>
         </div>
       )}

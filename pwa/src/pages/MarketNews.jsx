@@ -108,7 +108,8 @@ export default function MarketNews() {
         /* 뉴스 리스트 */
         <div className="space-y-3">
           {data?.items?.map((item, idx) => {
-            const category = categorizeNews(item.title);
+            // 전체 선택 시에만 제목에서 카테고리 추측, 그 외에는 선택한 카테고리 사용
+            const category = selectedCategory === 'all' ? categorizeNews(item.title) : selectedCategory;
             return (
               <a
                 key={idx}

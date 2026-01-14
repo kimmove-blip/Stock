@@ -12,6 +12,7 @@ import {
   Lock,
   Shield,
   MessageCircle,
+  FileText,
 } from 'lucide-react';
 import { authAPI } from '../api/client';
 
@@ -51,10 +52,15 @@ export default function Settings() {
       label: '비밀번호 변경',
       action: () => alert('준비 중입니다'),
     },
+    {
+      icon: FileText,
+      label: '개인정보처리방침',
+      action: () => navigate('/privacy'),
+    },
     // 관리자만 보이도록
     ...(user?.is_admin ? [{
       icon: Shield,
-      label: '문의 관리 (관리자)',
+      label: '관리자 페이지',
       action: () => navigate('/admin'),
     }] : []),
   ];

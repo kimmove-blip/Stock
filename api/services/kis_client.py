@@ -9,6 +9,7 @@ import time
 import requests
 from datetime import datetime, timedelta
 from typing import Optional, Dict, List
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -127,24 +128,36 @@ class KISClient:
             print(f"현재가 조회 실패 [{stock_code}]: {str(e)}")
             return None
 
-    def get_multiple_prices(self, stock_codes: List[str]) -> List[Dict]:
+    def get_multiple_prices(self, stock_codes: List[str], max_workers: int = 10) -> List[Dict]:
         """
-        여러 종목 현재가 일괄 조회
+        여러 종목 현재가 일괄 조회 (병렬 처리)
 
         Args:
             stock_codes: 종목코드 리스트
+            max_workers: 최대 동시 처리 스레드 수 (기본 10)
 
         Returns:
             현재가 정보 리스트
         """
         results = []
 
-        for code in stock_codes:
-            price_data = self.get_current_price(code)
-            if price_data:
-                results.append(price_data)
-            # API 호출 제한 방지 (초당 20회 제한)
-            time.sleep(0.05)
+        # ThreadPoolExecutor로 병렬 처리 (API 제한 고려하여 max 10)
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            # 모든 종목에 대해 future 생성
+            futures = {
+                executor.submit(self.get_current_price, code): code
+                for code in stock_codes
+            }
+
+            # 완료된 순서대로 결과 수집
+            for future in as_completed(futures):
+                code = futures[future]
+                try:
+                    price_data = future.result()
+                    if price_data:
+                        results.append(price_data)
+                except Exception as e:
+                    print(f"가격 조회 실패 [{code}]: {e}")
 
         return results
 

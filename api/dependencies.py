@@ -56,3 +56,15 @@ async def get_current_user_required(
             headers={"WWW-Authenticate": "Bearer"},
         )
     return current_user
+
+
+async def get_current_admin_required(
+    current_user: dict = Depends(get_current_user_required)
+) -> dict:
+    """관리자 권한 필수 엔드포인트용 - 관리자 아닌 경우 403 에러"""
+    if not current_user.get('is_admin'):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="관리자 권한이 필요합니다"
+        )
+    return current_user

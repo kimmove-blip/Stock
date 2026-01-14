@@ -19,7 +19,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 # Rate Limiter 설정
 limiter = Limiter(key_func=get_remote_address)
 
-from api.routers import auth, stocks, portfolio, watchlist, top100, realtime, value_stocks, contact, themes, popular, news, market, telegram
+from api.routers import auth, stocks, portfolio, watchlist, top100, realtime, value_stocks, contact, themes, popular, news, market, telegram, admin
 
 
 @asynccontextmanager
@@ -100,6 +100,7 @@ app.include_router(popular.router, prefix="/api/popular", tags=["인기종목"])
 app.include_router(news.router, prefix="/api/news", tags=["뉴스"])
 app.include_router(market.router, prefix="/api/market", tags=["시장지수"])
 app.include_router(telegram.router, prefix="/api/telegram", tags=["텔레그램"])
+app.include_router(admin.router, prefix="/api/admin", tags=["관리자"])
 
 
 @app.get("/", tags=["헬스체크"])

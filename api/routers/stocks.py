@@ -4,9 +4,11 @@
 """
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from typing import List, Optional
+from typing import List, Optional, Dict, Tuple, Any
+from functools import lru_cache
 import sys
 import os
+import time
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
@@ -55,6 +57,30 @@ def get_stock_libs():
 
 router = APIRouter()
 
+# 종목 상세 캐시 (5분 TTL)
+_stock_detail_cache: Dict[str, Tuple[Any, float]] = {}
+_CACHE_TTL = 300  # 5분
+
+
+def get_cached_stock_detail(code: str) -> Optional[Any]:
+    """캐시된 종목 상세 조회"""
+    if code in _stock_detail_cache:
+        data, timestamp = _stock_detail_cache[code]
+        if time.time() - timestamp < _CACHE_TTL:
+            return data
+        # 만료된 캐시 삭제
+        del _stock_detail_cache[code]
+    return None
+
+
+def set_stock_detail_cache(code: str, data: Any):
+    """종목 상세 캐시 저장"""
+    _stock_detail_cache[code] = (data, time.time())
+    # 캐시 크기 제한 (500개 초과 시 오래된 것 정리)
+    if len(_stock_detail_cache) > 500:
+        oldest = min(_stock_detail_cache.items(), key=lambda x: x[1][1])
+        del _stock_detail_cache[oldest[0]]
+
 
 @router.get("/search", response_model=List[StockSearch])
 async def search_stocks(
@@ -95,8 +121,9 @@ async def search_stocks(
         raise HTTPException(status_code=500, detail="종목 검색 중 오류가 발생했습니다")
 
 
+@lru_cache(maxsize=5000)
 def get_stock_name(code: str) -> str:
-    """TOP100 데이터 또는 FDR에서 종목명 조회"""
+    """TOP100 데이터 또는 FDR에서 종목명 조회 (LRU 캐시 적용)"""
     import json
     from pathlib import Path
 
@@ -128,7 +155,12 @@ def get_stock_name(code: str) -> str:
 
 @router.get("/{code}", response_model=StockDetail)
 async def get_stock_detail(code: str):
-    """종목 상세 정보 - KIS API 우선, FDR 보조"""
+    """종목 상세 정보 - KIS API 우선, FDR 보조 (5분 캐싱)"""
+    # 캐시 확인
+    cached = get_cached_stock_detail(code)
+    if cached:
+        return cached
+
     stock_name = get_stock_name(code)
 
     try:
@@ -146,7 +178,29 @@ async def get_stock_detail(code: str):
             # KIS에서 종목명이 있으면 사용, 없으면 로컬 데이터 사용
             name = kis_data.get('stock_name') or stock_name
 
-            return StockDetail(
+            # 이동평균/RSI는 FDR에서 계산
+            ma5, ma20, ma60, rsi = None, None, None, None
+            try:
+                libs = get_stock_libs()
+                if libs:
+                    get_ohlcv = libs['get_ohlcv']
+                    ohlcv = get_ohlcv(code, 120)
+                    if ohlcv is not None and not ohlcv.empty:
+                        ma5 = round(ohlcv['종가'].tail(5).mean(), 0) if len(ohlcv) >= 5 else None
+                        ma20 = round(ohlcv['종가'].tail(20).mean(), 0) if len(ohlcv) >= 20 else None
+                        ma60 = round(ohlcv['종가'].tail(60).mean(), 0) if len(ohlcv) >= 60 else None
+                        # RSI 계산
+                        if len(ohlcv) >= 14:
+                            delta = ohlcv['종가'].diff()
+                            gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
+                            loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
+                            rs = gain / loss
+                            rsi_series = 100 - (100 / (1 + rs))
+                            rsi = round(rsi_series.iloc[-1], 2)
+            except Exception as ma_err:
+                print(f"이동평균 계산 오류: {ma_err}")
+
+            result = StockDetail(
                 code=code,
                 name=name,
                 market=None,
@@ -155,11 +209,13 @@ async def get_stock_detail(code: str):
                 change_rate=kis_data.get('change_rate', 0),
                 volume=kis_data.get('volume', 0),
                 market_cap=market_cap,
-                ma5=None,
-                ma20=None,
-                ma60=None,
-                rsi=None
+                ma5=ma5,
+                ma20=ma20,
+                ma60=ma60,
+                rsi=rsi
             )
+            set_stock_detail_cache(code, result)
+            return result
     except Exception as kis_err:
         print(f"KIS API 오류: {kis_err}")
 
@@ -216,7 +272,7 @@ async def get_stock_detail(code: str):
         except Exception as mc_err:
             print(f"시가총액 조회 실패: {mc_err}")
 
-        return StockDetail(
+        result = StockDetail(
             code=code,
             name=stock_name,  # 이미 위에서 조회함
             market=market_type,
@@ -230,6 +286,8 @@ async def get_stock_detail(code: str):
             ma60=ma60,
             rsi=rsi
         )
+        set_stock_detail_cache(code, result)
+        return result
 
     except HTTPException:
         raise

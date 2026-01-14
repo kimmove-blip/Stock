@@ -43,7 +43,8 @@ class DatabaseManager:
                     name TEXT NOT NULL,
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                     last_login TIMESTAMP,
-                    is_active BOOLEAN DEFAULT 1
+                    is_active BOOLEAN DEFAULT 1,
+                    is_admin BOOLEAN DEFAULT 0
                 );
 
                 -- 관심종목 테이블
@@ -84,6 +85,20 @@ class DatabaseManager:
                     FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
                 );
 
+                -- 문의 테이블
+                CREATE TABLE IF NOT EXISTS contacts (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    user_id INTEGER,
+                    username TEXT,
+                    email TEXT,
+                    message TEXT NOT NULL,
+                    status TEXT DEFAULT 'pending',
+                    admin_reply TEXT,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    replied_at TIMESTAMP,
+                    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE SET NULL
+                );
+
                 -- 인덱스
                 CREATE INDEX IF NOT EXISTS idx_watchlists_user ON watchlists(user_id);
                 CREATE INDEX IF NOT EXISTS idx_portfolios_user ON portfolios(user_id);
@@ -91,6 +106,7 @@ class DatabaseManager:
                 CREATE INDEX IF NOT EXISTS idx_users_email ON users(email);
                 CREATE INDEX IF NOT EXISTS idx_alert_history_user ON alert_history(user_id);
                 CREATE UNIQUE INDEX IF NOT EXISTS idx_alert_daily ON alert_history(user_id, stock_code, alert_type, date(created_at));
+                CREATE INDEX IF NOT EXISTS idx_contacts_status ON contacts(status);
             """)
             conn.commit()
 
@@ -110,6 +126,9 @@ class DatabaseManager:
 
         if 'email_subscription' not in columns:
             conn.execute("ALTER TABLE users ADD COLUMN email_subscription BOOLEAN DEFAULT 0")
+
+        if 'is_admin' not in columns:
+            conn.execute("ALTER TABLE users ADD COLUMN is_admin BOOLEAN DEFAULT 0")
 
         conn.commit()
 
@@ -168,6 +187,34 @@ class DatabaseManager:
                 (datetime.now(), user_id)
             )
             conn.commit()
+
+    def is_admin(self, user_id):
+        """사용자가 관리자인지 확인"""
+        with self.get_connection() as conn:
+            cursor = conn.execute(
+                "SELECT is_admin FROM users WHERE id = ?", (user_id,)
+            )
+            row = cursor.fetchone()
+            return bool(row['is_admin']) if row else False
+
+    def set_admin(self, user_id, is_admin=True):
+        """관리자 권한 설정"""
+        with self.get_connection() as conn:
+            conn.execute(
+                "UPDATE users SET is_admin = ? WHERE id = ?",
+                (1 if is_admin else 0, user_id)
+            )
+            conn.commit()
+            return True
+
+    def get_user_by_id(self, user_id):
+        """ID로 사용자 조회"""
+        with self.get_connection() as conn:
+            cursor = conn.execute(
+                "SELECT * FROM users WHERE id = ?", (user_id,)
+            )
+            row = cursor.fetchone()
+            return dict(row) if row else None
 
     # ==================== 관심종목 관련 ====================
 
@@ -400,3 +447,63 @@ class DatabaseManager:
             )
             row = cursor.fetchone()
             return bool(row['email_subscription']) if row else False
+
+    # ==================== 문의 관련 ====================
+
+    def add_contact(self, message, user_id=None, username=None, email=None):
+        """문의 추가"""
+        with self.get_connection() as conn:
+            cursor = conn.execute(
+                "INSERT INTO contacts (user_id, username, email, message) VALUES (?, ?, ?, ?)",
+                (user_id, username, email, message)
+            )
+            conn.commit()
+            return cursor.lastrowid
+
+    def get_contacts(self, status=None, limit=50):
+        """문의 목록 조회 (관리자용)"""
+        with self.get_connection() as conn:
+            if status:
+                cursor = conn.execute(
+                    "SELECT * FROM contacts WHERE status = ? ORDER BY created_at DESC LIMIT ?",
+                    (status, limit)
+                )
+            else:
+                cursor = conn.execute(
+                    "SELECT * FROM contacts ORDER BY created_at DESC LIMIT ?",
+                    (limit,)
+                )
+            return [dict(row) for row in cursor.fetchall()]
+
+    def get_contact_by_id(self, contact_id):
+        """특정 문의 조회"""
+        with self.get_connection() as conn:
+            cursor = conn.execute(
+                "SELECT * FROM contacts WHERE id = ?",
+                (contact_id,)
+            )
+            row = cursor.fetchone()
+            return dict(row) if row else None
+
+    def update_contact_status(self, contact_id, status, admin_reply=None):
+        """문의 상태 업데이트"""
+        with self.get_connection() as conn:
+            if admin_reply:
+                conn.execute(
+                    "UPDATE contacts SET status = ?, admin_reply = ?, replied_at = ? WHERE id = ?",
+                    (status, admin_reply, datetime.now(), contact_id)
+                )
+            else:
+                conn.execute(
+                    "UPDATE contacts SET status = ? WHERE id = ?",
+                    (status, contact_id)
+                )
+            conn.commit()
+
+    def get_pending_contacts_count(self):
+        """대기 중인 문의 수"""
+        with self.get_connection() as conn:
+            cursor = conn.execute(
+                "SELECT COUNT(*) as count FROM contacts WHERE status = 'pending'"
+            )
+            return cursor.fetchone()['count']

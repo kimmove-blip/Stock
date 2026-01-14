@@ -3,12 +3,14 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useNavigate } from 'react-router-dom';
 import { portfolioAPI, stockAPI } from '../api/client';
 import Loading from '../components/Loading';
-import { Plus, Trash2, TrendingUp, TrendingDown, Search, Activity, AlertTriangle, CheckCircle } from 'lucide-react';
+import { Plus, Trash2, Edit2, TrendingUp, TrendingDown, Search, Activity, AlertTriangle, CheckCircle } from 'lucide-react';
 
 export default function Portfolio() {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const [showAddModal, setShowAddModal] = useState(false);
+  const [showEditModal, setShowEditModal] = useState(false);
+  const [editingItem, setEditingItem] = useState(null);
   const [showDiagnosis, setShowDiagnosis] = useState(false);
   const [searchKeyword, setSearchKeyword] = useState('');
   const [searchResults, setSearchResults] = useState([]);
@@ -44,6 +46,15 @@ export default function Portfolio() {
   const deleteMutation = useMutation({
     mutationFn: (id) => portfolioAPI.delete(id),
     onSuccess: () => queryClient.invalidateQueries(['portfolio']),
+  });
+
+  const updateMutation = useMutation({
+    mutationFn: ({ id, data }) => portfolioAPI.update(id, data),
+    onSuccess: () => {
+      queryClient.invalidateQueries(['portfolio']);
+      setShowEditModal(false);
+      setEditingItem(null);
+    },
   });
 
   const resetForm = () => {
@@ -271,17 +282,31 @@ export default function Portfolio() {
                   <h3 className="font-bold">{item.stock_name}</h3>
                   <p className="text-xs text-base-content/60">{item.stock_code}</p>
                 </div>
-                <button
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    if (confirm('삭제하시겠습니까?')) {
-                      deleteMutation.mutate(item.id);
-                    }
-                  }}
-                  className="btn btn-ghost btn-xs text-error"
-                >
-                  <Trash2 size={14} />
-                </button>
+                <div className="flex gap-1">
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setEditingItem(item);
+                      setBuyPrice(item.buy_price?.toString() || '');
+                      setQuantity(item.quantity?.toString() || '1');
+                      setShowEditModal(true);
+                    }}
+                    className="btn btn-ghost btn-xs text-primary"
+                  >
+                    <Edit2 size={14} />
+                  </button>
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      if (confirm('삭제하시겠습니까?')) {
+                        deleteMutation.mutate(item.id);
+                      }
+                    }}
+                    className="btn btn-ghost btn-xs text-error"
+                  >
+                    <Trash2 size={14} />
+                  </button>
+                </div>
               </div>
 
               <div className="grid grid-cols-3 gap-2 mt-2 text-sm">
@@ -416,6 +441,74 @@ export default function Portfolio() {
                 </button>
               </div>
             )}
+          </div>
+        </div>
+      )}
+
+      {/* 종목 수정 모달 */}
+      {showEditModal && editingItem && (
+        <div className="modal modal-open">
+          <div className="modal-box">
+            <h3 className="font-bold text-lg">종목 수정</h3>
+
+            <div className="mt-4 p-3 bg-base-200 rounded">
+              <p className="font-bold">{editingItem.stock_name}</p>
+              <p className="text-sm text-base-content/60">{editingItem.stock_code}</p>
+            </div>
+
+            <div className="form-control mt-4">
+              <label className="label">
+                <span className="label-text">매수가</span>
+              </label>
+              <input
+                type="number"
+                value={buyPrice}
+                onChange={(e) => setBuyPrice(e.target.value)}
+                className="input input-bordered"
+                placeholder="매수가 입력"
+              />
+            </div>
+
+            <div className="form-control mt-4">
+              <label className="label">
+                <span className="label-text">수량</span>
+              </label>
+              <input
+                type="number"
+                value={quantity}
+                onChange={(e) => setQuantity(e.target.value)}
+                className="input input-bordered"
+                min="1"
+              />
+            </div>
+
+            <div className="modal-action">
+              <button
+                onClick={() => {
+                  setShowEditModal(false);
+                  setEditingItem(null);
+                  resetForm();
+                }}
+                className="btn btn-ghost"
+              >
+                취소
+              </button>
+              <button
+                onClick={() => {
+                  updateMutation.mutate({
+                    id: editingItem.id,
+                    data: {
+                      buy_price: parseInt(buyPrice) || 0,
+                      quantity: parseInt(quantity) || 1,
+                    },
+                  });
+                }}
+                className="btn btn-primary"
+                disabled={updateMutation.isPending}
+              >
+                {updateMutation.isPending ? <span className="loading loading-spinner"></span> : '수정'}
+              </button>
+            </div>
           </div>
         </div>
       )}

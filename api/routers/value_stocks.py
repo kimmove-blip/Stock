@@ -10,8 +10,44 @@ from fastapi import APIRouter, HTTPException
 from typing import List, Optional
 from pydantic import BaseModel
 from datetime import datetime, timedelta
+import requests
+from bs4 import BeautifulSoup
 
 router = APIRouter()
+
+
+def get_naver_fundamental(code: str) -> dict:
+    """네이버 금융에서 PER, PBR 조회"""
+    try:
+        url = f"https://finance.naver.com/item/main.naver?code={code}"
+        headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
+        resp = requests.get(url, headers=headers, timeout=5)
+        soup = BeautifulSoup(resp.text, 'html.parser')
+
+        table = soup.find('table', {'class': 'per_table'})
+        if table:
+            tds = table.find_all('td')
+            values = []
+            for td in tds:
+                em = td.find('em')
+                if em:
+                    val = em.get_text(strip=True)
+                    try:
+                        values.append(float(val.replace(',', '')))
+                    except:
+                        values.append(None)
+
+            # 순서: PER, 추정PER, PBR, 배당수익률
+            if len(values) >= 3:
+                return {
+                    'per': values[0] if values[0] and values[0] > 0 else None,
+                    'pbr': values[2] if values[2] and values[2] > 0 else None,
+                    'div': values[3] if len(values) > 3 and values[3] else None
+                }
+        return {'per': None, 'pbr': None, 'div': None}
+    except Exception as e:
+        print(f"[가치주] 네이버 펀더멘털 조회 실패 [{code}]: {e}")
+        return {'per': None, 'pbr': None, 'div': None}
 
 # 캐시 저장소
 _cache = {
@@ -64,49 +100,35 @@ def get_recent_trading_date():
         check_date = (today - timedelta(days=i)).strftime("%Y%m%d")
         try:
             df = stock.get_market_ohlcv(check_date, market="KOSPI")
-            if not df.empty:
+            # 데이터가 있고 필수 컬럼이 있는지 확인
+            if not df.empty and '종가' in df.columns:
                 return check_date
         except:
             continue
-    return today.strftime("%Y%m%d")
+    return (today - timedelta(days=1)).strftime("%Y%m%d")
 
 
 def fetch_value_stocks_data():
-    """가치주 데이터 조회 (실제 API 호출)"""
+    """가치주 데이터 조회 (실제 API 호출) - 개별 종목 조회 방식"""
     from pykrx import stock
 
-    target_date = get_recent_trading_date()
-
-    # 전체 시장 데이터 한번에 가져오기
-    kospi_ohlcv = stock.get_market_ohlcv(target_date, market="KOSPI")
-    kosdaq_ohlcv = stock.get_market_ohlcv(target_date, market="KOSDAQ")
-
-    # PER, PBR, 배당률 데이터
-    kospi_fund = stock.get_market_fundamental(target_date, market="KOSPI")
-    kosdaq_fund = stock.get_market_fundamental(target_date, market="KOSDAQ")
-
-    # 시가총액 데이터
-    kospi_cap = stock.get_market_cap(target_date, market="KOSPI")
-    kosdaq_cap = stock.get_market_cap(target_date, market="KOSDAQ")
+    today = datetime.now()
+    # 최근 5일 범위로 조회 (개별 종목용)
+    start_date = (today - timedelta(days=7)).strftime("%Y%m%d")
+    end_date = today.strftime("%Y%m%d")
 
     value_stocks = []
 
     for code in VALUE_STOCK_CODES:
         try:
-            # KOSPI에서 찾기
-            if code in kospi_ohlcv.index:
-                ohlcv = kospi_ohlcv.loc[code]
-                fund = kospi_fund.loc[code] if code in kospi_fund.index else None
-                cap = kospi_cap.loc[code] if code in kospi_cap.index else None
-                market = "KOSPI"
-            # KOSDAQ에서 찾기
-            elif code in kosdaq_ohlcv.index:
-                ohlcv = kosdaq_ohlcv.loc[code]
-                fund = kosdaq_fund.loc[code] if code in kosdaq_fund.index else None
-                cap = kosdaq_cap.loc[code] if code in kosdaq_cap.index else None
-                market = "KOSDAQ"
-            else:
+            # 개별 종목 OHLCV 조회
+            ohlcv_df = stock.get_market_ohlcv(start_date, end_date, code)
+            if ohlcv_df.empty:
                 continue
+
+            # 최신 데이터 사용
+            ohlcv = ohlcv_df.iloc[-1]
+            target_date = ohlcv_df.index[-1].strftime("%Y%m%d")
 
             current_price = int(ohlcv['종가'])
             if current_price <= 0:
@@ -114,22 +136,33 @@ def fetch_value_stocks_data():
 
             change_rate = float(ohlcv['등락률']) if '등락률' in ohlcv else 0
 
-            # 펀더멘털 데이터
-            per = float(fund['PER']) if fund is not None and 'PER' in fund and fund['PER'] > 0 else None
-            pbr = float(fund['PBR']) if fund is not None and 'PBR' in fund and fund['PBR'] > 0 else None
-            div_yield = float(fund['DIV']) if fund is not None and 'DIV' in fund else None
+            # 종목명 조회
+            name = stock.get_market_ticker_name(code)
 
-            # 시가총액 (억원)
-            market_cap = int(cap['시가총액'] / 100000000) if cap is not None and '시가총액' in cap else None
+            # 펀더멘털 데이터 (네이버 금융에서 조회)
+            fund_data = get_naver_fundamental(code)
+            per = fund_data['per']
+            pbr = fund_data['pbr']
+            div_yield = fund_data['div']
+
+            # 시가총액 조회 (pykrx가 안되면 None)
+            market_cap = None
+            try:
+                cap_df = stock.get_market_cap(start_date, end_date, code)
+                if not cap_df.empty and '시가총액' in cap_df.columns:
+                    cap = cap_df.iloc[-1]
+                    market_cap = int(cap['시가총액'] / 100000000)
+            except:
+                pass
+
+            # 시장 구분
+            market = "KOSPI"  # 기본값
 
             # 가치주 필터링 (PER, PBR 기준 완화)
             if per is not None and (per <= 0 or per > 30):
                 continue
             if pbr is not None and (pbr <= 0 or pbr > 5):
                 continue
-
-            # 종목명 조회
-            name = stock.get_market_ticker_name(code)
 
             # 점수 계산
             score = 50
@@ -201,7 +234,7 @@ def fetch_value_stocks_data():
     return {
         "items": value_stocks,
         "generated_at": datetime.now().isoformat(),
-        "target_date": target_date
+        "target_date": end_date
     }
 
 

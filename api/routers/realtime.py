@@ -4,11 +4,37 @@
 """
 
 from fastapi import APIRouter, HTTPException, Query
-from typing import List, Optional
+from typing import List, Optional, Dict, Tuple, Any
 from pydantic import BaseModel
 from datetime import datetime
+import time
 
 router = APIRouter()
+
+# 실시간 시세 캐시 (30초 TTL)
+_realtime_cache: Dict[str, Tuple[Any, float]] = {}
+_REALTIME_CACHE_TTL = 30  # 30초
+_top100_cache: Tuple[Any, float] = (None, 0)  # TOP100 전체 캐시
+
+
+def get_cached_realtime(code: str) -> Optional[Dict]:
+    """캐시된 실시간 시세 조회"""
+    if code in _realtime_cache:
+        data, timestamp = _realtime_cache[code]
+        if time.time() - timestamp < _REALTIME_CACHE_TTL:
+            return data
+        del _realtime_cache[code]
+    return None
+
+
+def set_realtime_cache(code: str, data: Dict):
+    """실시간 시세 캐시 저장"""
+    _realtime_cache[code] = (data, time.time())
+    # 캐시 크기 제한 (200개)
+    if len(_realtime_cache) > 200:
+        # 가장 오래된 항목 삭제
+        oldest = min(_realtime_cache.items(), key=lambda x: x[1][1])
+        del _realtime_cache[oldest[0]]
 
 
 class RealtimePrice(BaseModel):
@@ -56,10 +82,15 @@ def get_kis():
 @router.get("/price/{stock_code}", response_model=RealtimePrice)
 async def get_realtime_price(stock_code: str):
     """
-    단일 종목 실시간 시세 조회
+    단일 종목 실시간 시세 조회 (30초 캐싱)
 
     - **stock_code**: 종목코드 (6자리, 예: 005930)
     """
+    # 캐시 확인
+    cached = get_cached_realtime(stock_code)
+    if cached:
+        return RealtimePrice(**cached)
+
     kis = get_kis()
     if kis is None:
         raise HTTPException(
@@ -76,6 +107,8 @@ async def get_realtime_price(stock_code: str):
                 detail=f"종목 {stock_code}의 시세를 조회할 수 없습니다."
             )
 
+        # 캐시 저장
+        set_realtime_cache(stock_code, price_data)
         return RealtimePrice(**price_data)
 
     except HTTPException:
@@ -88,7 +121,7 @@ async def get_realtime_price(stock_code: str):
 @router.post("/prices", response_model=RealtimePriceList)
 async def get_multiple_realtime_prices(stock_codes: List[str]):
     """
-    여러 종목 실시간 시세 일괄 조회
+    여러 종목 실시간 시세 일괄 조회 (30초 캐싱 + 병렬 처리)
 
     - **stock_codes**: 종목코드 리스트 (최대 100개)
     """
@@ -106,10 +139,30 @@ async def get_multiple_realtime_prices(stock_codes: List[str]):
         )
 
     try:
-        prices = kis.get_multiple_prices(stock_codes)
+        # 캐시된 것과 새로 조회할 것 분리
+        cached_prices = []
+        codes_to_fetch = []
+
+        for code in stock_codes:
+            cached = get_cached_realtime(code)
+            if cached:
+                cached_prices.append(cached)
+            else:
+                codes_to_fetch.append(code)
+
+        # 새로 조회할 종목만 API 호출 (병렬 처리)
+        new_prices = []
+        if codes_to_fetch:
+            new_prices = kis.get_multiple_prices(codes_to_fetch)
+            # 새로 조회한 것 캐시에 저장
+            for p in new_prices:
+                set_realtime_cache(p['stock_code'], p)
+
+        # 캐시 + 새로 조회한 것 합치기
+        all_prices = cached_prices + new_prices
 
         return RealtimePriceList(
-            prices=[RealtimePrice(**p) for p in prices],
+            prices=[RealtimePrice(**p) for p in all_prices],
             updated_at=datetime.now().isoformat()
         )
 
@@ -121,12 +174,18 @@ async def get_multiple_realtime_prices(stock_codes: List[str]):
 @router.get("/top100-prices", response_model=RealtimePriceList)
 async def get_top100_realtime_prices():
     """
-    TOP100 종목의 실시간 시세 조회
+    TOP100 종목의 실시간 시세 조회 (30초 캐싱 + 병렬 처리)
 
     저장된 TOP100 종목의 현재가를 실시간으로 가져옵니다.
     """
+    global _top100_cache
     import json
     from pathlib import Path
+
+    # TOP100 전체 캐시 확인 (30초)
+    cached_data, cached_time = _top100_cache
+    if cached_data and time.time() - cached_time < _REALTIME_CACHE_TTL:
+        return cached_data
 
     # TOP100 데이터에서 종목코드 추출
     output_dir = Path(__file__).parent.parent.parent / "output"
@@ -165,13 +224,36 @@ async def get_top100_realtime_prices():
                 detail="한국투자증권 API 서비스를 이용할 수 없습니다."
             )
 
-        # 실시간 시세 조회
-        prices = kis.get_multiple_prices(stock_codes[:100])
+        # 캐시된 것과 새로 조회할 것 분리
+        cached_prices = []
+        codes_to_fetch = []
 
-        return RealtimePriceList(
-            prices=[RealtimePrice(**p) for p in prices],
+        for code in stock_codes[:100]:
+            cached = get_cached_realtime(code)
+            if cached:
+                cached_prices.append(cached)
+            else:
+                codes_to_fetch.append(code)
+
+        # 새로 조회할 종목만 API 호출 (병렬 처리)
+        new_prices = []
+        if codes_to_fetch:
+            new_prices = kis.get_multiple_prices(codes_to_fetch)
+            # 새로 조회한 것 캐시에 저장
+            for p in new_prices:
+                set_realtime_cache(p['stock_code'], p)
+
+        # 캐시 + 새로 조회한 것 합치기
+        all_prices = cached_prices + new_prices
+
+        result = RealtimePriceList(
+            prices=[RealtimePrice(**p) for p in all_prices],
             updated_at=datetime.now().isoformat()
         )
+
+        # TOP100 전체 결과 캐시
+        _top100_cache = (result, time.time())
+        return result
 
     except HTTPException:
         raise
