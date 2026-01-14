@@ -61,6 +61,10 @@ router = APIRouter()
 _stock_detail_cache: Dict[str, Tuple[Any, float]] = {}
 _CACHE_TTL = 300  # 5분
 
+# AI 분석 캐시 (30분 TTL)
+_analysis_cache: Dict[str, Tuple[Any, float]] = {}
+_ANALYSIS_CACHE_TTL = 1800  # 30분
+
 
 def get_cached_stock_detail(code: str) -> Optional[Any]:
     """캐시된 종목 상세 조회"""
@@ -80,6 +84,76 @@ def set_stock_detail_cache(code: str, data: Any):
     if len(_stock_detail_cache) > 500:
         oldest = min(_stock_detail_cache.items(), key=lambda x: x[1][1])
         del _stock_detail_cache[oldest[0]]
+
+
+def get_cached_analysis(code: str) -> Optional[Any]:
+    """캐시된 AI 분석 조회"""
+    if code in _analysis_cache:
+        data, timestamp = _analysis_cache[code]
+        if time.time() - timestamp < _ANALYSIS_CACHE_TTL:
+            return data
+        del _analysis_cache[code]
+    return None
+
+
+def set_analysis_cache(code: str, data: Any):
+    """AI 분석 캐시 저장"""
+    _analysis_cache[code] = (data, time.time())
+    if len(_analysis_cache) > 200:
+        oldest = min(_analysis_cache.items(), key=lambda x: x[1][1])
+        del _analysis_cache[oldest[0]]
+
+
+def get_top100_analysis(code: str) -> Optional[Dict]:
+    """TOP100 JSON에서 분석 데이터 조회"""
+    import json
+    from pathlib import Path
+
+    try:
+        json_files = list(Path("/home/kimhc/Stock/output").glob("top100_*.json"))
+        if json_files:
+            latest = max(json_files, key=lambda x: x.stat().st_mtime)
+            with open(latest) as f:
+                data = json.load(f)
+                # 'stocks' 또는 'items' 키 모두 지원
+                stocks = data.get('stocks', data.get('items', []))
+                for item in stocks:
+                    if item.get('code') == code:
+                        score = item.get('score', 50)
+                        signals = item.get('signals', [])
+
+                        # 점수 기반 의견 생성
+                        if score >= 70:
+                            opinion = '매수'
+                        elif score >= 50:
+                            opinion = '관망'
+                        elif score >= 30:
+                            opinion = '주의'
+                        else:
+                            opinion = '매도'
+
+                        # 시그널 기반 코멘트 생성
+                        signal_desc = {
+                            'MA_ALIGNED': '✅ 이평선 정배열',
+                            'GOLDEN_CROSS_5_20': '✅ 골든크로스 발생',
+                            'MACD_GOLDEN_CROSS': '✅ MACD 골든크로스',
+                            'VOLUME_SURGE': '🔥 거래량 급증',
+                            'RSI_OVERSOLD': '✅ RSI 과매도 반등',
+                            'BB_LOWER_BOUNCE': '✅ 볼린저밴드 하단 반등',
+                        }
+                        comments = [signal_desc.get(s, s) for s in signals[:4]]
+                        comment = '\n'.join(comments) if comments else f"AI 종합 점수: {score}점"
+
+                        return {
+                            'name': item.get('name', code),
+                            'score': score,
+                            'opinion': opinion,
+                            'comment': comment,
+                            'signals': signals
+                        }
+    except Exception as e:
+        print(f"TOP100 분석 조회 실패: {e}")
+    return None
 
 
 @router.get("/search", response_model=List[StockSearch])
@@ -298,7 +372,44 @@ async def get_stock_detail(code: str):
 
 @router.get("/{code}/analysis", response_model=StockAnalysis)
 async def analyze_stock(code: str):
-    """종목 AI 분석"""
+    """종목 AI 분석 (30분 캐싱, TOP100 우선)"""
+    # 1. 캐시 확인
+    cached = get_cached_analysis(code)
+    if cached:
+        return cached
+
+    # 2. TOP100 데이터에 있으면 바로 반환 (즉시 응답)
+    top100_data = get_top100_analysis(code)
+    if top100_data:
+        stock_name = top100_data['name']
+        score = top100_data['score']
+        opinion = top100_data['opinion']
+        comment = top100_data.get('comment', '')
+
+        # 점수 기반 의견 (없으면 생성)
+        if not opinion:
+            if score >= 70:
+                opinion = '매수'
+            elif score >= 50:
+                opinion = '관망'
+            elif score >= 30:
+                opinion = '주의'
+            else:
+                opinion = '매도'
+
+        result = StockAnalysis(
+            code=code,
+            name=stock_name,
+            score=score,
+            opinion=opinion,
+            technical_score=score,
+            signals={},
+            comment=comment if comment else f"AI 종합 점수: {score}점"
+        )
+        set_analysis_cache(code, result)
+        return result
+
+    # 3. TOP100에 없으면 실시간 분석
     libs = get_stock_libs()
     if not libs:
         raise HTTPException(status_code=503, detail="주식 데이터 서비스 이용 불가")
@@ -307,17 +418,12 @@ async def analyze_stock(code: str):
         fdr = libs['fdr']
         get_ohlcv = libs['get_ohlcv']
 
-        # 종목 정보
-        krx = fdr.StockListing("KRX")
-        stock_info = krx[krx['Code'] == code]
-        if stock_info.empty:
-            raise HTTPException(status_code=404, detail="종목을 찾을 수 없습니다")
-
-        name = stock_info.iloc[0]['Name']
+        # 종목명 조회 (캐시 사용)
+        name = get_stock_name(code)
 
         # OHLCV 데이터
         ohlcv = get_ohlcv(code, 365)
-        if ohlcv.empty:
+        if ohlcv is None or ohlcv.empty:
             raise HTTPException(status_code=404, detail="가격 데이터를 가져올 수 없습니다")
 
         # 컬럼명 영문으로 변환 (TechnicalAnalyst는 영문 컬럼명 사용)
@@ -450,7 +556,7 @@ async def analyze_stock(code: str):
             elif rsi > 60:
                 comments.append(f"📊 RSI {rsi:.1f} (고점 구간)")
 
-        return StockAnalysis(
+        result = StockAnalysis(
             code=code,
             name=name,
             score=score,
@@ -459,6 +565,8 @@ async def analyze_stock(code: str):
             signals=signals,
             comment="\n".join(comments)
         )
+        set_analysis_cache(code, result)
+        return result
 
     except HTTPException:
         raise
