@@ -16,18 +16,41 @@ export default function StockDetail() {
   const [buyPrice, setBuyPrice] = useState('');
   const [quantity, setQuantity] = useState('1');
 
-  // RealtimePicks에서 전달된 TOP100 점수 (있으면 사용)
+  // RealtimePicks에서 전달된 데이터 (있으면 사용)
   const top100Score = location.state?.top100Score;
+  const preloadedData = location.state?.preloadedData;
 
+  // 상세 정보 조회 (preloadedData 있으면 스킵 가능)
   const { data: detail, isLoading: detailLoading } = useQuery({
     queryKey: ['stock', code],
     queryFn: () => stockAPI.detail(code).then((res) => res.data),
+    // preloadedData가 있으면 초기값으로 사용
+    initialData: preloadedData ? {
+      code: preloadedData.code,
+      name: preloadedData.name,
+      current_price: preloadedData.current_price,
+      change: preloadedData.change,
+      change_rate: preloadedData.change_rate,
+      volume: preloadedData.volume,
+    } : undefined,
+    // preloadedData가 있으면 백그라운드에서 갱신
+    staleTime: preloadedData ? 60000 : 0,
   });
 
   const { data: analysis, isLoading: analysisLoading } = useQuery({
     queryKey: ['stock-analysis', code],
     queryFn: () => stockAPI.analysis(code).then((res) => res.data),
     enabled: !!detail,
+    // preloadedData의 score가 있으면 초기값 사용
+    initialData: preloadedData?.score ? {
+      code: preloadedData.code,
+      name: preloadedData.name,
+      score: preloadedData.score,
+      opinion: preloadedData.score >= 70 ? '매수' : preloadedData.score >= 50 ? '관망' : '주의',
+      signals: preloadedData.signals || [],
+      comment: '',
+    } : undefined,
+    staleTime: preloadedData?.score ? 60000 : 0,
   });
 
   const addToPortfolioMutation = useMutation({
