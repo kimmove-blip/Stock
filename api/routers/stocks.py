@@ -134,14 +134,48 @@ def get_top100_analysis(code: str) -> Optional[Dict]:
 
                         # 시그널 기반 코멘트 생성
                         signal_desc = {
-                            'MA_ALIGNED': '✅ 이평선 정배열',
-                            'GOLDEN_CROSS_5_20': '✅ 골든크로스 발생',
+                            'MA_ALIGNED': '✅ 이평선 정배열 (강한 상승 추세)',
+                            'GOLDEN_CROSS_5_20': '✅ 단기 골든크로스 발생',
+                            'GOLDEN_CROSS': '✅ 골든크로스 발생',
+                            'DEATH_CROSS': '⚠️ 데드크로스 발생',
                             'MACD_GOLDEN_CROSS': '✅ MACD 골든크로스',
+                            'MACD_HIST_POSITIVE': '✅ MACD 히스토그램 양전환',
+                            'MACD_HIST_RISING': '📈 MACD 히스토그램 상승 중',
                             'VOLUME_SURGE': '🔥 거래량 급증',
                             'RSI_OVERSOLD': '✅ RSI 과매도 반등',
+                            'RSI_RECOVERING': '📈 RSI 회복 중',
+                            'RSI_OVERBOUGHT': '⚠️ RSI 과매수 주의',
                             'BB_LOWER_BOUNCE': '✅ 볼린저밴드 하단 반등',
+                            'BB_LOWER_TOUCH': '✅ 볼린저밴드 하단 터치',
+                            'BB_UPPER_BREAK': '⚠️ 볼린저밴드 상단 돌파',
+                            'STOCH_GOLDEN_OVERSOLD': '✅ 스토캐스틱 과매도 골든크로스',
+                            'STOCH_GOLDEN_CROSS': '✅ 스토캐스틱 골든크로스',
+                            'STOCH_OVERSOLD': '✅ 스토캐스틱 과매도 구간',
+                            'ADX_STRONG_UPTREND': '✅ ADX 강한 상승 추세',
+                            'ADX_TREND_START': '📈 ADX 추세 시작',
+                            'CCI_OVERSOLD_RECOVERY': '✅ CCI 과매도 회복',
+                            'CCI_OVERBOUGHT': '⚠️ CCI 과매수 주의',
+                            'WILLIAMS_OVERSOLD': '✅ 윌리엄스 %R 과매도',
+                            'WILLIAMS_OVERBOUGHT': '⚠️ 윌리엄스 %R 과매수',
+                            'OBV_RISING': '📈 OBV 상승 (매집 신호)',
+                            'OBV_ABOVE_MA': '📈 OBV 이평선 돌파',
+                            'MFI_OVERSOLD': '✅ MFI 과매도 (자금 유입 기대)',
+                            'MFI_OVERBOUGHT': '⚠️ MFI 과매수 주의',
+                            'SUPERTREND_BUY': '✅ 슈퍼트렌드 매수 신호',
+                            'SUPERTREND_UPTREND': '📈 슈퍼트렌드 상승 추세',
+                            'PSAR_BUY_SIGNAL': '✅ PSAR 매수 신호',
+                            'ROC_POSITIVE_CROSS': '✅ ROC 양전환',
+                            'ROC_STRONG_MOMENTUM': '📈 ROC 강한 모멘텀',
+                            'ICHIMOKU_BULLISH': '✅ 일목균형 상승',
+                            'CMF_STRONG_INFLOW': '✅ CMF 강한 자금 유입',
+                            'CMF_POSITIVE': '📈 CMF 순매수',
+                            'HAMMER': '✅ 망치형 캔들 (반등 신호)',
+                            'BULLISH_ENGULFING': '✅ 상승 장악형 캔들',
+                            'MORNING_STAR': '✅ 샛별형 패턴',
+                            'BEARISH_ENGULFING': '⚠️ 하락 장악형 캔들',
+                            'EVENING_STAR': '⚠️ 저녁별형 패턴',
                         }
-                        comments = [signal_desc.get(s, s) for s in signals[:4]]
+                        comments = [signal_desc.get(s, s) for s in signals[:5]]
                         comment = '\n'.join(comments) if comments else f"AI 종합 점수: {score}점"
 
                         return {

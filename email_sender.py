@@ -33,18 +33,20 @@ class EmailSender:
             self.recipient_emails = os.getenv("RECIPIENT_EMAILS", "").split(",")
 
     def _get_db_subscribers(self):
-        """DB에서 이메일 구독자 목록 조회"""
+        """DB에서 이메일 구독자 목록만 조회"""
         try:
             from database import DatabaseManager
             db = DatabaseManager()
             subscribers = db.get_email_subscribers()
-            # 환경변수의 기본 수신자도 포함
-            env_recipients = os.getenv("RECIPIENT_EMAILS", "").split(",")
-            all_recipients = list(set(subscribers + [e.strip() for e in env_recipients if e.strip()]))
-            return all_recipients if all_recipients else [""]
+            if subscribers:
+                print(f"[이메일] DB 구독자 {len(subscribers)}명 조회됨")
+                return subscribers
+            else:
+                print("[이메일] DB 구독자 없음")
+                return []
         except Exception as e:
             print(f"[이메일] DB 구독자 조회 실패: {e}")
-            return os.getenv("RECIPIENT_EMAILS", "").split(",")
+            return []
 
     def is_configured(self):
         """이메일 설정이 완료되었는지 확인"""

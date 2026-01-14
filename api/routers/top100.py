@@ -82,17 +82,42 @@ async def get_top100(
         # 등락률 처리
         change_rate = stock.get('change_rate') or stock.get('등락률') or stock.get('change_pct')
 
+        # indicators에서 RSI, MACD 추출
+        indicators = stock.get('indicators', {})
+        rsi = stock.get('rsi') or stock.get('RSI') or indicators.get('rsi')
+        macd = stock.get('macd_signal') or indicators.get('macd')
+
+        # signals에서 VOLUME_SURGE 확인
+        signals = stock.get('signals', [])
+        volume_surge = 'VOLUME_SURGE' in signals
+
+        # 의견 계산 (신호 기반)
+        opinion = stock.get('opinion', stock.get('의견'))
+        if not opinion:
+            score = stock.get('score', 0)
+            has_caution = any(s in signals for s in ['OVERBOUGHT', 'DEATH_CROSS', 'BEARISH_DIVERGENCE'])
+            has_strong = any(s in signals for s in ['GOLDEN_CROSS', 'MACD_GOLDEN_CROSS', 'RSI_OVERSOLD', 'BULLISH_DIVERGENCE'])
+
+            if has_caution:
+                opinion = "주의"
+            elif score >= 70 and has_strong:
+                opinion = "적극 매수"
+            elif score >= 50:
+                opinion = "매수"
+            else:
+                opinion = "관망"
+
         items.append(Top100Item(
             rank=i,
             code=stock.get('code', stock.get('종목코드', '')),
             name=stock.get('name', stock.get('종목명', '')),
             score=stock.get('score', stock.get('점수', 0)),
-            opinion=stock.get('opinion', stock.get('의견', '관망')),
+            opinion=opinion,
             current_price=current_price,
             change_rate=change_rate,
-            rsi=stock.get('rsi', stock.get('RSI')),
-            macd_signal=stock.get('macd_signal', stock.get('MACD시그널')),
-            volume_surge=stock.get('volume_surge', stock.get('거래량급증'))
+            rsi=round(rsi, 1) if rsi else None,
+            macd_signal=round(macd, 2) if macd else None,
+            volume_surge=volume_surge
         ))
 
     return Top100Response(

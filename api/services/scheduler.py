@@ -65,7 +65,7 @@ def run_screening_sync():
         python_path = str(venv_python) if venv_python.exists() else sys.executable
 
         result = subprocess.run(
-            [python_path, str(script_path), "--top", "100"],
+            [python_path, str(script_path), "--full", "--top", "100"],
             cwd=str(PROJECT_ROOT),
             capture_output=True,
             text=True,

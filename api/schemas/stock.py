@@ -71,7 +71,7 @@ class Top100Item(BaseModel):
 
     # 주요 지표
     rsi: Optional[float] = None
-    macd_signal: Optional[str] = None
+    macd_signal: Optional[float] = None
     volume_surge: Optional[bool] = Field(None, description="거래량 급증 여부")
 
 

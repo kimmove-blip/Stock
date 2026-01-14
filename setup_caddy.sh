@@ -73,12 +73,37 @@ app.kimhc.dedyn.io {
     # PWA 정적 파일
     reverse_proxy localhost:3000
 }
+
+# ============================================
+# 새 도메인: kims-ai.com
+# ============================================
+
+# 메인 서비스 (PWA + API)
+stock.kims-ai.com {
+    # API 프록시
+    handle /api/* {
+        reverse_proxy localhost:8000
+    }
+
+    # PWA 정적 파일
+    reverse_proxy localhost:3000
+}
+
+# 메인 도메인 → 서브도메인으로 리다이렉트
+kims-ai.com {
+    redir https://stock.kims-ai.com{uri} permanent
+}
 EOF
 
 # Caddy 재시작
 sudo systemctl reload caddy
 
 echo "Caddy 설정 업데이트 완료"
-echo "- 기존 웹: https://stock.kimhc.dedyn.io"
-echo "- PWA 앱:  https://app.kimhc.dedyn.io"
-echo "- API:     https://stock.kimhc.dedyn.io/api/*"
+echo ""
+echo "[기존 도메인]"
+echo "- 대시보드: https://stock.kimhc.dedyn.io"
+echo "- PWA 앱:   https://app.kimhc.dedyn.io"
+echo ""
+echo "[새 도메인]"
+echo "- 메인:     https://stock.kims-ai.com"
+echo "- 리다이렉트: https://kims-ai.com → stock.kims-ai.com"

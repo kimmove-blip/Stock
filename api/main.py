@@ -69,7 +69,10 @@ app.add_middleware(
     allow_origins=[
         "http://localhost:3000",           # React 개발 서버
         "http://localhost:5173",           # Vite 개발 서버
-        "https://stock.kimhc.dedyn.io",    # 프로덕션 도메인
+        "https://stock.kimhc.dedyn.io",    # 기존 도메인
+        "https://app.kimhc.dedyn.io",      # 기존 PWA 도메인
+        "https://stock.kims-ai.com",       # 새 도메인
+        "https://kims-ai.com",             # 새 메인 도메인
     ],
     allow_credentials=True,
     allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
