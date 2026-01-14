@@ -1,6 +1,6 @@
 """
 백그라운드 스케줄러
-30분마다 TOP100 스크리닝 실행
+30분마다 TOP100 스크리닝 실행 + 캐싱
 """
 
 import asyncio
@@ -8,6 +8,9 @@ import threading
 import subprocess
 import sys
 import os
+import json
+import requests
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, time as dt_time
 from pathlib import Path
 
@@ -18,6 +21,7 @@ PROJECT_ROOT = Path(__file__).parent.parent.parent
 _scheduler_task = None
 _last_run = None
 _is_running = False
+_is_caching = False  # 캐싱 중복 방지 플래그
 
 
 def is_market_hours() -> bool:
@@ -66,6 +70,8 @@ def run_screening_sync():
         if result.returncode == 0:
             _last_run = datetime.now()
             print(f"[스케줄러] 스크리닝 완료: {_last_run}")
+            # 스크리닝 완료 후 TOP100 캐싱 실행
+            threading.Thread(target=cache_top100_stocks, daemon=True).start()
             return True
         else:
             print(f"[스케줄러] 스크리닝 실패: {result.stderr[:500]}")
@@ -145,3 +151,79 @@ def run_initial_screening():
     """서버 시작 시 초기 스크리닝 (장 시간일 때만)"""
     if is_market_hours():
         threading.Thread(target=run_screening_sync, daemon=True).start()
+
+
+def run_initial_caching():
+    """서버 시작 시 TOP100 캐싱 (10초 딜레이 후)"""
+    import time
+
+    def delayed_cache():
+        time.sleep(10)  # 서버 완전 시작 대기
+        cache_top100_stocks()
+
+    threading.Thread(target=delayed_cache, daemon=True).start()
+    print("[캐싱] 서버 시작 후 10초 뒤 TOP100 캐싱 예약됨")
+
+
+def cache_top100_stocks():
+    """TOP100 종목 캐싱 (상세 + 분석)"""
+    global _is_caching
+
+    # 중복 실행 방지
+    if _is_caching:
+        print("[캐싱] 이미 캐싱 중, 건너뜀")
+        return
+
+    _is_caching = True
+
+    try:
+        print(f"[캐싱] TOP100 종목 캐싱 시작: {datetime.now()}")
+
+        # 최신 TOP100 JSON 파일 찾기
+        output_dir = PROJECT_ROOT / "output"
+        json_files = sorted(output_dir.glob("top100_*.json"), reverse=True)
+
+        if not json_files:
+            print("[캐싱] TOP100 파일 없음")
+            return
+
+        with open(json_files[0]) as f:
+            data = json.load(f)
+
+        stocks = data.get('stocks', data.get('items', []))[:20]  # 상위 20개만
+        codes = [s['code'] for s in stocks]
+
+        print(f"[캐싱] {len(codes)}개 종목 캐싱 시작")
+
+        API_BASE = "http://localhost:8000/api"
+        success = 0
+
+        def cache_stock(code):
+            import time
+            try:
+                # 종목 상세 캐싱
+                requests.get(f"{API_BASE}/stocks/{code}", timeout=60)
+                time.sleep(0.5)  # 서버 부하 완화
+                # AI 분석 캐싱
+                requests.get(f"{API_BASE}/stocks/{code}/analysis", timeout=60)
+                time.sleep(0.5)
+                return True
+            except:
+                return False
+
+        # 3개 동시 처리 (서버 부하 고려)
+        with ThreadPoolExecutor(max_workers=3) as executor:
+            results = list(executor.map(cache_stock, codes))
+            success = sum(results)
+
+        print(f"[캐싱] 완료: {success}/{len(codes)} 종목 캐싱됨")
+
+    except Exception as e:
+        print(f"[캐싱] 오류: {e}")
+    finally:
+        _is_caching = False
+
+
+def run_caching_only():
+    """캐싱만 실행 (스크리닝 없이)"""
+    threading.Thread(target=cache_top100_stocks, daemon=True).start()

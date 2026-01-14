@@ -130,7 +130,7 @@ def get_top100_analysis(code: str) -> Optional[Dict]:
                         elif score >= 30:
                             opinion = '주의'
                         else:
-                            opinion = '매도'
+                            opinion = '하락 신호'
 
                         # 시그널 기반 코멘트 생성
                         signal_desc = {
@@ -395,7 +395,7 @@ async def analyze_stock(code: str):
             elif score >= 30:
                 opinion = '주의'
             else:
-                opinion = '매도'
+                opinion = '하락 신호'
 
         result = StockAnalysis(
             code=code,
@@ -458,7 +458,7 @@ async def analyze_stock(code: str):
         elif score >= 30:
             opinion = '주의'
         else:
-            opinion = '매도'
+            opinion = '하락 신호'
 
         # 신호 정리
         signals = {

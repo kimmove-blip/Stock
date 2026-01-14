@@ -30,10 +30,12 @@ async def lifespan(app: FastAPI):
 
     # 백그라운드 스케줄러 시작 (30분마다 TOP100 스크리닝)
     try:
-        from api.services.scheduler import start_scheduler, run_initial_screening
+        from api.services.scheduler import start_scheduler, run_initial_screening, run_initial_caching
         start_scheduler(interval_minutes=30)
         # 장 시간이면 시작 시 한 번 실행
         run_initial_screening()
+        # 서버 시작 시 TOP100 캐싱 (10초 후)
+        run_initial_caching()
     except Exception as e:
         print(f"⚠️ 스케줄러 시작 실패: {e}")
 

@@ -39,7 +39,7 @@ class PortfolioItemResponse(PortfolioItemBase):
     profit_loss_rate: Optional[float] = Field(None, description="손익률 (%)")
 
     # AI 분석 정보
-    ai_opinion: Optional[str] = Field(None, description="AI 의견 (매수/보유/매도/손절)")
+    ai_opinion: Optional[str] = Field(None, description="AI 의견 (매수/관망/주의/하락 신호)")
     ai_score: Optional[float] = Field(None, description="AI 점수")
 
     created_at: Optional[datetime] = None

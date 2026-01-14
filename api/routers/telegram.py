@@ -222,8 +222,7 @@ async def check_verification(
 
 <b>알림 종류:</b>
 - 보유종목 하락 알림
-- 매도 신호 알림
-- 손절 신호 알림
+- 하락 신호 감지 알림
 
 설정에서 알림을 켜시면 실시간 알림을 받으실 수 있습니다."""
             send_telegram_message(chat_id, welcome_msg)
@@ -279,8 +278,7 @@ async def test_telegram(
 
 <b>알림 종류:</b>
 - 보유종목 하락 알림
-- 매도 신호 알림
-- 손절 신호 알림"""
+- 하락 신호 감지 알림"""
 
     success = send_telegram_message(chat_id, message)
 

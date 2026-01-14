@@ -78,126 +78,74 @@ def format_number(num: float) -> str:
 @router.get("", response_model=MarketResponse)
 async def get_market_indices():
     """
-    코스피/코스닥 실시간 지수 조회
+    코스피/코스닥 실시간 지수 조회 (FinanceDataReader 사용)
     """
     try:
-        from pykrx import stock
+        import FinanceDataReader as fdr
 
-        # 오늘 날짜 (장 마감 전이면 전일 데이터)
         today = datetime.now()
-
-        # 최근 거래일 찾기 (주말/공휴일 제외)
-        for i in range(7):
-            check_date = (today - timedelta(days=i)).strftime("%Y%m%d")
-            try:
-                kospi = stock.get_index_ohlcv(check_date, check_date, "1001")
-                if not kospi.empty:
-                    target_date = check_date
-                    break
-            except:
-                continue
-        else:
-            raise HTTPException(status_code=500, detail="거래일 데이터를 찾을 수 없습니다")
-
-        # 전일 데이터 (비교용)
-        prev_date = None
-        for i in range(1, 10):
-            check_date = (datetime.strptime(target_date, "%Y%m%d") - timedelta(days=i)).strftime("%Y%m%d")
-            try:
-                prev_kospi = stock.get_index_ohlcv(check_date, check_date, "1001")
-                if not prev_kospi.empty:
-                    prev_date = check_date
-                    break
-            except:
-                continue
+        start_date = (today - timedelta(days=10)).strftime("%Y-%m-%d")
+        end_date = today.strftime("%Y-%m-%d")
 
         indices = []
 
-        # 코스피 (1001)
+        # 코스피 (KS11)
         try:
-            kospi = stock.get_index_ohlcv(target_date, target_date, "1001")
-            if not kospi.empty:
-                kospi_value = float(kospi.iloc[-1]['종가'])
-                kospi_volume = int(kospi.iloc[-1]['거래량']) if '거래량' in kospi.columns else 0
-                kospi_trading = int(kospi.iloc[-1]['거래대금']) if '거래대금' in kospi.columns else 0
+            df = fdr.DataReader('KS11', start_date, end_date)
+            if df is not None and len(df) >= 2:
+                current = df.iloc[-1]
+                prev = df.iloc[-2]
 
-                # 전일 대비
-                kospi_change = 0
-                kospi_rate = 0
-                if prev_date:
-                    prev_kospi = stock.get_index_ohlcv(prev_date, prev_date, "1001")
-                    if not prev_kospi.empty:
-                        prev_value = float(prev_kospi.iloc[-1]['종가'])
-                        kospi_change = kospi_value - prev_value
-                        kospi_rate = (kospi_change / prev_value) * 100
+                kospi_value = float(current['Close'])
+                prev_value = float(prev['Close'])
+                kospi_change = kospi_value - prev_value
+                kospi_rate = (kospi_change / prev_value) * 100
+
+                # 거래대금 (Amount 컬럼)
+                trading_value = int(current['Amount']) if 'Amount' in df.columns else 0
 
                 indices.append(IndexData(
                     name="코스피",
-                    code="1001",
+                    code="KS11",
                     value=round(kospi_value, 2),
                     change=round(kospi_change, 2),
                     change_rate=round(kospi_rate, 2),
                     positive=kospi_change >= 0,
-                    volume=kospi_volume,
-                    trading_value=kospi_trading // 100000000 if kospi_trading else None  # 억원
+                    volume=int(current['Volume']) if 'Volume' in df.columns else None,
+                    trading_value=trading_value // 100000000 if trading_value else None
                 ))
         except Exception as e:
             print(f"[Market] 코스피 조회 실패: {e}")
 
-        # 코스닥 (2001)
+        # 코스닥 (KQ11)
         try:
-            kosdaq = stock.get_index_ohlcv(target_date, target_date, "2001")
-            if not kosdaq.empty:
-                kosdaq_value = float(kosdaq.iloc[-1]['종가'])
-                kosdaq_volume = int(kosdaq.iloc[-1]['거래량']) if '거래량' in kosdaq.columns else 0
-                kosdaq_trading = int(kosdaq.iloc[-1]['거래대금']) if '거래대금' in kosdaq.columns else 0
+            df = fdr.DataReader('KQ11', start_date, end_date)
+            if df is not None and len(df) >= 2:
+                current = df.iloc[-1]
+                prev = df.iloc[-2]
 
-                # 전일 대비
-                kosdaq_change = 0
-                kosdaq_rate = 0
-                if prev_date:
-                    prev_kosdaq = stock.get_index_ohlcv(prev_date, prev_date, "2001")
-                    if not prev_kosdaq.empty:
-                        prev_value = float(prev_kosdaq.iloc[-1]['종가'])
-                        kosdaq_change = kosdaq_value - prev_value
-                        kosdaq_rate = (kosdaq_change / prev_value) * 100
+                kosdaq_value = float(current['Close'])
+                prev_value = float(prev['Close'])
+                kosdaq_change = kosdaq_value - prev_value
+                kosdaq_rate = (kosdaq_change / prev_value) * 100
+
+                trading_value = int(current['Amount']) if 'Amount' in df.columns else 0
 
                 indices.append(IndexData(
                     name="코스닥",
-                    code="2001",
+                    code="KQ11",
                     value=round(kosdaq_value, 2),
                     change=round(kosdaq_change, 2),
                     change_rate=round(kosdaq_rate, 2),
                     positive=kosdaq_change >= 0,
-                    volume=kosdaq_volume,
-                    trading_value=kosdaq_trading // 100000000 if kosdaq_trading else None
+                    volume=int(current['Volume']) if 'Volume' in df.columns else None,
+                    trading_value=trading_value // 100000000 if trading_value else None
                 ))
         except Exception as e:
             print(f"[Market] 코스닥 조회 실패: {e}")
 
-        # 시장 정보 (등락 종목 수)
+        # 시장 정보 (기본값)
         market_info = MarketInfo()
-        try:
-            # 코스피 등락 현황
-            kospi_stocks = stock.get_market_ohlcv(target_date, market="KOSPI")
-            if not kospi_stocks.empty:
-                kospi_stocks['변화'] = kospi_stocks['종가'] - kospi_stocks['시가']
-                advancing = len(kospi_stocks[kospi_stocks['등락률'] > 0])
-                declining = len(kospi_stocks[kospi_stocks['등락률'] < 0])
-                unchanged = len(kospi_stocks[kospi_stocks['등락률'] == 0])
-
-                total_volume = kospi_stocks['거래량'].sum()
-                total_value = kospi_stocks['거래대금'].sum()
-
-                market_info = MarketInfo(
-                    total_volume=format_number(total_volume) + "주",
-                    total_value=format_number(total_value),
-                    advancing=advancing,
-                    declining=declining,
-                    unchanged=unchanged
-                )
-        except Exception as e:
-            print(f"[Market] 시장 정보 조회 실패: {e}")
 
         if not indices:
             raise HTTPException(status_code=500, detail="지수 데이터를 가져올 수 없습니다")
@@ -220,7 +168,7 @@ async def get_market_indices():
 async def get_kospi_detail():
     """코스피 상세 정보"""
     result = await get_market_indices()
-    kospi = next((i for i in result.indices if i.code == "1001"), None)
+    kospi = next((i for i in result.indices if i.code == "KS11"), None)
     if not kospi:
         raise HTTPException(status_code=404, detail="코스피 데이터 없음")
     return kospi
@@ -230,7 +178,7 @@ async def get_kospi_detail():
 async def get_kosdaq_detail():
     """코스닥 상세 정보"""
     result = await get_market_indices()
-    kosdaq = next((i for i in result.indices if i.code == "2001"), None)
+    kosdaq = next((i for i in result.indices if i.code == "KQ11"), None)
     if not kosdaq:
         raise HTTPException(status_code=404, detail="코스닥 데이터 없음")
     return kosdaq

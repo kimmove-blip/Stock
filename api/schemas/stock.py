@@ -43,7 +43,7 @@ class StockAnalysis(BaseModel):
     code: str
     name: str
     score: float = Field(..., ge=0, le=100, description="종합 점수 (0-100)")
-    opinion: str = Field(..., description="투자 의견 (매수/보유/매도/관망)")
+    opinion: str = Field(..., description="기술적 신호 (매수/관망/주의/하락 신호)")
 
     # 세부 분석
     technical_score: Optional[float] = Field(None, description="기술적 분석 점수")

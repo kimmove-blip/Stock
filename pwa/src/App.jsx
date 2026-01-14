@@ -22,6 +22,7 @@ import Admin from './pages/Admin';
 import TelegramSettings from './pages/TelegramSettings';
 import Privacy from './pages/Privacy';
 import Loading from './components/Loading';
+import Disclaimer from './components/Disclaimer';
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -99,6 +100,7 @@ export default function App() {
     <QueryClientProvider client={queryClient}>
       <BrowserRouter>
         <AuthProvider>
+          <Disclaimer />
           <AppRoutes />
         </AuthProvider>
       </BrowserRouter>

@@ -248,7 +248,7 @@ def analyze_stock_technical(code: str) -> dict:
         elif score >= 30:
             opinion = '주의'
         else:
-            opinion = '매도'
+            opinion = '하락 신호'
 
         return {
             'current_price': current_price,
@@ -329,8 +329,8 @@ async def analyze_portfolio(
             ai_score=score
         ))
 
-        # 위험 종목 판별
-        if opinion in ['매도', '손절', '손절검토'] or profit_loss_rate < -10:
+        # 주의 종목 판별
+        if opinion in ['하락 신호', '주의'] or profit_loss_rate < -10:
             risk_stocks.append({
                 'code': item['stock_code'],
                 'name': item['stock_name'],
@@ -338,15 +338,15 @@ async def analyze_portfolio(
                 'profit_loss_rate': profit_loss_rate
             })
 
-    # 추천 액션 생성
+    # 포트폴리오 상태 분석 (객관적 데이터 기반)
     if risk_stocks:
-        recommendations.append(f"검토 필요 종목 {len(risk_stocks)}개 확인")
+        recommendations.append(f"주의 종목 {len(risk_stocks)}개")
     if total_value > total_investment * 1.1:
-        recommendations.append("수익 실현 타이밍 검토")
+        recommendations.append("수익률 +10% 이상")
     elif total_value < total_investment * 0.9:
-        recommendations.append("손절 또는 물타기 검토 필요")
+        recommendations.append("수익률 -10% 이하")
     else:
-        recommendations.append("전체적으로 안정적인 상태")
+        recommendations.append("수익률 ±10% 이내")
 
     total_profit_loss = int(total_value - total_investment)
     total_profit_loss_rate = round((total_profit_loss / total_investment * 100), 2) if total_investment > 0 else 0
