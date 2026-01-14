@@ -1,4 +1,4 @@
-import { useParams, useNavigate } from 'react-router-dom';
+import { useParams, useNavigate, useLocation } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { stockAPI, portfolioAPI, watchlistAPI } from '../api/client';
 import Loading from '../components/Loading';
@@ -7,7 +7,11 @@ import { ArrowLeft, Star, Plus, TrendingUp, TrendingDown } from 'lucide-react';
 export default function StockDetail() {
   const { code } = useParams();
   const navigate = useNavigate();
+  const location = useLocation();
   const queryClient = useQueryClient();
+
+  // RealtimePicks에서 전달된 TOP100 점수 (있으면 사용)
+  const top100Score = location.state?.top100Score;
 
   const { data: detail, isLoading: detailLoading } = useQuery({
     queryKey: ['stock', code],
@@ -157,7 +161,7 @@ export default function StockDetail() {
           <div className="card-body p-4">
             <div className="flex justify-between items-center mb-3">
               <h3 className="font-bold">AI 분석</h3>
-              <div className="badge badge-primary badge-lg">{analysis.score}점</div>
+              <div className="badge badge-primary badge-lg">{top100Score ?? analysis.score}점</div>
             </div>
 
             <div className="flex items-center gap-2 mb-3">

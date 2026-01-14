@@ -29,7 +29,9 @@ export default function About() {
       {/* 앱 아이콘 */}
       <div className="text-center py-6">
         <div className="w-20 h-20 bg-gradient-to-br from-purple-600 to-indigo-600 rounded-2xl mx-auto flex items-center justify-center mb-4 shadow-lg">
-          <TrendingUp size={40} className="text-white" />
+          <span className="text-white font-bold text-lg leading-tight text-center">
+            Kim's<br />AI
+          </span>
         </div>
         <p className="text-gray-500">버전 1.0.0</p>
       </div>

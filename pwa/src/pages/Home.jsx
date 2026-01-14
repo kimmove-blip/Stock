@@ -64,7 +64,7 @@ export default function Home() {
               <p className="font-bold">{user?.username || '사용자'}님</p>
             </div>
           </div>
-          <button className="relative p-2">
+          <button className="relative p-2" onClick={() => navigate('/telegram')}>
             <Bell className="text-white" size={22} />
             <span className="absolute top-1 right-1 w-2 h-2 bg-red-500 rounded-full"></span>
           </button>

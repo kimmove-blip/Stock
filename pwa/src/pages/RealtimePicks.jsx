@@ -192,7 +192,7 @@ export default function RealtimePicks() {
           return (
             <div
               key={stock.code}
-              onClick={() => navigate(`/stock/${stock.code}`)}
+              onClick={() => navigate(`/stock/${stock.code}`, { state: { top100Score: stockData.score } })}
               className="bg-white rounded-xl p-4 shadow-sm flex items-center gap-3 cursor-pointer hover:shadow-md transition-shadow"
             >
               <div className="w-8 h-8 bg-red-500 rounded-full flex items-center justify-center text-white font-bold text-sm">
