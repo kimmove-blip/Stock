@@ -1,22 +1,30 @@
-import { useState } from 'react';
+import { useState, useMemo } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useNavigate } from 'react-router-dom';
-import { portfolioAPI, stockAPI } from '../api/client';
+import { portfolioAPI } from '../api/client';
+import { useStockCache } from '../contexts/StockCacheContext';
 import Loading from '../components/Loading';
-import { Plus, Trash2, Edit2, TrendingUp, TrendingDown, Search, Activity, AlertTriangle, CheckCircle } from 'lucide-react';
+import { Plus, Trash2, Edit2, TrendingUp, TrendingDown, X, Activity, AlertTriangle, CheckCircle } from 'lucide-react';
 
 export default function Portfolio() {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
+  const { searchStocksPrefix } = useStockCache();
+
   const [showAddModal, setShowAddModal] = useState(false);
   const [showEditModal, setShowEditModal] = useState(false);
   const [editingItem, setEditingItem] = useState(null);
   const [showDiagnosis, setShowDiagnosis] = useState(false);
   const [searchKeyword, setSearchKeyword] = useState('');
-  const [searchResults, setSearchResults] = useState([]);
   const [selectedStock, setSelectedStock] = useState(null);
   const [buyPrice, setBuyPrice] = useState('');
   const [quantity, setQuantity] = useState(1);
+
+  // 실시간 종목 검색 (클라이언트 사이드)
+  const searchResults = useMemo(() => {
+    if (!searchKeyword.trim()) return [];
+    return searchStocksPrefix(searchKeyword, 20);
+  }, [searchKeyword, searchStocksPrefix]);
 
   // 포트폴리오 목록 (1분 캐시로 서버 부하 감소)
   const { data, isLoading, error, refetch } = useQuery({
@@ -63,20 +71,9 @@ export default function Portfolio() {
 
   const resetForm = () => {
     setSearchKeyword('');
-    setSearchResults([]);
     setSelectedStock(null);
     setBuyPrice('');
     setQuantity(1);
-  };
-
-  const handleSearch = async () => {
-    if (!searchKeyword.trim()) return;
-    try {
-      const { data } = await stockAPI.search(searchKeyword);
-      setSearchResults(data);
-    } catch (error) {
-      console.error('Search failed:', error);
-    }
   };
 
   const handleAdd = () => {
@@ -355,39 +352,61 @@ export default function Portfolio() {
 
       {/* 종목 추가 모달 */}
       {showAddModal && (
-        <div className="modal modal-open">
-          <div className="modal-box">
+        <div className="modal modal-open items-start pt-10">
+          <div className="modal-box mt-0">
             <h3 className="font-bold text-lg">종목 추가</h3>
 
             {!selectedStock ? (
               <>
                 <div className="form-control mt-4">
-                  <div className="input-group">
+                  <div className="relative">
                     <input
                       type="text"
                       value={searchKeyword}
                       onChange={(e) => setSearchKeyword(e.target.value)}
-                      onKeyDown={(e) => e.key === 'Enter' && handleSearch()}
-                      className="input input-bordered flex-1"
-                      placeholder="종목명 또는 코드"
+                      className="input input-bordered w-full pr-10"
+                      placeholder="종목명 또는 코드 입력"
+                      autoFocus
                     />
-                    <button onClick={handleSearch} className="btn btn-primary">
-                      <Search size={18} />
-                    </button>
+                    {searchKeyword && (
+                      <button
+                        onClick={() => setSearchKeyword('')}
+                        className="absolute right-3 top-1/2 -translate-y-1/2"
+                      >
+                        <X size={18} className="text-base-content/60" />
+                      </button>
+                    )}
                   </div>
                 </div>
 
-                <div className="mt-4 max-h-60 overflow-y-auto">
-                  {searchResults.map((stock) => (
-                    <div
-                      key={stock.code}
-                      onClick={() => setSelectedStock(stock)}
-                      className="p-3 hover:bg-base-200 cursor-pointer rounded"
-                    >
-                      <p className="font-medium">{stock.name}</p>
-                      <p className="text-sm text-base-content/60">{stock.code}</p>
+                {/* 실시간 검색 결과 - 모달 내부 스크롤 */}
+                <div className="mt-3 max-h-[50vh] overflow-y-auto">
+                  {searchKeyword && searchResults.length > 0 && (
+                    <div className="space-y-1">
+                      {searchResults.map((stock) => (
+                        <button
+                          key={stock.code}
+                          onClick={() => setSelectedStock(stock)}
+                          className="w-full p-3 bg-base-200 hover:bg-base-300 rounded-lg text-left"
+                        >
+                          <p className="font-medium">{stock.name}</p>
+                          <p className="text-sm text-base-content/60">{stock.code} · {stock.market}</p>
+                        </button>
+                      ))}
                     </div>
-                  ))}
+                  )}
+
+                  {searchKeyword && searchResults.length === 0 && (
+                    <div className="p-4 text-center text-base-content/60">
+                      검색 결과가 없습니다
+                    </div>
+                  )}
+
+                  {!searchKeyword && (
+                    <div className="p-4 text-center text-base-content/60 text-sm">
+                      종목명 또는 코드를 입력하세요
+                    </div>
+                  )}
                 </div>
               </>
             ) : (

@@ -3,7 +3,7 @@ import { useParams, useNavigate, useLocation } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { stockAPI, portfolioAPI, watchlistAPI } from '../api/client';
 import Loading from '../components/Loading';
-import { ArrowLeft, Star, Plus, TrendingUp, TrendingDown } from 'lucide-react';
+import { ArrowLeft, Star, Plus, TrendingUp, TrendingDown, FileText } from 'lucide-react';
 import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer } from 'recharts';
 
 export default function StockDetail() {
@@ -68,6 +68,15 @@ export default function StockDetail() {
     queryKey: ['watchlist'],
     queryFn: () => watchlistAPI.list().then((res) => res.data),
     staleTime: 1000 * 60 * 5,
+  });
+
+  // 펀더멘탈 분석 데이터
+  const { data: fundamental, isLoading: fundamentalLoading } = useQuery({
+    queryKey: ['fundamental', code],
+    queryFn: () => stockAPI.fundamental(code).then((res) => res.data),
+    enabled: !!detail,
+    staleTime: 1000 * 60 * 30, // 30분 캐시
+    retry: 1,
   });
 
   // 보유/관심 여부 확인
@@ -418,6 +427,124 @@ export default function StockDetail() {
               <span>20일 저점: {analysis.support_resistance.recent_low?.toLocaleString()}원</span>
               <span>20일 고점: {analysis.support_resistance.recent_high?.toLocaleString()}원</span>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* 펀더멘탈 분석 */}
+      {fundamentalLoading ? (
+        <Loading text="펀더멘탈 분석 중..." />
+      ) : fundamental && (
+        <div className="card bg-base-100 shadow mb-4">
+          <div className="card-body p-4">
+            <h3 className="font-bold mb-3 flex items-center gap-2">
+              <FileText size={18} /> 펀더멘탈 분석
+            </h3>
+
+            {/* 점수 게이지 바 */}
+            <div className="flex items-center gap-2 mb-4">
+              <span className="text-xs text-base-content/60">낮음</span>
+              <div className="flex-1 h-2 bg-base-200 rounded-full overflow-hidden">
+                <div
+                  className={`h-full transition-all ${
+                    fundamental.level === '높음' ? 'bg-success' :
+                    fundamental.level === '보통' ? 'bg-warning' : 'bg-error'
+                  }`}
+                  style={{ width: `${fundamental.score}%` }}
+                />
+              </div>
+              <span className="text-xs text-base-content/60">높음</span>
+              <span className={`text-sm font-bold ml-1 ${
+                fundamental.level === '높음' ? 'text-success' :
+                fundamental.level === '보통' ? 'text-warning' : 'text-error'
+              }`}>{fundamental.level}</span>
+            </div>
+
+            {/* 주요 비율 */}
+            <div className="grid grid-cols-4 gap-2 mb-4">
+              <div className="bg-base-200 rounded p-2 text-center">
+                <p className="text-xs text-base-content/60">ROE</p>
+                <p className={`font-semibold text-sm ${
+                  fundamental.roe && fundamental.roe >= 10 ? 'text-success' :
+                  fundamental.roe && fundamental.roe < 0 ? 'text-error' : ''
+                }`}>
+                  {fundamental.roe != null ? `${fundamental.roe.toFixed(1)}%` : '-'}
+                </p>
+              </div>
+              <div className="bg-base-200 rounded p-2 text-center">
+                <p className="text-xs text-base-content/60">부채비율</p>
+                <p className={`font-semibold text-sm ${
+                  fundamental.debt_ratio && fundamental.debt_ratio < 100 ? 'text-success' :
+                  fundamental.debt_ratio && fundamental.debt_ratio > 200 ? 'text-error' : ''
+                }`}>
+                  {fundamental.debt_ratio != null ? `${fundamental.debt_ratio.toFixed(0)}%` : '-'}
+                </p>
+              </div>
+              <div className="bg-base-200 rounded p-2 text-center">
+                <p className="text-xs text-base-content/60">유동비율</p>
+                <p className={`font-semibold text-sm ${
+                  fundamental.liquidity_ratio && fundamental.liquidity_ratio >= 150 ? 'text-success' :
+                  fundamental.liquidity_ratio && fundamental.liquidity_ratio < 100 ? 'text-error' : ''
+                }`}>
+                  {fundamental.liquidity_ratio != null ? `${fundamental.liquidity_ratio.toFixed(0)}%` : '-'}
+                </p>
+              </div>
+              <div className="bg-base-200 rounded p-2 text-center">
+                <p className="text-xs text-base-content/60">영업이익률</p>
+                <p className={`font-semibold text-sm ${
+                  fundamental.operating_margin && fundamental.operating_margin >= 10 ? 'text-success' :
+                  fundamental.operating_margin && fundamental.operating_margin < 0 ? 'text-error' : ''
+                }`}>
+                  {fundamental.operating_margin != null ? `${fundamental.operating_margin.toFixed(1)}%` : '-'}
+                </p>
+              </div>
+            </div>
+
+            {/* 연도별 실적 */}
+            {fundamental.financials?.length > 0 && (
+              <div className="overflow-x-auto mb-4">
+                <table className="table table-xs w-full">
+                  <thead>
+                    <tr className="text-base-content/60">
+                      <th className="text-left">연도</th>
+                      <th className="text-right">매출액</th>
+                      <th className="text-right">영업이익</th>
+                      <th className="text-right">순이익</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {fundamental.financials.map((f) => (
+                      <tr key={f.year}>
+                        <td>{f.year}</td>
+                        <td className="text-right">
+                          {f.revenue != null ? `${f.revenue.toLocaleString()}억` : '-'}
+                          {f.revenue_yoy != null && (
+                            <span className={`text-xs ml-1 ${f.revenue_yoy >= 0 ? 'text-success' : 'text-error'}`}>
+                              ({f.revenue_yoy >= 0 ? '+' : ''}{f.revenue_yoy.toFixed(1)}%)
+                            </span>
+                          )}
+                        </td>
+                        <td className="text-right">
+                          {f.operating_income != null ? `${f.operating_income.toLocaleString()}억` : '-'}
+                        </td>
+                        <td className="text-right">
+                          {f.net_income != null ? `${f.net_income.toLocaleString()}억` : '-'}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+
+            {/* AI 코멘트 */}
+            {fundamental.comment && (
+              <div className="bg-info/10 p-3 rounded">
+                <p className="text-sm text-base-content/80 leading-relaxed">
+                  {fundamental.comment}
+                </p>
+              </div>
+            )}
           </div>
         </div>
       )}

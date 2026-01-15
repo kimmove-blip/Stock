@@ -1,6 +1,7 @@
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { AuthProvider, useAuth } from './contexts/AuthContext';
+import { StockCacheProvider } from './contexts/StockCacheContext';
 import Layout from './components/Layout';
 import Login from './pages/Login';
 import Register from './pages/Register';
@@ -28,6 +29,7 @@ import DeleteData from './pages/DeleteData';
 import Loading from './components/Loading';
 import Disclaimer from './components/Disclaimer';
 import PushPermissionPrompt from './components/PushPermissionPrompt';
+import AnnouncementPopup from './components/AnnouncementPopup';
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -109,9 +111,12 @@ export default function App() {
     <QueryClientProvider client={queryClient}>
       <BrowserRouter>
         <AuthProvider>
-          <Disclaimer />
-          <PushPermissionPrompt />
-          <AppRoutes />
+          <StockCacheProvider>
+            <Disclaimer />
+            <PushPermissionPrompt />
+            <AnnouncementPopup />
+            <AppRoutes />
+          </StockCacheProvider>
         </AuthProvider>
       </BrowserRouter>
     </QueryClientProvider>

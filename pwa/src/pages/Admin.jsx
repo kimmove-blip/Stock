@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useNavigate } from 'react-router-dom';
-import { contactAPI, adminAPI } from '../api/client';
+import { contactAPI, adminAPI, announcementsAPI } from '../api/client';
 import { useAuth } from '../contexts/AuthContext';
 import {
   MessageSquare,
@@ -24,6 +24,12 @@ import {
   Briefcase,
   Star,
   Calendar,
+  Megaphone,
+  Plus,
+  Trash2,
+  Edit3,
+  ToggleLeft,
+  ToggleRight,
 } from 'lucide-react';
 
 // 상태 배지 컴포넌트
@@ -270,6 +276,245 @@ function ContactsTab() {
           onClose={() => setSelectedContact(null)}
           onUpdate={handleUpdate}
         />
+      )}
+    </>
+  );
+}
+
+// 공지사항 관리 탭
+function AnnouncementsTab() {
+  const queryClient = useQueryClient();
+  const [showForm, setShowForm] = useState(false);
+  const [editingAnn, setEditingAnn] = useState(null);
+  const [formData, setFormData] = useState({
+    title: '',
+    content: '',
+    type: 'info',
+    show_once: false,
+  });
+
+  // 공지사항 목록 조회
+  const { data: announcements, isLoading } = useQuery({
+    queryKey: ['admin-announcements'],
+    queryFn: () => announcementsAPI.adminList().then((res) => res.data),
+  });
+
+  // 공지사항 생성/수정
+  const saveMutation = useMutation({
+    mutationFn: (data) =>
+      editingAnn
+        ? announcementsAPI.adminUpdate(editingAnn.id, data)
+        : announcementsAPI.adminCreate(data),
+    onSuccess: () => {
+      queryClient.invalidateQueries(['admin-announcements']);
+      resetForm();
+    },
+  });
+
+  // 공지사항 토글
+  const toggleMutation = useMutation({
+    mutationFn: (id) => announcementsAPI.adminToggle(id),
+    onSuccess: () => {
+      queryClient.invalidateQueries(['admin-announcements']);
+    },
+  });
+
+  // 공지사항 삭제
+  const deleteMutation = useMutation({
+    mutationFn: (id) => announcementsAPI.adminDelete(id),
+    onSuccess: () => {
+      queryClient.invalidateQueries(['admin-announcements']);
+    },
+  });
+
+  const resetForm = () => {
+    setShowForm(false);
+    setEditingAnn(null);
+    setFormData({ title: '', content: '', type: 'info', show_once: false });
+  };
+
+  const handleEdit = (ann) => {
+    setEditingAnn(ann);
+    setFormData({
+      title: ann.title,
+      content: ann.content,
+      type: ann.type,
+      show_once: Boolean(ann.show_once),
+    });
+    setShowForm(true);
+  };
+
+  const handleSubmit = (e) => {
+    e.preventDefault();
+    if (!formData.title || !formData.content) return;
+    saveMutation.mutate(formData);
+  };
+
+  const handleDelete = (id) => {
+    if (window.confirm('정말 삭제하시겠습니까?')) {
+      deleteMutation.mutate(id);
+    }
+  };
+
+  const typeLabels = {
+    info: { label: '정보', color: 'bg-blue-100 text-blue-700' },
+    warning: { label: '주의', color: 'bg-yellow-100 text-yellow-700' },
+    error: { label: '긴급', color: 'bg-red-100 text-red-700' },
+  };
+
+  return (
+    <>
+      {/* 새 공지 버튼 */}
+      <button
+        onClick={() => {
+          resetForm();
+          setShowForm(true);
+        }}
+        className="w-full mb-4 py-3 bg-purple-600 text-white rounded-xl font-medium flex items-center justify-center gap-2 hover:bg-purple-700 transition"
+      >
+        <Plus size={20} />
+        새 공지사항 등록
+      </button>
+
+      {/* 공지 작성/수정 폼 */}
+      {showForm && (
+        <div className="bg-white rounded-xl p-4 shadow-sm mb-4">
+          <h3 className="font-bold mb-3">{editingAnn ? '공지 수정' : '새 공지 등록'}</h3>
+          <form onSubmit={handleSubmit} className="space-y-3">
+            <input
+              type="text"
+              placeholder="제목"
+              value={formData.title}
+              onChange={(e) => setFormData({ ...formData, title: e.target.value })}
+              className="w-full px-4 py-2 border rounded-lg focus:ring-2 focus:ring-purple-500"
+              required
+            />
+            <textarea
+              placeholder="내용"
+              value={formData.content}
+              onChange={(e) => setFormData({ ...formData, content: e.target.value })}
+              rows={4}
+              className="w-full px-4 py-2 border rounded-lg focus:ring-2 focus:ring-purple-500 resize-none"
+              required
+            />
+            <div className="flex gap-2">
+              {Object.entries(typeLabels).map(([key, { label }]) => (
+                <button
+                  key={key}
+                  type="button"
+                  onClick={() => setFormData({ ...formData, type: key })}
+                  className={`flex-1 py-2 rounded-lg text-sm font-medium transition ${
+                    formData.type === key
+                      ? 'bg-purple-600 text-white'
+                      : 'bg-gray-100 text-gray-600'
+                  }`}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+            <label className="flex items-center gap-2 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={formData.show_once}
+                onChange={(e) => setFormData({ ...formData, show_once: e.target.checked })}
+                className="w-4 h-4 rounded border-gray-300"
+              />
+              <span className="text-sm text-gray-600">한 번만 표시 (확인 후 다시 안 보임)</span>
+            </label>
+            <div className="flex gap-2">
+              <button
+                type="button"
+                onClick={resetForm}
+                className="flex-1 py-2 bg-gray-100 text-gray-600 rounded-lg font-medium"
+              >
+                취소
+              </button>
+              <button
+                type="submit"
+                disabled={saveMutation.isPending}
+                className="flex-1 py-2 bg-purple-600 text-white rounded-lg font-medium disabled:opacity-50"
+              >
+                {saveMutation.isPending ? '저장 중...' : '저장'}
+              </button>
+            </div>
+          </form>
+        </div>
+      )}
+
+      {/* 공지사항 목록 */}
+      {isLoading ? (
+        <div className="flex justify-center py-12">
+          <div className="animate-spin rounded-full h-8 w-8 border-2 border-purple-600 border-t-transparent"></div>
+        </div>
+      ) : announcements?.length === 0 ? (
+        <div className="text-center py-12">
+          <Megaphone size={48} className="mx-auto text-gray-300 mb-4" />
+          <p className="text-gray-500">등록된 공지사항이 없습니다</p>
+        </div>
+      ) : (
+        <div className="space-y-3">
+          {announcements?.map((ann) => (
+            <div
+              key={ann.id}
+              className={`bg-white rounded-xl p-4 shadow-sm ${
+                !ann.is_active ? 'opacity-50' : ''
+              }`}
+            >
+              <div className="flex items-start justify-between gap-3">
+                <div className="flex-1">
+                  <div className="flex items-center gap-2 mb-1">
+                    <span className={`px-2 py-0.5 rounded text-xs font-medium ${typeLabels[ann.type]?.color}`}>
+                      {typeLabels[ann.type]?.label}
+                    </span>
+                    {!ann.is_active && (
+                      <span className="px-2 py-0.5 rounded text-xs font-medium bg-gray-100 text-gray-500">
+                        비활성
+                      </span>
+                    )}
+                    {ann.show_once && (
+                      <span className="px-2 py-0.5 rounded text-xs font-medium bg-gray-100 text-gray-500">
+                        1회
+                      </span>
+                    )}
+                  </div>
+                  <h4 className="font-semibold text-gray-800 mb-1">{ann.title}</h4>
+                  <p className="text-sm text-gray-600 line-clamp-2">{ann.content}</p>
+                  <p className="text-xs text-gray-400 mt-2">
+                    {new Date(ann.created_at).toLocaleString('ko-KR')}
+                  </p>
+                </div>
+                <div className="flex flex-col gap-1">
+                  <button
+                    onClick={() => toggleMutation.mutate(ann.id)}
+                    className="p-2 hover:bg-gray-100 rounded-lg"
+                    title={ann.is_active ? '비활성화' : '활성화'}
+                  >
+                    {ann.is_active ? (
+                      <ToggleRight size={20} className="text-green-500" />
+                    ) : (
+                      <ToggleLeft size={20} className="text-gray-400" />
+                    )}
+                  </button>
+                  <button
+                    onClick={() => handleEdit(ann)}
+                    className="p-2 hover:bg-gray-100 rounded-lg"
+                    title="수정"
+                  >
+                    <Edit3 size={18} className="text-blue-500" />
+                  </button>
+                  <button
+                    onClick={() => handleDelete(ann.id)}
+                    className="p-2 hover:bg-gray-100 rounded-lg"
+                    title="삭제"
+                  >
+                    <Trash2 size={18} className="text-red-500" />
+                  </button>
+                </div>
+              </div>
+            </div>
+          ))}
+        </div>
       )}
     </>
   );
@@ -523,6 +768,7 @@ export default function Admin() {
   const tabs = [
     { key: 'users', label: '회원 관리', icon: Users },
     { key: 'contacts', label: '문의 관리', icon: MessageSquare },
+    { key: 'announcements', label: '공지사항', icon: Megaphone },
   ];
 
   return (
@@ -553,6 +799,7 @@ export default function Admin() {
       {/* 탭 내용 */}
       {activeTab === 'users' && <UsersTab currentUser={user} />}
       {activeTab === 'contacts' && <ContactsTab />}
+      {activeTab === 'announcements' && <AnnouncementsTab />}
     </div>
   );
 }

@@ -1,7 +1,8 @@
-import { useState } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { stockAPI, themeAPI } from '../api/client';
-import { Search as SearchIcon, X, Tag, TrendingUp } from 'lucide-react';
+import { themeAPI } from '../api/client';
+import { useStockCache } from '../contexts/StockCacheContext';
+import { Search as SearchIcon, X, Tag, TrendingUp, Loader2 } from 'lucide-react';
 
 // 인기 테마 목록
 const POPULAR_THEMES = [
@@ -17,105 +18,151 @@ const POPULAR_STOCKS = ['삼성전자', 'SK하이닉스', 'NAVER', '현대차', 
 
 export default function Search() {
   const navigate = useNavigate();
+  const { searchStocksPrefix, loading: cacheLoading } = useStockCache();
+
   const [keyword, setKeyword] = useState('');
-  const [stockResults, setStockResults] = useState([]);
   const [themeResults, setThemeResults] = useState({ themes: [], stocks: [] });
-  const [loading, setLoading] = useState(false);
-  const [searched, setSearched] = useState(false);
-  const [activeTab, setActiveTab] = useState('all'); // 'all', 'stock', 'theme'
+  const [themeLoading, setThemeLoading] = useState(false);
+  const [showThemeResults, setShowThemeResults] = useState(false);
 
-  const handleSearch = async () => {
-    if (!keyword.trim()) return;
+  // 실시간 종목 검색 (클라이언트 사이드 - 즉시 반영)
+  const stockResults = useMemo(() => {
+    if (!keyword.trim()) return [];
+    return searchStocksPrefix(keyword, 30);
+  }, [keyword, searchStocksPrefix]);
 
-    setLoading(true);
-    setSearched(true);
-
-    try {
-      // 종목 검색과 테마 검색 동시 실행
-      const [stockRes, themeRes] = await Promise.all([
-        stockAPI.search(keyword).catch(() => ({ data: [] })),
-        themeAPI.search(keyword).catch(() => ({ data: { themes: [], stocks: [] } })),
-      ]);
-
-      setStockResults(stockRes.data || []);
-      setThemeResults(themeRes.data || { themes: [], stocks: [] });
-    } catch (error) {
-      console.error('Search failed:', error);
-      setStockResults([]);
+  // 테마 검색 (서버 사이드 - debounce)
+  useEffect(() => {
+    if (!keyword.trim() || keyword.length < 2) {
       setThemeResults({ themes: [], stocks: [] });
-    } finally {
-      setLoading(false);
+      setShowThemeResults(false);
+      return;
     }
-  };
+
+    const timer = setTimeout(async () => {
+      try {
+        setThemeLoading(true);
+        const res = await themeAPI.search(keyword);
+        setThemeResults(res.data || { themes: [], stocks: [] });
+        setShowThemeResults(true);
+      } catch (error) {
+        console.error('Theme search failed:', error);
+      } finally {
+        setThemeLoading(false);
+      }
+    }, 300);
+
+    return () => clearTimeout(timer);
+  }, [keyword]);
 
   const handleThemeClick = async (themeId) => {
-    setLoading(true);
-    setSearched(true);
-    setActiveTab('theme');
-
+    setThemeLoading(true);
     try {
       const { data } = await themeAPI.detail(themeId);
       setThemeResults({
         themes: [{ id: data.id, name: data.name, description: data.description }],
         stocks: data.stocks.map((s) => ({ ...s, themes: [data.name] })),
       });
-      setStockResults([]);
       setKeyword(data.name);
+      setShowThemeResults(true);
     } catch (error) {
       console.error('Theme search failed:', error);
     } finally {
-      setLoading(false);
+      setThemeLoading(false);
     }
   };
 
   const handleClear = () => {
     setKeyword('');
-    setStockResults([]);
     setThemeResults({ themes: [], stocks: [] });
-    setSearched(false);
-    setActiveTab('all');
+    setShowThemeResults(false);
   };
 
-  const hasStockResults = stockResults.length > 0;
-  const hasThemeResults = themeResults.themes?.length > 0 || themeResults.stocks?.length > 0;
-  const totalResults = stockResults.length + (themeResults.stocks?.length || 0);
+  const handleStockClick = (code) => {
+    navigate(`/stock/${code}`);
+  };
+
+  const hasResults = stockResults.length > 0 || themeResults.stocks?.length > 0;
+  const isSearching = keyword.trim().length > 0;
+
+  // 캐시 로딩 중
+  if (cacheLoading) {
+    return (
+      <div className="flex flex-col items-center justify-center py-20">
+        <Loader2 className="animate-spin text-primary mb-4" size={32} />
+        <p className="text-base-content/60">종목 데이터 로딩 중...</p>
+      </div>
+    );
+  }
 
   return (
     <div>
       <h2 className="text-xl font-bold mb-4">종목/테마 검색</h2>
 
       {/* 검색 입력 */}
-      <div className="form-control">
+      <div className="relative">
         <div className="join w-full">
-          <input
-            type="text"
-            value={keyword}
-            onChange={(e) => setKeyword(e.target.value)}
-            onKeyDown={(e) => e.key === 'Enter' && handleSearch()}
-            className="input input-bordered join-item flex-1"
-            placeholder="종목명, 종목코드 또는 테마 입력"
-          />
-          {keyword && (
-            <button onClick={handleClear} className="btn btn-ghost join-item">
-              <X size={18} />
-            </button>
-          )}
-          <button
-            onClick={handleSearch}
-            className="btn btn-primary join-item"
-            disabled={loading}
-          >
-            {loading ? (
-              <span className="loading loading-spinner loading-sm"></span>
-            ) : (
-              <SearchIcon size={18} />
+          <div className="relative flex-1">
+            <input
+              type="text"
+              value={keyword}
+              onChange={(e) => setKeyword(e.target.value)}
+              className="input input-bordered w-full pr-10"
+              placeholder="종목명, 종목코드 입력 (예: 삼성, 005930)"
+              autoFocus
+            />
+            {keyword && (
+              <button
+                onClick={handleClear}
+                className="absolute right-2 top-1/2 -translate-y-1/2 p-1 hover:bg-base-200 rounded"
+              >
+                <X size={18} className="text-base-content/60" />
+              </button>
             )}
-          </button>
+          </div>
         </div>
+
+        {/* 실시간 검색 결과 드롭다운 */}
+        {isSearching && stockResults.length > 0 && (
+          <div className="absolute left-0 right-0 top-full mt-1 bg-base-100 rounded-xl shadow-lg border border-base-200 max-h-[60vh] overflow-y-auto z-50">
+            {stockResults.map((stock, index) => (
+              <button
+                key={stock.code}
+                onClick={() => handleStockClick(stock.code)}
+                className={`w-full px-4 py-3 flex items-center justify-between hover:bg-base-200 transition ${
+                  index !== stockResults.length - 1 ? 'border-b border-base-200' : ''
+                }`}
+              >
+                <div className="text-left">
+                  <p className="font-semibold">
+                    {highlightMatch(stock.name, keyword)}
+                  </p>
+                  <p className="text-sm text-base-content/60">{stock.code}</p>
+                </div>
+                {stock.market && (
+                  <span className={`badge badge-sm ${
+                    stock.market === 'KOSPI' ? 'badge-primary' : 'badge-secondary'
+                  } badge-outline`}>
+                    {stock.market}
+                  </span>
+                )}
+              </button>
+            ))}
+          </div>
+        )}
+
+        {/* 검색 중이지만 결과 없음 */}
+        {isSearching && stockResults.length === 0 && !themeLoading && (
+          <div className="absolute left-0 right-0 top-full mt-1 bg-base-100 rounded-xl shadow-lg border border-base-200 p-4 z-50">
+            <p className="text-center text-base-content/60">
+              "{keyword}"에 해당하는 종목이 없습니다
+            </p>
+          </div>
+        )}
       </div>
 
-      {/* 빠른 검색 - 검색 전에만 표시 */}
-      {!searched && (
+      {/* 빠른 검색 - 검색어가 없을 때만 표시 */}
+      {!isSearching && (
         <>
           {/* 인기 테마 */}
           <div className="mt-6">
@@ -147,11 +194,7 @@ export default function Search() {
               {POPULAR_STOCKS.map((name) => (
                 <button
                   key={name}
-                  onClick={() => {
-                    setKeyword(name);
-                    setActiveTab('stock');
-                    setTimeout(() => handleSearch(), 0);
-                  }}
+                  onClick={() => setKeyword(name)}
                   className="btn btn-sm btn-outline"
                 >
                   {name}
@@ -162,82 +205,33 @@ export default function Search() {
         </>
       )}
 
-      {/* 검색 결과 */}
-      {searched && (
+      {/* 테마 검색 결과 */}
+      {showThemeResults && themeResults.themes?.length > 0 && (
         <div className="mt-6">
-          {/* 탭 - 종목/테마 결과 모두 있을 때 */}
-          {hasStockResults && hasThemeResults && (
-            <div className="tabs tabs-boxed mb-4">
-              <button
-                className={`tab ${activeTab === 'all' ? 'tab-active' : ''}`}
-                onClick={() => setActiveTab('all')}
-              >
-                전체 ({totalResults})
-              </button>
-              <button
-                className={`tab ${activeTab === 'stock' ? 'tab-active' : ''}`}
-                onClick={() => setActiveTab('stock')}
-              >
-                종목 ({stockResults.length})
-              </button>
-              <button
-                className={`tab ${activeTab === 'theme' ? 'tab-active' : ''}`}
-                onClick={() => setActiveTab('theme')}
-              >
-                테마 ({themeResults.stocks?.length || 0})
-              </button>
+          <h3 className="text-sm font-medium text-base-content/60 mb-3 flex items-center gap-2">
+            <Tag size={14} />
+            관련 테마
+          </h3>
+          {themeResults.themes.map((theme) => (
+            <div key={theme.id} className="bg-purple-50 rounded-xl p-3 mb-2">
+              <div className="flex items-center gap-2">
+                <Tag size={16} className="text-purple-600" />
+                <span className="font-semibold text-purple-700">{theme.name}</span>
+              </div>
+              <p className="text-sm text-purple-600/80 mt-1">{theme.description}</p>
             </div>
-          )}
+          ))}
 
-          {/* 테마 정보 표시 */}
-          {(activeTab === 'all' || activeTab === 'theme') && themeResults.themes?.length > 0 && (
-            <div className="mb-4">
-              {themeResults.themes.map((theme) => (
-                <div key={theme.id} className="bg-purple-50 rounded-xl p-3 mb-2">
-                  <div className="flex items-center gap-2">
-                    <Tag size={16} className="text-purple-600" />
-                    <span className="font-semibold text-purple-700">{theme.name}</span>
-                  </div>
-                  <p className="text-sm text-purple-600/80 mt-1">{theme.description}</p>
-                </div>
-              ))}
-            </div>
-          )}
-
-          <p className="text-sm text-base-content/60 mb-3">
-            검색 결과: {activeTab === 'stock' ? stockResults.length : activeTab === 'theme' ? (themeResults.stocks?.length || 0) : totalResults}건
-          </p>
-
-          {/* 종목 검색 결과 */}
-          {(activeTab === 'all' || activeTab === 'stock') && stockResults.length > 0 && (
-            <div className="space-y-2">
-              {stockResults.map((stock) => (
-                <div
-                  key={stock.code}
-                  onClick={() => navigate(`/stock/${stock.code}`)}
-                  className="card bg-base-100 shadow-sm cursor-pointer hover:shadow-md transition-shadow"
-                >
-                  <div className="card-body p-4 flex-row justify-between items-center">
-                    <div>
-                      <h3 className="font-bold">{stock.name}</h3>
-                      <p className="text-sm text-base-content/60">{stock.code}</p>
-                    </div>
-                    {stock.market && (
-                      <span className="badge badge-ghost">{stock.market}</span>
-                    )}
-                  </div>
-                </div>
-              ))}
-            </div>
-          )}
-
-          {/* 테마 관련 종목 결과 */}
-          {(activeTab === 'all' || activeTab === 'theme') && themeResults.stocks?.length > 0 && (
-            <div className="space-y-2 mt-2">
+          {/* 테마 관련 종목 */}
+          {themeResults.stocks?.length > 0 && (
+            <div className="mt-3 space-y-2">
+              <p className="text-sm text-base-content/60">
+                테마 관련 종목 {themeResults.stocks.length}개
+              </p>
               {themeResults.stocks.map((stock) => (
                 <div
                   key={stock.code}
-                  onClick={() => navigate(`/stock/${stock.code}`)}
+                  onClick={() => handleStockClick(stock.code)}
                   className="card bg-base-100 shadow-sm cursor-pointer hover:shadow-md transition-shadow"
                 >
                   <div className="card-body p-4">
@@ -261,14 +255,29 @@ export default function Search() {
               ))}
             </div>
           )}
-
-          {totalResults === 0 && !loading && (
-            <div className="text-center py-10 text-base-content/60">
-              검색 결과가 없습니다
-            </div>
-          )}
         </div>
       )}
     </div>
+  );
+}
+
+// 검색어 하이라이트 헬퍼
+function highlightMatch(text, query) {
+  if (!query) return text;
+
+  const lowerText = text.toLowerCase();
+  const lowerQuery = query.toLowerCase();
+  const index = lowerText.indexOf(lowerQuery);
+
+  if (index === -1) return text;
+
+  return (
+    <>
+      {text.slice(0, index)}
+      <span className="text-primary font-bold">
+        {text.slice(index, index + query.length)}
+      </span>
+      {text.slice(index + query.length)}
+    </>
   );
 }

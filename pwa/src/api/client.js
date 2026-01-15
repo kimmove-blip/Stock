@@ -46,8 +46,10 @@ export const authAPI = {
 // 종목 API
 export const stockAPI = {
   search: (q) => api.get(`/stocks/search?q=${encodeURIComponent(q)}`),
+  list: () => api.get('/stocks/list'),  // 전체 종목 목록 (자동완성용)
   detail: (code) => api.get(`/stocks/${code}`),
   analysis: (code) => api.get(`/stocks/${code}/analysis`),
+  fundamental: (code) => api.get(`/stocks/${code}/fundamental`),
 };
 
 // 포트폴리오 API
@@ -189,6 +191,22 @@ export const pushAPI = {
   test: () => api.post('/push/test'),
   // VAPID 공개키 조회
   getVapidKey: () => api.get('/push/vapid-key'),
+};
+
+// 공지사항 API
+export const announcementsAPI = {
+  // 활성 공지사항 조회
+  list: () => api.get('/announcements'),
+  // 관리자: 전체 목록
+  adminList: () => api.get('/announcements/admin/list'),
+  // 관리자: 공지 등록
+  adminCreate: (data) => api.post('/announcements/admin', data),
+  // 관리자: 공지 수정
+  adminUpdate: (id, data) => api.put(`/announcements/admin/${id}`, data),
+  // 관리자: 활성/비활성 토글
+  adminToggle: (id) => api.put(`/announcements/admin/${id}/toggle`),
+  // 관리자: 공지 삭제
+  adminDelete: (id) => api.delete(`/announcements/admin/${id}`),
 };
 
 export default api;

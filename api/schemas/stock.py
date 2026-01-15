@@ -110,3 +110,30 @@ class Top100Response(BaseModel):
     date: str = Field(..., description="분석 날짜 (YYYY-MM-DD)")
     total_count: int
     items: List[Top100Item]
+
+
+class FundamentalYear(BaseModel):
+    """연도별 재무 데이터"""
+    year: str = Field(..., description="연도")
+    revenue: Optional[int] = Field(None, description="매출액 (억원)")
+    revenue_yoy: Optional[float] = Field(None, description="매출 YOY 성장률 (%)")
+    operating_income: Optional[int] = Field(None, description="영업이익 (억원)")
+    net_income: Optional[int] = Field(None, description="당기순이익 (억원)")
+
+
+class FundamentalAnalysis(BaseModel):
+    """펀더멘탈 분석 결과"""
+    code: str = Field(..., description="종목코드")
+    name: str = Field(..., description="종목명")
+    level: str = Field(..., description="펀더멘탈 수준 (낮음/보통/높음)")
+    score: int = Field(..., ge=0, le=100, description="펀더멘탈 점수 (0-100)")
+    comment: str = Field(..., description="AI 분석 코멘트")
+
+    # 주요 재무비율
+    roe: Optional[float] = Field(None, description="ROE (%)")
+    debt_ratio: Optional[float] = Field(None, description="부채비율 (%)")
+    liquidity_ratio: Optional[float] = Field(None, description="유동비율 (%)")
+    operating_margin: Optional[float] = Field(None, description="영업이익률 (%)")
+
+    # 연도별 실적
+    financials: List[FundamentalYear] = Field(default_factory=list, description="최근 3년 재무데이터")

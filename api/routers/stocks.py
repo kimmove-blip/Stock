@@ -13,7 +13,7 @@ import pandas as pd
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
-from api.schemas.stock import StockSearch, StockDetail, StockAnalysis
+from api.schemas.stock import StockSearch, StockDetail, StockAnalysis, FundamentalAnalysis
 from api.dependencies import get_current_user
 
 # 주식 데이터 라이브러리 지연 임포트
@@ -120,6 +120,56 @@ def smooth_score(code: str, new_score: float, alpha: float = 0.4) -> float:
     smoothed = prev_score * (1 - alpha) + new_score * alpha
     _score_history[code] = smoothed
     return round(smoothed, 1)
+
+
+# 전체 종목 목록 캐시 (1시간 TTL)
+_all_stocks_cache: Optional[Tuple[List[dict], float]] = None
+_ALL_STOCKS_CACHE_TTL = 3600  # 1시간
+
+
+def get_all_stocks_cached() -> List[dict]:
+    """전체 종목 목록 캐싱 조회"""
+    global _all_stocks_cache
+
+    if _all_stocks_cache is not None:
+        data, timestamp = _all_stocks_cache
+        if time.time() - timestamp < _ALL_STOCKS_CACHE_TTL:
+            return data
+
+    # 캐시 갱신
+    libs = get_stock_libs()
+    if not libs:
+        return []
+
+    try:
+        krx = libs['get_all_krx']()
+        if krx is None or krx.empty:
+            return []
+
+        stocks = []
+        for _, r in krx.iterrows():
+            stocks.append({
+                'code': r['Code'],
+                'name': r['Name'],
+                'market': r.get('Market', 'KOSPI') if 'Market' in krx.columns else None
+            })
+
+        _all_stocks_cache = (stocks, time.time())
+        return stocks
+    except Exception as e:
+        print(f"종목 목록 로드 실패: {e}")
+        return []
+
+
+@router.get("/list")
+async def get_stock_list():
+    """
+    전체 종목 목록 (자동완성용)
+    - 클라이언트에서 캐싱하여 즉시 검색에 사용
+    - code, name, market만 반환 (가벼운 응답)
+    """
+    stocks = get_all_stocks_cached()
+    return {"stocks": stocks, "count": len(stocks)}
 
 
 def generate_natural_comment(score: float, signals: list, indicators: dict, prob_conf: dict) -> str:
@@ -423,10 +473,22 @@ async def get_stock_detail(code: str):
             except Exception as ma_err:
                 print(f"이동평균 계산 오류: {ma_err}")
 
+            # 시장 구분 조회 (KOSPI/KOSDAQ)
+            market_type = None
+            try:
+                libs = get_stock_libs()
+                if libs:
+                    krx = libs['fdr'].StockListing("KRX")
+                    stock_info = krx[krx['Code'] == code]
+                    if not stock_info.empty and 'Market' in stock_info.columns:
+                        market_type = stock_info.iloc[0]['Market']
+            except Exception:
+                pass
+
             result = StockDetail(
                 code=code,
                 name=name,
-                market=None,
+                market=market_type,
                 current_price=kis_data.get('current_price', 0),
                 change=kis_data.get('change', 0),
                 change_rate=kis_data.get('change_rate', 0),
@@ -816,3 +878,59 @@ async def analyze_stock(code: str):
     except Exception as e:
         print(f"[Stock Analysis Error] {e}")
         raise HTTPException(status_code=500, detail="종목 분석 중 오류가 발생했습니다")
+
+
+# 펀더멘탈 분석 캐시 (1시간 TTL)
+_fundamental_cache: Dict[str, Tuple[Any, float]] = {}
+_FUNDAMENTAL_CACHE_TTL = 3600  # 1시간
+
+
+@router.get("/{code}/fundamental", response_model=FundamentalAnalysis)
+async def get_fundamental(code: str):
+    """
+    종목 펀더멘탈 분석 (DART API 연동)
+
+    - 최근 3년 재무제표 데이터
+    - ROE, 부채비율, 유동비율, 영업이익률
+    - 펀더멘탈 점수 및 AI 분석 코멘트
+    """
+    # 캐시 확인
+    if code in _fundamental_cache:
+        data, timestamp = _fundamental_cache[code]
+        if time.time() - timestamp < _FUNDAMENTAL_CACHE_TTL:
+            return data
+        del _fundamental_cache[code]
+
+    try:
+        # 종목명 조회
+        stock_name = get_stock_name(code)
+
+        # DART 서비스로 펀더멘탈 분석
+        from api.services.dart_service import DartService
+        dart = DartService()
+        analysis = dart.get_fundamental_analysis(code, stock_name)
+
+        if not analysis:
+            raise HTTPException(
+                status_code=404,
+                detail="펀더멘탈 데이터를 조회할 수 없습니다"
+            )
+
+        result = FundamentalAnalysis(**analysis)
+
+        # 캐시 저장
+        _fundamental_cache[code] = (result, time.time())
+        if len(_fundamental_cache) > 200:
+            oldest = min(_fundamental_cache.items(), key=lambda x: x[1][1])
+            del _fundamental_cache[oldest[0]]
+
+        return result
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"[Fundamental Analysis Error] {e}")
+        raise HTTPException(
+            status_code=500,
+            detail="펀더멘탈 분석 중 오류가 발생했습니다"
+        )

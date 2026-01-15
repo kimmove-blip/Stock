@@ -19,7 +19,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 # Rate Limiter 설정
 limiter = Limiter(key_func=get_remote_address)
 
-from api.routers import auth, stocks, portfolio, watchlist, top100, realtime, value_stocks, contact, themes, popular, news, market, telegram, admin, alerts, push
+from api.routers import auth, stocks, portfolio, watchlist, top100, realtime, value_stocks, contact, themes, popular, news, market, telegram, admin, alerts, push, announcements
 
 
 @asynccontextmanager
@@ -39,12 +39,25 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         print(f"⚠️ 스케줄러 시작 실패: {e}")
 
+    # 펀더멘탈 데이터 업데이트 스케줄러 시작
+    try:
+        from api.services.scheduler_service import start_scheduler as start_fundamental_scheduler
+        start_fundamental_scheduler()
+        print("📊 펀더멘탈 업데이트 스케줄러 시작됨")
+    except Exception as e:
+        print(f"⚠️ 펀더멘탈 스케줄러 시작 실패: {e}")
+
     yield
 
     # 종료 시
     try:
         from api.services.scheduler import stop_scheduler
         stop_scheduler()
+    except:
+        pass
+    try:
+        from api.services.scheduler_service import stop_scheduler as stop_fundamental_scheduler
+        stop_fundamental_scheduler()
     except:
         pass
     print("👋 API 서버 종료")
@@ -108,6 +121,7 @@ app.include_router(telegram.router, prefix="/api/telegram", tags=["텔레그램"
 app.include_router(admin.router, prefix="/api/admin", tags=["관리자"])
 app.include_router(alerts.router, prefix="/api/alerts", tags=["알림"])
 app.include_router(push.router, prefix="/api/push", tags=["푸시알림"])
+app.include_router(announcements.router, prefix="/api/announcements", tags=["공지사항"])
 
 
 @app.get("/", tags=["헬스체크"])
@@ -134,6 +148,37 @@ async def scheduler_status():
         return get_scheduler_status()
     except Exception as e:
         return {"error": str(e)}
+
+
+@app.get("/api/scheduler/fundamental/status", tags=["스케줄러"])
+async def fundamental_scheduler_status():
+    """펀더멘탈 스케줄러 상태 확인"""
+    try:
+        from api.services.scheduler_service import scheduler
+        jobs = []
+        for job in scheduler.get_jobs():
+            jobs.append({
+                "id": job.id,
+                "name": job.name,
+                "next_run": str(job.next_run_time) if job.next_run_time else None,
+            })
+        return {
+            "running": scheduler.running,
+            "jobs": jobs,
+        }
+    except Exception as e:
+        return {"error": str(e)}
+
+
+@app.post("/api/scheduler/fundamental/run", tags=["스케줄러"])
+async def run_fundamental_update():
+    """펀더멘탈 데이터 수동 업데이트 (관리자용)"""
+    try:
+        from api.services.scheduler_service import run_update_now
+        await run_update_now()
+        return {"status": "success", "message": "펀더멘탈 데이터 업데이트 완료"}
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
 
 
 if __name__ == "__main__":
