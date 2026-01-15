@@ -1,0 +1,11 @@
+[{
+  "relation": ["delegate_permission/common.handle_all_urls"],
+  "target": {
+    "namespace": "android_app",
+    "package_name": "com.kimsai.stock",
+    "sha256_cert_fingerprints": [
+      "D9:BF:82:DD:F5:00:BE:63:FF:76:7F:B0:4F:BB:04:38:F6:A9:FC:32:5E:C1:80:2E:3A:42:E5:DE:14:7F:3C:C8",
+      "38:8F:FD:AA:62:D2:CD:6C:17:CB:B1:05:B1:81:87:B5:E4:83:3B:5E:CE:2B:04:6E:3A:65:A7:83:42:5F:5C:6C"
+    ]
+  }
+}]

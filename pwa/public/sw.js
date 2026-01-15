@@ -1,4 +1,4 @@
-const CACHE_NAME = 'ai-stock-v2';
+const CACHE_NAME = 'ai-stock-v4';
 const STATIC_ASSETS = [
   '/',
   '/index.html',
@@ -73,23 +73,74 @@ self.addEventListener('fetch', (event) => {
   );
 });
 
-// 푸시 알림 (향후 구현)
+// 푸시 알림
 self.addEventListener('push', (event) => {
+  console.log('Push event received:', event);
+
+  let data = {
+    title: 'KimsAI Stock',
+    body: '새로운 알림이 있습니다.',
+    icon: '/icons/icon-192x192.png',
+    badge: '/icons/icon-72x72.png',
+    url: '/'
+  };
+
   if (event.data) {
-    const data = event.data.json();
+    try {
+      const payload = event.data.json();
+      data = {
+        title: payload.title || data.title,
+        body: payload.body || data.body,
+        icon: payload.icon || data.icon,
+        badge: payload.badge || data.badge,
+        url: payload.data?.url || payload.url || data.url
+      };
+    } catch (e) {
+      console.error('Push data parse error:', e);
+    }
+  }
+
+  event.waitUntil(
     self.registration.showNotification(data.title, {
       body: data.body,
-      icon: '/icons/icon-192x192.png',
-      badge: '/icons/icon-72x72.png',
-      data: data.url,
-    });
-  }
+      icon: data.icon,
+      badge: data.badge,
+      data: { url: data.url },
+      vibrate: [200, 100, 200],
+      renotify: true,
+      tag: Date.now().toString(),
+      silent: false
+    }).then(() => {
+      // 앱 아이콘에 배지 표시
+      if (navigator.setAppBadge) {
+        navigator.setAppBadge(1);
+      }
+    })
+  );
 });
 
 // 알림 클릭
 self.addEventListener('notificationclick', (event) => {
   event.notification.close();
-  if (event.notification.data) {
-    event.waitUntil(clients.openWindow(event.notification.data));
+
+  // 배지 제거
+  if (navigator.clearAppBadge) {
+    navigator.clearAppBadge();
   }
+
+  const urlToOpen = event.notification.data?.url || '/';
+
+  event.waitUntil(
+    clients.matchAll({ type: 'window', includeUncontrolled: true }).then((clientList) => {
+      // 이미 열린 창이 있으면 포커스
+      for (const client of clientList) {
+        if (client.url.includes('stock.kims-ai.com') && 'focus' in client) {
+          client.navigate(urlToOpen);
+          return client.focus();
+        }
+      }
+      // 없으면 새 창 열기
+      return clients.openWindow(urlToOpen);
+    })
+  );
 });

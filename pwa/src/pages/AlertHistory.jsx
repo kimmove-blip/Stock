@@ -14,6 +14,11 @@ export default function AlertHistory() {
     localStorage.setItem('lastViewedAlerts', new Date().toISOString());
     // Layout의 알림 쿼리 갱신을 위해 invalidate
     queryClient.invalidateQueries(['alerts']);
+
+    // 앱 아이콘 배지 제거
+    if ('clearAppBadge' in navigator) {
+      navigator.clearAppBadge().catch(() => {});
+    }
   }, [queryClient]);
 
   const { data, isLoading, error } = useQuery({
