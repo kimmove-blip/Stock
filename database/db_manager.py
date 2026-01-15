@@ -216,6 +216,14 @@ class DatabaseManager:
             row = cursor.fetchone()
             return dict(row) if row else None
 
+    def delete_user(self, user_id):
+        """사용자 및 모든 관련 데이터 삭제 (CASCADE로 자동 삭제)"""
+        with self.get_connection() as conn:
+            # 사용자 삭제 (watchlists, portfolios, alert_history는 CASCADE로 자동 삭제)
+            conn.execute("DELETE FROM users WHERE id = ?", (user_id,))
+            conn.commit()
+            return True
+
     # ==================== 관심종목 관련 ====================
 
     def get_watchlists(self, user_id):
@@ -283,6 +291,12 @@ class DatabaseManager:
                 "UPDATE watchlists SET category = ? WHERE user_id = ? AND category = ? AND stock_code = ?",
                 (to_category, user_id, from_category, stock_code)
             )
+            conn.commit()
+
+    def clear_watchlist(self, user_id):
+        """사용자의 모든 관심종목 삭제"""
+        with self.get_connection() as conn:
+            conn.execute("DELETE FROM watchlists WHERE user_id = ?", (user_id,))
             conn.commit()
 
     # ==================== 포트폴리오 관련 ====================
@@ -419,6 +433,12 @@ class DatabaseManager:
             )
             return [dict(row) for row in cursor.fetchall()]
 
+    def clear_alert_history(self, user_id):
+        """사용자의 모든 알림 기록 삭제"""
+        with self.get_connection() as conn:
+            conn.execute("DELETE FROM alert_history WHERE user_id = ?", (user_id,))
+            conn.commit()
+
     # ==================== 이메일 구독 ====================
 
     def get_email_subscribers(self):
@@ -463,14 +483,19 @@ class DatabaseManager:
     def get_contacts(self, status=None, limit=50):
         """문의 목록 조회 (관리자용)"""
         with self.get_connection() as conn:
+            base_query = """
+                SELECT c.*, u.name
+                FROM contacts c
+                LEFT JOIN users u ON c.user_id = u.id
+            """
             if status:
                 cursor = conn.execute(
-                    "SELECT * FROM contacts WHERE status = ? ORDER BY created_at DESC LIMIT ?",
+                    f"{base_query} WHERE c.status = ? ORDER BY c.created_at DESC LIMIT ?",
                     (status, limit)
                 )
             else:
                 cursor = conn.execute(
-                    "SELECT * FROM contacts ORDER BY created_at DESC LIMIT ?",
+                    f"{base_query} ORDER BY c.created_at DESC LIMIT ?",
                     (limit,)
                 )
             return [dict(row) for row in cursor.fetchall()]
@@ -479,7 +504,10 @@ class DatabaseManager:
         """특정 문의 조회"""
         with self.get_connection() as conn:
             cursor = conn.execute(
-                "SELECT * FROM contacts WHERE id = ?",
+                """SELECT c.*, u.name
+                   FROM contacts c
+                   LEFT JOIN users u ON c.user_id = u.id
+                   WHERE c.id = ?""",
                 (contact_id,)
             )
             row = cursor.fetchone()

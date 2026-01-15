@@ -38,6 +38,7 @@ class ContactItem(BaseModel):
     id: int
     user_id: Optional[int] = None
     username: Optional[str] = None
+    name: Optional[str] = None
     email: Optional[str] = None
     message: str
     status: str
@@ -123,6 +124,7 @@ async def get_contacts_admin(
                 id=c['id'],
                 user_id=c.get('user_id'),
                 username=c.get('username'),
+                name=c.get('name'),
                 email=c.get('email'),
                 message=c['message'],
                 status=c['status'],
@@ -157,6 +159,7 @@ async def get_contact_detail(
         id=contact['id'],
         user_id=contact.get('user_id'),
         username=contact.get('username'),
+        name=contact.get('name'),
         email=contact.get('email'),
         message=contact['message'],
         status=contact['status'],

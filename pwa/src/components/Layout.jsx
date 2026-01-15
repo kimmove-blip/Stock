@@ -56,7 +56,7 @@ export default function Layout() {
             <div className="flex items-center gap-2">
               {user && (
                 <div className="w-8 h-8 bg-white/20 rounded-full flex items-center justify-center text-white font-bold text-sm">
-                  {user?.username?.charAt(0)?.toUpperCase() || 'U'}
+                  {(user?.name || user?.username)?.charAt(0)?.toUpperCase() || 'U'}
                 </div>
               )}
               <button

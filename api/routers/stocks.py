@@ -9,6 +9,7 @@ from functools import lru_cache
 import sys
 import os
 import time
+import pandas as pd
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
@@ -102,6 +103,23 @@ def set_analysis_cache(code: str, data: Any):
     if len(_analysis_cache) > 200:
         oldest = min(_analysis_cache.items(), key=lambda x: x[1][1])
         del _analysis_cache[oldest[0]]
+
+
+# 점수 평활화 캐시 (종목코드 → 이전 점수)
+_score_history: Dict[str, float] = {}
+
+
+def smooth_score(code: str, new_score: float, alpha: float = 0.4) -> float:
+    """
+    지수 이동 평균(EMA) 방식으로 점수 평활화
+    점수 급변을 방지하여 안정적인 신호 제공
+
+    alpha: 새 점수 반영 비율 (0.4 = 새 점수 40%, 이전 점수 60%)
+    """
+    prev_score = _score_history.get(code, new_score)
+    smoothed = prev_score * (1 - alpha) + new_score * alpha
+    _score_history[code] = smoothed
+    return round(smoothed, 1)
 
 
 def generate_natural_comment(score: float, signals: list, indicators: dict, prob_conf: dict) -> str:
@@ -566,16 +584,56 @@ async def analyze_stock(code: str):
         # 자연어 코멘트 생성
         comment = generate_natural_comment(score, signals_list, {}, prob_conf)
 
+        # TOP100도 가격 히스토리와 지지/저항선 추가
+        price_history = None
+        support_resistance = None
+        try:
+            libs = get_stock_libs()
+            if libs:
+                get_ohlcv = libs['get_ohlcv']
+                ohlcv = get_ohlcv(code, 365)
+                if ohlcv is not None and len(ohlcv) >= 20:
+                    # 컬럼명 변환
+                    ohlcv = ohlcv.rename(columns={
+                        '시가': 'Open', '고가': 'High', '저가': 'Low',
+                        '종가': 'Close', '거래량': 'Volume'
+                    })
+                    # 이동평균
+                    ohlcv['MA5'] = ohlcv['Close'].rolling(window=5).mean()
+                    ohlcv['MA20'] = ohlcv['Close'].rolling(window=20).mean()
+                    # 가격 히스토리
+                    price_history = []
+                    for i in range(-20, 0):
+                        row = ohlcv.iloc[i]
+                        price_history.append({
+                            'date': row.name.strftime('%m/%d'),
+                            'close': int(row['Close']),
+                            'ma5': round(float(row['MA5']), 0) if not pd.isna(row['MA5']) else None,
+                            'ma20': round(float(row['MA20']), 0) if not pd.isna(row['MA20']) else None,
+                        })
+                    # 지지/저항선
+                    sr_levels = analyst.calculate_support_resistance(ohlcv)
+                    if sr_levels:
+                        from api.schemas.stock import SupportResistance
+                        support_resistance = SupportResistance(**sr_levels)
+        except Exception as e:
+            print(f"TOP100 히스토리 조회 오류: {e}")
+
+        # 점수 평활화 적용
+        smoothed = smooth_score(code, score)
+
         result = StockAnalysis(
             code=code,
             name=stock_name,
-            score=score,
+            score=smoothed,
             opinion=opinion,
             probability=prob_conf['probability'],
             confidence=prob_conf['confidence'],
-            technical_score=score,
+            technical_score=score,  # 원본 점수는 기술적 점수로 보존
             signals={},
             signal_descriptions=desc_list,
+            support_resistance=support_resistance,
+            price_history=price_history,
             comment=comment
         )
         set_analysis_cache(code, result)
@@ -693,6 +751,10 @@ async def analyze_stock(code: str):
             'DOJI': '📊 도지 캔들 (변곡점 가능)',
             'MORNING_STAR': '✅ 샛별형 패턴 (강력 반등 신호)',
             'EVENING_STAR': '⚠️ 저녁별형 패턴 (하락 전환 주의)',
+            # 52주 신고가/신저가
+            'NEW_HIGH_52W': '🚀 52주 신고가 근접',
+            'BREAKOUT_52W_HIGH': '🚀 52주 신고가 돌파!',
+            'NEW_LOW_52W': '⚠️ 52주 신저가 근접',
         }
 
         # 상승확률 및 신뢰도 계산
@@ -713,17 +775,37 @@ async def analyze_stock(code: str):
         # 자연어 코멘트 생성
         comment = generate_natural_comment(score, signal_list, indicators, prob_conf)
 
+        # 가격 히스토리 생성 (차트용 - 최근 20일)
+        price_history = []
+        if len(ohlcv) >= 20:
+            # 이동평균 계산
+            ohlcv['MA5'] = ohlcv['Close'].rolling(window=5).mean()
+            ohlcv['MA20'] = ohlcv['Close'].rolling(window=20).mean()
+
+            for i in range(-20, 0):
+                row = ohlcv.iloc[i]
+                price_history.append({
+                    'date': row.name.strftime('%m/%d'),
+                    'close': int(row['Close']),
+                    'ma5': round(float(row['MA5']), 0) if not pd.isna(row['MA5']) else None,
+                    'ma20': round(float(row['MA20']), 0) if not pd.isna(row['MA20']) else None,
+                })
+
+        # 점수 평활화 적용
+        smoothed = smooth_score(code, score)
+
         result = StockAnalysis(
             code=code,
             name=name,
-            score=score,
+            score=smoothed,
             opinion=opinion,
             probability=probability,
             confidence=confidence,
-            technical_score=score,
+            technical_score=score,  # 원본 점수는 기술적 점수로 보존
             signals=signals,
             signal_descriptions=desc_list,
             support_resistance=support_resistance,
+            price_history=price_history if price_history else None,
             comment=comment
         )
         set_analysis_cache(code, result)

@@ -449,7 +449,26 @@ class TechnicalAnalyst:
                     result['score'] -= 10
                     result['signals'].append('CMF_STRONG_OUTFLOW')
 
-            # ========== 18. 캔들 패턴 분석 ==========
+            # ========== 18. 52주 신고가/신저가 ==========
+            if len(df) >= 252:
+                high_52w = df['High'].tail(252).max()
+                low_52w = df['Low'].tail(252).min()
+                result['indicators']['high_52w'] = float(high_52w)
+                result['indicators']['low_52w'] = float(low_52w)
+
+                # 52주 신고가 근접 (2% 이내)
+                if curr['Close'] >= high_52w * 0.98:
+                    result['score'] += 15
+                    result['signals'].append('NEW_HIGH_52W')
+                    if curr['Close'] >= high_52w:
+                        result['signals'].append('BREAKOUT_52W_HIGH')
+
+                # 52주 신저가 근접 (2% 이내) - 경고
+                if curr['Close'] <= low_52w * 1.02:
+                    result['score'] -= 10
+                    result['signals'].append('NEW_LOW_52W')
+
+            # ========== 19. 캔들 패턴 분석 ==========
             self._analyze_candle_patterns(df, result)
 
             # 최종 점수 조정
@@ -594,14 +613,16 @@ class TechnicalAnalyst:
             'PSAR_BUY_SIGNAL', 'PSAR_UPTREND', 'ROC_POSITIVE_CROSS',
             'ROC_STRONG_MOMENTUM', 'ICHIMOKU_GOLDEN_CROSS', 'ICHIMOKU_ABOVE_CLOUD',
             'CMF_STRONG_INFLOW', 'CMF_POSITIVE', 'HAMMER', 'INVERTED_HAMMER',
-            'BULLISH_ENGULFING', 'MORNING_STAR'
+            'BULLISH_ENGULFING', 'MORNING_STAR',
+            'NEW_HIGH_52W', 'BREAKOUT_52W_HIGH'  # 52주 신고가
         }
 
         # 하락형 신호
         BEARISH_SIGNALS = {
             'DEAD_CROSS_5_20', 'RSI_OVERBOUGHT', 'BB_UPPER_BREAK',
             'CCI_OVERBOUGHT', 'WILLR_OVERBOUGHT', 'MFI_OVERBOUGHT',
-            'CMF_STRONG_OUTFLOW', 'BEARISH_ENGULFING', 'EVENING_STAR'
+            'CMF_STRONG_OUTFLOW', 'BEARISH_ENGULFING', 'EVENING_STAR',
+            'NEW_LOW_52W'  # 52주 신저가
         }
 
         # 상승확률: 점수 기반 (30-70% 범위 - 보수적)

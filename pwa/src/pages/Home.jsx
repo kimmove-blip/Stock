@@ -57,11 +57,11 @@ export default function Home() {
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-3">
             <div className="w-10 h-10 bg-white/20 rounded-full flex items-center justify-center text-white font-bold">
-              {user?.username?.charAt(0)?.toUpperCase() || 'U'}
+              {(user?.name || user?.username)?.charAt(0)?.toUpperCase() || 'U'}
             </div>
             <div className="text-white">
               <p className="text-xs opacity-80">안녕하세요</p>
-              <p className="font-bold">{user?.username || '사용자'}님</p>
+              <p className="font-bold">{user?.name || user?.username || '사용자'}님</p>
             </div>
           </div>
           <button className="relative p-2" onClick={() => navigate('/telegram')}>

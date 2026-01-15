@@ -3,16 +3,16 @@ import { useNavigate } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useAuth } from '../contexts/AuthContext';
 import {
-  Bell,
   Mail,
   Moon,
   LogOut,
   ChevronRight,
-  User,
-  Lock,
   Shield,
   MessageCircle,
   FileText,
+  Trash2,
+  UserX,
+  RefreshCw,
 } from 'lucide-react';
 import { authAPI } from '../api/client';
 
@@ -41,28 +41,62 @@ export default function Settings() {
     }
   };
 
+  const handleRefresh = async () => {
+    if (confirm('앱을 최신 버전으로 업데이트합니다. 계속하시겠습니까?')) {
+      try {
+        // 서비스 워커 캐시 삭제
+        if ('caches' in window) {
+          const cacheNames = await caches.keys();
+          await Promise.all(cacheNames.map(name => caches.delete(name)));
+        }
+
+        // 서비스 워커 업데이트
+        if ('serviceWorker' in navigator) {
+          const registrations = await navigator.serviceWorker.getRegistrations();
+          for (const registration of registrations) {
+            await registration.update();
+          }
+        }
+
+        // React Query 캐시 초기화
+        queryClient.clear();
+
+        // 페이지 새로고침
+        window.location.reload(true);
+      } catch (error) {
+        console.error('Refresh error:', error);
+        window.location.reload(true);
+      }
+    }
+  };
+
   const settingsItems = [
-    {
-      icon: User,
-      label: '프로필 수정',
-      action: () => alert('준비 중입니다'),
-    },
-    {
-      icon: Lock,
-      label: '비밀번호 변경',
-      action: () => alert('준비 중입니다'),
-    },
-    {
-      icon: FileText,
-      label: '개인정보처리방침',
-      action: () => navigate('/privacy'),
-    },
     // 관리자만 보이도록
     ...(user?.is_admin ? [{
       icon: Shield,
       label: '관리자 페이지',
       action: () => navigate('/admin'),
     }] : []),
+    {
+      icon: Trash2,
+      label: '데이터 삭제',
+      action: () => navigate('/delete-data'),
+    },
+  ];
+
+  // 하단 메뉴 (개인정보처리방침, 회원탈퇴)
+  const bottomItems = [
+    {
+      icon: FileText,
+      label: '개인정보처리방침',
+      action: () => navigate('/privacy'),
+    },
+    {
+      icon: UserX,
+      label: '회원 탈퇴',
+      action: () => navigate('/delete-account'),
+      danger: true,
+    },
   ];
 
   return (
@@ -71,10 +105,10 @@ export default function Settings() {
       <div className="bg-white rounded-xl p-4 shadow-sm mb-4">
         <div className="flex items-center gap-4">
           <div className="w-16 h-16 bg-gradient-to-br from-purple-600 to-indigo-600 rounded-full flex items-center justify-center text-white text-2xl font-bold">
-            {user?.username?.charAt(0)?.toUpperCase() || 'U'}
+            {(user?.name || user?.username)?.charAt(0)?.toUpperCase() || 'U'}
           </div>
           <div>
-            <h2 className="font-bold text-gray-800 text-lg">{user?.username}</h2>
+            <h2 className="font-bold text-gray-800 text-lg">{user?.name || user?.username}</h2>
             <p className="text-gray-500 text-sm">{user?.email || '이메일 미등록'}</p>
           </div>
         </div>
@@ -82,7 +116,7 @@ export default function Settings() {
 
       {/* 설정 항목 */}
       <div className="bg-white rounded-xl shadow-sm mb-4">
-        {settingsItems.map(({ icon: Icon, label, action }, idx) => (
+        {settingsItems.map(({ icon: Icon, label, action, danger }, idx) => (
           <button
             key={label}
             onClick={action}
@@ -91,8 +125,8 @@ export default function Settings() {
             }`}
           >
             <div className="flex items-center gap-3">
-              <Icon size={20} className="text-gray-500" />
-              <span className="text-gray-700">{label}</span>
+              <Icon size={20} className={danger ? 'text-red-500' : 'text-gray-500'} />
+              <span className={danger ? 'text-red-500' : 'text-gray-700'}>{label}</span>
             </div>
             <ChevronRight size={20} className="text-gray-400" />
           </button>
@@ -147,6 +181,22 @@ export default function Settings() {
         <div className="px-4 py-3 border-b border-gray-100">
           <h3 className="font-semibold text-gray-700 text-sm">앱 설정</h3>
         </div>
+
+        {/* 앱 새로고침 */}
+        <button
+          onClick={handleRefresh}
+          className="w-full flex items-center justify-between p-4 hover:bg-gray-50 transition-colors border-b border-gray-100"
+        >
+          <div className="flex items-center gap-3">
+            <RefreshCw size={20} className="text-green-500" />
+            <div className="text-left">
+              <span className="text-gray-700 block">앱 새로고침</span>
+              <span className="text-xs text-gray-400">캐시 삭제 및 최신 버전 업데이트</span>
+            </div>
+          </div>
+          <ChevronRight size={20} className="text-gray-400" />
+        </button>
+
         <div className="flex items-center justify-between p-4">
           <div className="flex items-center gap-3">
             <Moon size={20} className="text-gray-500" />
@@ -162,6 +212,25 @@ export default function Settings() {
             <div className="w-11 h-6 bg-gray-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-purple-600"></div>
           </label>
         </div>
+      </div>
+
+      {/* 개인정보 및 계정 관리 (하단) */}
+      <div className="bg-white rounded-xl shadow-sm mb-4">
+        {bottomItems.map(({ icon: Icon, label, action, danger }, idx) => (
+          <button
+            key={label}
+            onClick={action}
+            className={`w-full flex items-center justify-between p-4 hover:bg-gray-50 transition-colors ${
+              idx < bottomItems.length - 1 ? 'border-b border-gray-100' : ''
+            }`}
+          >
+            <div className="flex items-center gap-3">
+              <Icon size={20} className={danger ? 'text-red-500' : 'text-gray-500'} />
+              <span className={danger ? 'text-red-500' : 'text-gray-700'}>{label}</span>
+            </div>
+            <ChevronRight size={20} className="text-gray-400" />
+          </button>
+        ))}
       </div>
 
       {/* 로그아웃 */}

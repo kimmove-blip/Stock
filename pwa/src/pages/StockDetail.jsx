@@ -4,6 +4,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { stockAPI, portfolioAPI, watchlistAPI } from '../api/client';
 import Loading from '../components/Loading';
 import { ArrowLeft, Star, Plus, TrendingUp, TrendingDown } from 'lucide-react';
+import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer } from 'recharts';
 
 export default function StockDetail() {
   const { code } = useParams();
@@ -275,6 +276,77 @@ export default function StockDetail() {
                 </p>
               </div>
             )}
+          </div>
+        </div>
+      )}
+
+      {/* 20일 가격 추이 차트 */}
+      {analysis?.price_history?.length > 0 && (
+        <div className="card bg-base-100 shadow mb-4">
+          <div className="card-body p-4">
+            <h3 className="font-bold mb-3">20일 추이</h3>
+            <div className="h-40">
+              <ResponsiveContainer width="100%" height="100%">
+                <LineChart data={analysis.price_history}>
+                  <XAxis
+                    dataKey="date"
+                    tick={{ fontSize: 10 }}
+                    tickLine={false}
+                    axisLine={false}
+                  />
+                  <YAxis
+                    domain={['auto', 'auto']}
+                    hide
+                  />
+                  <Tooltip
+                    contentStyle={{
+                      backgroundColor: 'var(--fallback-b1,oklch(var(--b1)))',
+                      border: '1px solid var(--fallback-b3,oklch(var(--b3)))',
+                      borderRadius: '8px',
+                      fontSize: '12px'
+                    }}
+                    formatter={(value, name) => {
+                      const labels = { close: '종가', ma5: '5일선', ma20: '20일선' };
+                      return [value?.toLocaleString() + '원', labels[name] || name];
+                    }}
+                  />
+                  <Line
+                    type="monotone"
+                    dataKey="close"
+                    stroke="#3b82f6"
+                    strokeWidth={2}
+                    dot={false}
+                  />
+                  <Line
+                    type="monotone"
+                    dataKey="ma5"
+                    stroke="#f59e0b"
+                    strokeWidth={1}
+                    dot={false}
+                    strokeDasharray="3 3"
+                  />
+                  <Line
+                    type="monotone"
+                    dataKey="ma20"
+                    stroke="#ef4444"
+                    strokeWidth={1}
+                    dot={false}
+                    strokeDasharray="3 3"
+                  />
+                </LineChart>
+              </ResponsiveContainer>
+            </div>
+            <div className="flex gap-4 text-xs justify-center mt-2">
+              <span className="flex items-center gap-1">
+                <span className="w-3 h-0.5 bg-blue-500 inline-block"></span> 종가
+              </span>
+              <span className="flex items-center gap-1">
+                <span className="w-3 h-0.5 bg-amber-500 inline-block"></span> 5일선
+              </span>
+              <span className="flex items-center gap-1">
+                <span className="w-3 h-0.5 bg-red-500 inline-block"></span> 20일선
+              </span>
+            </div>
           </div>
         </div>
       )}

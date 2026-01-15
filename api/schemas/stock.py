@@ -38,6 +38,14 @@ class StockDetail(StockBase):
     updated_at: Optional[datetime] = None
 
 
+class PricePoint(BaseModel):
+    """가격 히스토리 포인트"""
+    date: str = Field(..., description="날짜 (MM/DD)")
+    close: int = Field(..., description="종가")
+    ma5: Optional[float] = Field(None, description="5일 이동평균")
+    ma20: Optional[float] = Field(None, description="20일 이동평균")
+
+
 class SupportResistance(BaseModel):
     """지지/저항선"""
     pivot: Optional[float] = Field(None, description="피봇 포인트")
@@ -71,6 +79,9 @@ class StockAnalysis(BaseModel):
 
     # 지지/저항선
     support_resistance: Optional[SupportResistance] = Field(None, description="지지/저항선")
+
+    # 가격 히스토리 (차트용)
+    price_history: Optional[List[PricePoint]] = Field(None, description="최근 20일 가격")
 
     # 분석 코멘트
     comment: Optional[str] = Field(None, description="AI 분석 코멘트")

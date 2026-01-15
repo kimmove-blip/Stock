@@ -80,7 +80,7 @@ function ContactDetail({ contact, onClose, onUpdate }) {
           <div className="bg-gray-50 rounded-lg p-4 space-y-2">
             <div className="flex justify-between items-center">
               <span className="text-sm text-gray-500">사용자</span>
-              <span className="font-medium">{contact.username || '비로그인'}</span>
+              <span className="font-medium">{contact.name || contact.username || '비로그인'}</span>
             </div>
             {contact.email && (
               <div className="flex justify-between items-center">
@@ -245,7 +245,7 @@ function ContactsTab() {
                 <div className="flex-1 min-w-0">
                   <div className="flex items-center gap-2 mb-1">
                     <span className="font-medium text-gray-800">
-                      {contact.username || '비로그인'}
+                      {contact.name || contact.username || '비로그인'}
                     </span>
                     <StatusBadge status={contact.status} />
                   </div>
@@ -398,11 +398,11 @@ function UsersTab({ currentUser }) {
                   <div className={`w-10 h-10 rounded-full flex items-center justify-center text-white font-bold ${
                     member.is_admin ? 'bg-gradient-to-br from-purple-600 to-indigo-600' : 'bg-gray-400'
                   }`}>
-                    {member.username?.charAt(0)?.toUpperCase() || 'U'}
+                    {(member.name || member.username)?.charAt(0)?.toUpperCase() || 'U'}
                   </div>
                   <div className="text-left">
                     <div className="flex items-center gap-2">
-                      <span className="font-semibold text-gray-800">{member.username}</span>
+                      <span className="font-semibold text-gray-800">{member.name || member.username}</span>
                       {member.is_admin && (
                         <span className="bg-purple-100 text-purple-600 text-xs px-1.5 py-0.5 rounded">
                           관리자
