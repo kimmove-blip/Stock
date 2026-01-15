@@ -532,6 +532,100 @@ class TechnicalAnalyst:
         except Exception:
             pass  # TA-Lib 미설치 또는 패턴 분석 실패시 조용히 무시
 
+    def calculate_support_resistance(self, df):
+        """
+        지지선/저항선 계산 (Pivot Point 기반)
+        Returns: dict with support/resistance levels
+        """
+        if df is None or len(df) < 5:
+            return None
+
+        try:
+            # 최근 거래일 기준
+            high = df['High'].iloc[-1]
+            low = df['Low'].iloc[-1]
+            close = df['Close'].iloc[-1]
+
+            # Pivot Point 계산
+            pivot = (high + low + close) / 3
+
+            # 지지선/저항선 계산
+            r1 = 2 * pivot - low       # 1차 저항선
+            r2 = pivot + (high - low)  # 2차 저항선
+            s1 = 2 * pivot - high      # 1차 지지선
+            s2 = pivot - (high - low)  # 2차 지지선
+
+            # 추가: 최근 20일 고점/저점 기반 레벨
+            recent_high = df['High'].tail(20).max()
+            recent_low = df['Low'].tail(20).min()
+
+            return {
+                'pivot': round(pivot, 0),
+                'resistance_1': round(r1, 0),
+                'resistance_2': round(r2, 0),
+                'support_1': round(s1, 0),
+                'support_2': round(s2, 0),
+                'recent_high': round(recent_high, 0),
+                'recent_low': round(recent_low, 0)
+            }
+
+        except Exception as e:
+            print(f"지지/저항선 계산 오류: {e}")
+            return None
+
+    def calculate_probability_confidence(self, score, signals):
+        """
+        상승확률 및 신뢰도 계산
+        Args:
+            score: 기술적 분석 점수 (0-100)
+            signals: 신호 리스트
+        Returns: dict with probability and confidence
+        """
+        # 상승형 신호
+        BULLISH_SIGNALS = {
+            'MA_ALIGNED', 'GOLDEN_CROSS_5_20', 'GOLDEN_CROSS_20_60',
+            'RSI_OVERSOLD', 'RSI_RECOVERING', 'MACD_GOLDEN_CROSS',
+            'MACD_HIST_POSITIVE', 'MACD_HIST_RISING', 'BB_LOWER_BOUNCE',
+            'BB_LOWER_TOUCH', 'STOCH_GOLDEN_OVERSOLD', 'STOCH_GOLDEN_CROSS',
+            'STOCH_OVERSOLD', 'ADX_STRONG_UPTREND', 'ADX_UPTREND',
+            'CCI_OVERSOLD', 'WILLR_OVERSOLD', 'OBV_ABOVE_MA', 'OBV_RISING',
+            'MFI_OVERSOLD', 'MFI_LOW', 'VOLUME_SURGE', 'VOLUME_HIGH',
+            'VOLUME_ABOVE_AVG', 'SUPERTREND_BUY', 'SUPERTREND_UPTREND',
+            'PSAR_BUY_SIGNAL', 'PSAR_UPTREND', 'ROC_POSITIVE_CROSS',
+            'ROC_STRONG_MOMENTUM', 'ICHIMOKU_GOLDEN_CROSS', 'ICHIMOKU_ABOVE_CLOUD',
+            'CMF_STRONG_INFLOW', 'CMF_POSITIVE', 'HAMMER', 'INVERTED_HAMMER',
+            'BULLISH_ENGULFING', 'MORNING_STAR'
+        }
+
+        # 하락형 신호
+        BEARISH_SIGNALS = {
+            'DEAD_CROSS_5_20', 'RSI_OVERBOUGHT', 'BB_UPPER_BREAK',
+            'CCI_OVERBOUGHT', 'WILLR_OVERBOUGHT', 'MFI_OVERBOUGHT',
+            'CMF_STRONG_OUTFLOW', 'BEARISH_ENGULFING', 'EVENING_STAR'
+        }
+
+        # 상승확률: 점수 기반 (30-70% 범위 - 보수적)
+        probability = min(70, max(30, score * 0.4 + 30))
+
+        # 신뢰도: 신호 일관성 기반
+        positive_count = sum(1 for s in signals if s in BULLISH_SIGNALS)
+        negative_count = sum(1 for s in signals if s in BEARISH_SIGNALS)
+        total_count = len(signals) if signals else 1
+
+        # 일관성 = 같은 방향 신호가 많을수록 높음
+        consistency = abs(positive_count - negative_count) / max(total_count, 1)
+        signal_strength = min(total_count / 5, 1.0)  # 5개 이상이면 만점
+
+        # 신뢰도 계산 (30-80% 범위 - 보수적)
+        confidence = min(80, max(30, 30 + consistency * 30 + signal_strength * 20))
+
+        return {
+            'probability': round(probability, 1),
+            'confidence': round(confidence, 1),
+            'bullish_signals': positive_count,
+            'bearish_signals': negative_count
+        }
+
     def get_quick_score(self, df):
         """빠른 스크리닝용 간소화된 점수 (속도 우선)
         Returns: dict with score, signals, indicators, close, volume, change_pct

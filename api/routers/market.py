@@ -6,11 +6,17 @@
 
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
-from typing import Optional, List
+from typing import Optional, List, Tuple, Any
 from datetime import datetime, timedelta
 import asyncio
+import time
 
 router = APIRouter()
+
+# 시장 지수 캐시 (5분 TTL)
+_market_cache: Tuple[Any, float] = (None, 0)
+_global_market_cache: Tuple[Any, float] = (None, 0)
+_MARKET_CACHE_TTL = 300  # 5분
 
 
 class IndexData(BaseModel):
@@ -78,8 +84,15 @@ def format_number(num: float) -> str:
 @router.get("", response_model=MarketResponse)
 async def get_market_indices():
     """
-    코스피/코스닥 실시간 지수 조회 (FinanceDataReader 사용)
+    코스피/코스닥 실시간 지수 조회 (5분 캐싱 + FinanceDataReader 사용)
     """
+    global _market_cache
+
+    # 캐시 확인
+    cached_data, cached_time = _market_cache
+    if cached_data and time.time() - cached_time < _MARKET_CACHE_TTL:
+        return cached_data
+
     try:
         import FinanceDataReader as fdr
 
@@ -150,12 +163,16 @@ async def get_market_indices():
         if not indices:
             raise HTTPException(status_code=500, detail="지수 데이터를 가져올 수 없습니다")
 
-        return MarketResponse(
+        result = MarketResponse(
             indices=indices,
             market_info=market_info,
             updated_at=datetime.now().isoformat(),
             market_status=get_market_status()
         )
+
+        # 캐시 저장
+        _market_cache = (result, time.time())
+        return result
 
     except HTTPException:
         raise
@@ -216,11 +233,29 @@ class GlobalMarketResponse(BaseModel):
 @router.get("/global", response_model=GlobalMarketResponse)
 async def get_global_markets():
     """
-    해외 주요 지수 및 환율 조회
+    해외 주요 지수 및 환율 조회 (5분 캐싱)
     - 미국: S&P500, NASDAQ, DOW
     - 아시아: 니케이225, 항셍
     - 환율: USD/KRW, EUR/KRW, JPY/KRW
     """
+    global _global_market_cache
+    import math
+
+    # 캐시 확인
+    cached_data, cached_time = _global_market_cache
+    if cached_data and time.time() - cached_time < _MARKET_CACHE_TTL:
+        return cached_data
+
+    def safe_float(val, default=0.0):
+        """NaN, inf 처리"""
+        try:
+            f = float(val)
+            if math.isnan(f) or math.isinf(f):
+                return default
+            return f
+        except:
+            return default
+
     try:
         import FinanceDataReader as fdr
         from datetime import datetime, timedelta
@@ -245,8 +280,12 @@ async def get_global_markets():
             try:
                 df = fdr.DataReader(symbol, start_date, end_date)
                 if df is not None and len(df) >= 2:
-                    current = float(df.iloc[-1]['Close'])
-                    prev = float(df.iloc[-2]['Close'])
+                    current = safe_float(df.iloc[-1]['Close'])
+                    prev = safe_float(df.iloc[-2]['Close'])
+
+                    if current == 0 or prev == 0:
+                        continue
+
                     change = current - prev
                     change_rate = (change / prev) * 100
 
@@ -273,8 +312,12 @@ async def get_global_markets():
             try:
                 df = fdr.DataReader(symbol, start_date, end_date)
                 if df is not None and len(df) >= 2:
-                    current = float(df.iloc[-1]['Close'])
-                    prev = float(df.iloc[-2]['Close'])
+                    current = safe_float(df.iloc[-1]['Close'])
+                    prev = safe_float(df.iloc[-2]['Close'])
+
+                    if current == 0 or prev == 0:
+                        continue
+
                     change = current - prev
 
                     currencies.append(CurrencyData(
@@ -287,11 +330,15 @@ async def get_global_markets():
             except Exception as e:
                 print(f"[Global] {name} 환율 조회 실패: {e}")
 
-        return GlobalMarketResponse(
+        result = GlobalMarketResponse(
             indices=indices,
             currencies=currencies,
             updated_at=datetime.now().isoformat()
         )
+
+        # 캐시 저장
+        _global_market_cache = (result, time.time())
+        return result
 
     except Exception as e:
         print(f"[Global Market Error] {e}")

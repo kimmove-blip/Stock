@@ -38,12 +38,27 @@ class StockDetail(StockBase):
     updated_at: Optional[datetime] = None
 
 
+class SupportResistance(BaseModel):
+    """지지/저항선"""
+    pivot: Optional[float] = Field(None, description="피봇 포인트")
+    resistance_1: Optional[float] = Field(None, description="1차 저항선")
+    resistance_2: Optional[float] = Field(None, description="2차 저항선")
+    support_1: Optional[float] = Field(None, description="1차 지지선")
+    support_2: Optional[float] = Field(None, description="2차 지지선")
+    recent_high: Optional[float] = Field(None, description="최근 20일 고점")
+    recent_low: Optional[float] = Field(None, description="최근 20일 저점")
+
+
 class StockAnalysis(BaseModel):
     """종목 AI 분석 결과"""
     code: str
     name: str
     score: float = Field(..., ge=0, le=100, description="종합 점수 (0-100)")
     opinion: str = Field(..., description="기술적 신호 (매수/관망/주의/하락 신호)")
+
+    # 상승확률 및 신뢰도
+    probability: Optional[float] = Field(None, ge=0, le=100, description="상승 확률 (%)")
+    confidence: Optional[float] = Field(None, ge=0, le=100, description="신뢰도 (%)")
 
     # 세부 분석
     technical_score: Optional[float] = Field(None, description="기술적 분석 점수")
@@ -52,6 +67,10 @@ class StockAnalysis(BaseModel):
 
     # 기술적 지표 상세
     signals: Optional[Dict[str, Any]] = Field(None, description="기술적 신호")
+    signal_descriptions: Optional[List[str]] = Field(None, description="신호 설명 리스트 (한글)")
+
+    # 지지/저항선
+    support_resistance: Optional[SupportResistance] = Field(None, description="지지/저항선")
 
     # 분석 코멘트
     comment: Optional[str] = Field(None, description="AI 분석 코멘트")

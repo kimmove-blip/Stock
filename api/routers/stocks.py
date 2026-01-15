@@ -104,6 +104,91 @@ def set_analysis_cache(code: str, data: Any):
         del _analysis_cache[oldest[0]]
 
 
+def generate_natural_comment(score: float, signals: list, indicators: dict, prob_conf: dict) -> str:
+    """
+    자연어 형태의 AI 분석 코멘트 생성
+    """
+    probability = prob_conf.get('probability', 50)
+    confidence = prob_conf.get('confidence', 50)
+    bullish_count = prob_conf.get('bullish_signals', 0)
+    bearish_count = prob_conf.get('bearish_signals', 0)
+
+    # 1. 전체 방향성 판단
+    if score >= 70:
+        direction = "강세"
+        direction_detail = "기술적 지표들이 강한 상승 신호를 보이고 있습니다."
+    elif score >= 55:
+        direction = "약세 상승"
+        direction_detail = "전반적으로 긍정적인 흐름이나 신중한 접근이 필요합니다."
+    elif score >= 45:
+        direction = "중립"
+        direction_detail = "현재 뚜렷한 방향성이 없어 관망이 권장됩니다."
+    elif score >= 30:
+        direction = "약세"
+        direction_detail = "기술적 지표가 약세를 보이고 있어 주의가 필요합니다."
+    else:
+        direction = "강한 약세"
+        direction_detail = "하락 신호가 우세하여 매수를 자제하는 것이 좋습니다."
+
+    # 2. 핵심 신호 분석
+    signal_details = []
+
+    # 추세 관련
+    if 'MA_ALIGNED' in signals:
+        signal_details.append("이동평균선이 정배열 상태")
+    if 'GOLDEN_CROSS_5_20' in signals or 'GOLDEN_CROSS_20_60' in signals:
+        signal_details.append("골든크로스가 발생")
+    if 'DEAD_CROSS_5_20' in signals:
+        signal_details.append("데드크로스가 발생하여 하락 추세 전환 우려")
+
+    # 모멘텀 관련
+    if 'RSI_OVERSOLD' in signals:
+        signal_details.append("RSI가 과매도 구간에서 반등 중")
+    elif 'RSI_OVERBOUGHT' in signals:
+        signal_details.append("RSI가 과매수 구간으로 조정 가능성")
+
+    if 'MACD_GOLDEN_CROSS' in signals:
+        signal_details.append("MACD 골든크로스로 상승 모멘텀 확인")
+    elif 'MACD_HIST_POSITIVE' in signals:
+        signal_details.append("MACD 히스토그램이 양전환")
+
+    # 거래량 관련
+    if 'VOLUME_SURGE' in signals:
+        signal_details.append("거래량이 급증하며 관심도 상승")
+    elif 'VOLUME_HIGH' in signals:
+        signal_details.append("평균 이상의 거래량 동반")
+
+    # 3. 신뢰도 기반 부가 설명
+    if confidence >= 80:
+        confidence_text = "신호의 일관성이 높아 신뢰도가 높습니다."
+    elif confidence >= 60:
+        confidence_text = "대체로 일관된 신호를 보이고 있습니다."
+    else:
+        confidence_text = "신호가 혼재되어 있어 추가 확인이 필요합니다."
+
+    # 4. 최종 코멘트 조합
+    comment_parts = [direction_detail]
+
+    if signal_details:
+        if len(signal_details) == 1:
+            comment_parts.append(f"{signal_details[0]}이며, {confidence_text}")
+        else:
+            combined = ", ".join(signal_details[:-1]) + f", {signal_details[-1]}"
+            comment_parts.append(f"{combined}입니다. {confidence_text}")
+    else:
+        comment_parts.append(confidence_text)
+
+    # 5. 투자 참고 사항
+    if score >= 60 and bullish_count >= 3:
+        comment_parts.append("단기적으로 상승 가능성이 있으나, 분할 매수를 권장합니다.")
+    elif score <= 40 and bearish_count >= 2:
+        comment_parts.append("하락 리스크가 있으므로 손절 라인 설정을 권장합니다.")
+    else:
+        comment_parts.append("시장 상황을 주시하며 대응하시기 바랍니다.")
+
+    return " ".join(comment_parts)
+
+
 def get_top100_analysis(code: str) -> Optional[Dict]:
     """TOP100 JSON에서 분석 데이터 조회"""
     import json
@@ -152,11 +237,14 @@ def get_top100_analysis(code: str) -> Optional[Dict]:
                             'STOCH_GOLDEN_CROSS': '✅ 스토캐스틱 골든크로스',
                             'STOCH_OVERSOLD': '✅ 스토캐스틱 과매도 구간',
                             'ADX_STRONG_UPTREND': '✅ ADX 강한 상승 추세',
+                            'ADX_UPTREND': '📈 ADX 상승 추세',
                             'ADX_TREND_START': '📈 ADX 추세 시작',
                             'CCI_OVERSOLD_RECOVERY': '✅ CCI 과매도 회복',
                             'CCI_OVERBOUGHT': '⚠️ CCI 과매수 주의',
                             'WILLIAMS_OVERSOLD': '✅ 윌리엄스 %R 과매도',
                             'WILLIAMS_OVERBOUGHT': '⚠️ 윌리엄스 %R 과매수',
+                            'WILLR_OVERBOUGHT': '⚠️ 윌리엄스 %R 과매수',
+                            'WILLR_OVERSOLD': '✅ 윌리엄스 %R 과매도',
                             'OBV_RISING': '📈 OBV 상승 (매집 신호)',
                             'OBV_ABOVE_MA': '📈 OBV 이평선 돌파',
                             'MFI_OVERSOLD': '✅ MFI 과매도 (자금 유입 기대)',
@@ -286,25 +374,34 @@ async def get_stock_detail(code: str):
             # KIS에서 종목명이 있으면 사용, 없으면 로컬 데이터 사용
             name = kis_data.get('stock_name') or stock_name
 
-            # 이동평균/RSI는 FDR에서 계산
-            ma5, ma20, ma60, rsi = None, None, None, None
+            # 이동평균/RSI/MACD는 FDR에서 계산
+            ma5, ma20, ma60, rsi, macd, macd_signal = None, None, None, None, None, None
             try:
                 libs = get_stock_libs()
                 if libs:
                     get_ohlcv = libs['get_ohlcv']
                     ohlcv = get_ohlcv(code, 120)
                     if ohlcv is not None and not ohlcv.empty:
-                        ma5 = round(ohlcv['종가'].tail(5).mean(), 0) if len(ohlcv) >= 5 else None
-                        ma20 = round(ohlcv['종가'].tail(20).mean(), 0) if len(ohlcv) >= 20 else None
-                        ma60 = round(ohlcv['종가'].tail(60).mean(), 0) if len(ohlcv) >= 60 else None
+                        close = ohlcv['종가']
+                        ma5 = round(close.tail(5).mean(), 0) if len(ohlcv) >= 5 else None
+                        ma20 = round(close.tail(20).mean(), 0) if len(ohlcv) >= 20 else None
+                        ma60 = round(close.tail(60).mean(), 0) if len(ohlcv) >= 60 else None
                         # RSI 계산
                         if len(ohlcv) >= 14:
-                            delta = ohlcv['종가'].diff()
+                            delta = close.diff()
                             gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
                             loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
                             rs = gain / loss
                             rsi_series = 100 - (100 / (1 + rs))
                             rsi = round(rsi_series.iloc[-1], 2)
+                        # MACD 계산
+                        if len(ohlcv) >= 26:
+                            ema12 = close.ewm(span=12, adjust=False).mean()
+                            ema26 = close.ewm(span=26, adjust=False).mean()
+                            macd_line = ema12 - ema26
+                            signal_line = macd_line.ewm(span=9, adjust=False).mean()
+                            macd = round(macd_line.iloc[-1], 2)
+                            macd_signal = round(signal_line.iloc[-1], 2)
             except Exception as ma_err:
                 print(f"이동평균 계산 오류: {ma_err}")
 
@@ -320,7 +417,9 @@ async def get_stock_detail(code: str):
                 ma5=ma5,
                 ma20=ma20,
                 ma60=ma60,
-                rsi=rsi
+                rsi=rsi,
+                macd=macd,
+                macd_signal=macd_signal
             )
             set_stock_detail_cache(code, result)
             return result
@@ -355,13 +454,24 @@ async def get_stock_detail(code: str):
 
         # RSI 계산
         rsi = None
+        close = ohlcv['종가']
         if len(ohlcv) >= 14:
-            delta = ohlcv['종가'].diff()
+            delta = close.diff()
             gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
             loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
             rs = gain / loss
             rsi_series = 100 - (100 / (1 + rs))
             rsi = round(rsi_series.iloc[-1], 2)
+
+        # MACD 계산
+        macd, macd_signal = None, None
+        if len(ohlcv) >= 26:
+            ema12 = close.ewm(span=12, adjust=False).mean()
+            ema26 = close.ewm(span=26, adjust=False).mean()
+            macd_line = ema12 - ema26
+            signal_line = macd_line.ewm(span=9, adjust=False).mean()
+            macd = round(macd_line.iloc[-1], 2)
+            macd_signal = round(signal_line.iloc[-1], 2)
 
         # 시가총액 조회 (FDR StockListing에서)
         market_cap = None
@@ -392,7 +502,9 @@ async def get_stock_detail(code: str):
             ma5=ma5,
             ma20=ma20,
             ma60=ma60,
-            rsi=rsi
+            rsi=rsi,
+            macd=macd,
+            macd_signal=macd_signal
         )
         set_stock_detail_cache(code, result)
         return result
@@ -418,7 +530,7 @@ async def analyze_stock(code: str):
         stock_name = top100_data['name']
         score = top100_data['score']
         opinion = top100_data['opinion']
-        comment = top100_data.get('comment', '')
+        signals_list = top100_data.get('signals', [])
 
         # 점수 기반 의견 (없으면 생성)
         if not opinion:
@@ -431,14 +543,40 @@ async def analyze_stock(code: str):
             else:
                 opinion = '하락 신호'
 
+        # 확률/신뢰도 계산 (TOP100용 간이 계산)
+        from technical_analyst import TechnicalAnalyst
+        analyst = TechnicalAnalyst()
+        prob_conf = analyst.calculate_probability_confidence(score, signals_list)
+
+        # 신호 설명 변환 (TOP100용)
+        top100_signal_map = {
+            'MA_ALIGNED': '✅ 이평선 정배열 (강한 상승 추세)',
+            'GOLDEN_CROSS_5_20': '✅ 단기 골든크로스 (5/20일선)',
+            'GOLDEN_CROSS_20_60': '✅ 중기 골든크로스 (20/60일선)',
+            'DEAD_CROSS_5_20': '⚠️ 단기 데드크로스 (하락 주의)',
+            'RSI_OVERSOLD': '✅ RSI 과매도 (반등 기대)',
+            'RSI_RECOVERING': '📈 RSI 회복 중',
+            'RSI_OVERBOUGHT': '⚠️ RSI 과매수 (조정 주의)',
+            'MACD_GOLDEN_CROSS': '✅ MACD 골든크로스',
+            'VOLUME_SURGE': '🔥 거래량 급증',
+            'BB_LOWER_BOUNCE': '✅ 볼린저밴드 하단 반등',
+        }
+        desc_list = [top100_signal_map.get(s, s) for s in signals_list if s in top100_signal_map][:6]
+
+        # 자연어 코멘트 생성
+        comment = generate_natural_comment(score, signals_list, {}, prob_conf)
+
         result = StockAnalysis(
             code=code,
             name=stock_name,
             score=score,
             opinion=opinion,
+            probability=prob_conf['probability'],
+            confidence=prob_conf['confidence'],
             technical_score=score,
             signals={},
-            comment=comment if comment else f"AI 종합 점수: {score}점"
+            signal_descriptions=desc_list,
+            comment=comment
         )
         set_analysis_cache(code, result)
         return result
@@ -557,47 +695,36 @@ async def analyze_stock(code: str):
             'EVENING_STAR': '⚠️ 저녁별형 패턴 (하락 전환 주의)',
         }
 
-        # 코멘트 생성
-        comments = []
+        # 상승확률 및 신뢰도 계산
+        prob_conf = analyst.calculate_probability_confidence(score, signal_list)
+        probability = prob_conf['probability']
+        confidence = prob_conf['confidence']
 
-        # 신호 기반 코멘트 추가 (최대 5개)
-        for signal in signal_list[:5]:
-            if signal in signal_descriptions:
-                comments.append(signal_descriptions[signal])
+        # 지지/저항선 계산
+        sr_levels = analyst.calculate_support_resistance(ohlcv)
+        support_resistance = None
+        if sr_levels:
+            from api.schemas.stock import SupportResistance
+            support_resistance = SupportResistance(**sr_levels)
 
-        # 캔들 패턴 추가
-        patterns = result.get('patterns', [])
-        for pattern in patterns[:2]:
-            if pattern in signal_descriptions:
-                comments.append(signal_descriptions[pattern])
+        # 신호 설명 리스트 생성 (불릿 포인트용)
+        desc_list = [signal_descriptions.get(s) for s in signal_list if s in signal_descriptions][:6]
 
-        # 신호가 없으면 기본 메시지
-        if not comments:
-            if score >= 70:
-                comments.append("✅ 기술적 지표 종합 매수 신호")
-            elif score >= 50:
-                comments.append("📊 현재 관망 권장")
-            elif score >= 30:
-                comments.append("⚠️ 기술적 지표 약세 구간")
-            else:
-                comments.append("🔻 기술적 지표 매도 신호")
-
-        # RSI 상세 정보 추가
-        rsi = indicators.get('rsi')
-        if rsi is not None and 'RSI_OVERSOLD' not in signal_list and 'RSI_OVERBOUGHT' not in signal_list:
-            if rsi < 40:
-                comments.append(f"📈 RSI {rsi:.1f} (저점 구간)")
-            elif rsi > 60:
-                comments.append(f"📊 RSI {rsi:.1f} (고점 구간)")
+        # 자연어 코멘트 생성
+        comment = generate_natural_comment(score, signal_list, indicators, prob_conf)
 
         result = StockAnalysis(
             code=code,
             name=name,
             score=score,
             opinion=opinion,
+            probability=probability,
+            confidence=confidence,
             technical_score=score,
             signals=signals,
-            comment="\n".join(comments)
+            signal_descriptions=desc_list,
+            support_resistance=support_resistance,
+            comment=comment
         )
         set_analysis_cache(code, result)
         return result

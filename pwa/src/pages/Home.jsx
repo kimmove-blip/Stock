@@ -19,13 +19,13 @@ export default function Home() {
   const { user } = useAuth();
   const navigate = useNavigate();
 
-  // 포트폴리오 데이터 (화면 표시될 때마다 새로고침)
+  // 포트폴리오 데이터 (5분 캐시)
   const { data: portfolio } = useQuery({
     queryKey: ['portfolio'],
     queryFn: () => portfolioAPI.list().then((res) => res.data),
-    staleTime: 0,  // 항상 새 데이터 가져오기
-    refetchOnMount: 'always',  // 마운트 시 항상 새로고침
-    refetchOnWindowFocus: true,  // 창 포커스 시 새로고침
+    staleTime: 1000 * 60 * 5,  // 5분 캐시
+    refetchOnMount: 'stale',  // stale일 때만 새로고침
+    refetchOnWindowFocus: false,  // 창 포커스 시 새로고침 비활성화
   });
 
   // 퀵 액션 목록 - 배경색과 아이콘색 분리

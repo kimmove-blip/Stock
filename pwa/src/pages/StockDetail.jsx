@@ -20,11 +20,11 @@ export default function StockDetail() {
   const top100Score = location.state?.top100Score;
   const preloadedData = location.state?.preloadedData;
 
-  // 상세 정보 조회 (preloadedData 있으면 스킵 가능)
+  // 상세 정보 조회 (2분 캐시)
   const { data: detail, isLoading: detailLoading } = useQuery({
     queryKey: ['stock', code],
     queryFn: () => stockAPI.detail(code).then((res) => res.data),
-    // preloadedData가 있으면 초기값으로 사용
+    // preloadedData가 있으면 초기값으로 사용 (기본 정보만) - 즉시 stale 처리
     initialData: preloadedData ? {
       code: preloadedData.code,
       name: preloadedData.name,
@@ -33,15 +33,16 @@ export default function StockDetail() {
       change_rate: preloadedData.change_rate,
       volume: preloadedData.volume,
     } : undefined,
-    // preloadedData가 있으면 백그라운드에서 갱신
-    staleTime: preloadedData ? 60000 : 0,
+    initialDataUpdatedAt: 0,  // initialData를 즉시 stale로 처리하여 전체 데이터 가져오기
+    staleTime: 1000 * 60 * 2,  // 2분 캐시 (API에서 받은 데이터)
+    refetchOnWindowFocus: false,
   });
 
   const { data: analysis, isLoading: analysisLoading } = useQuery({
     queryKey: ['stock-analysis', code],
     queryFn: () => stockAPI.analysis(code).then((res) => res.data),
     enabled: !!detail,
-    // preloadedData의 score가 있으면 초기값 사용
+    // preloadedData의 score가 있으면 초기값 사용 (점수만) - 즉시 stale 처리
     initialData: preloadedData?.score ? {
       code: preloadedData.code,
       name: preloadedData.name,
@@ -50,7 +51,9 @@ export default function StockDetail() {
       signals: preloadedData.signals || [],
       comment: '',
     } : undefined,
-    staleTime: preloadedData?.score ? 60000 : 0,
+    initialDataUpdatedAt: 0,  // initialData를 즉시 stale로 처리하여 항상 API 호출
+    staleTime: 1000 * 60 * 5,  // 5분 캐시 (API에서 받은 데이터)
+    refetchOnWindowFocus: false,
   });
 
   const addToPortfolioMutation = useMutation({
@@ -211,33 +214,109 @@ export default function StockDetail() {
       {analysisLoading ? (
         <Loading text="AI 분석 중..." />
       ) : analysis && (
-        <div className="card bg-base-100 shadow">
+        <div className="card bg-base-100 shadow mb-4">
           <div className="card-body p-4">
             <div className="flex justify-between items-center mb-3">
               <h3 className="font-bold">AI 분석</h3>
-              <div className="badge badge-primary badge-lg">{top100Score ?? analysis.score}점</div>
-            </div>
-
-            <div className="flex items-center gap-2 mb-3">
-              <span className="text-base-content/60">투자 의견:</span>
               <span className={`badge ${
                 analysis.opinion === '매수' ? 'badge-success' :
-                analysis.opinion === '매도' ? 'badge-error' :
+                analysis.opinion === '매도' || analysis.opinion === '하락 신호' ? 'badge-error' :
+                analysis.opinion === '주의' ? 'badge-warning' :
                 'badge-ghost'
               }`}>
                 {analysis.opinion}
               </span>
             </div>
 
-            {analysis.comment && (
-              <div className="bg-base-200 p-3 rounded space-y-1">
-                {analysis.comment.split('\n').map((line, idx) => (
-                  <p key={idx} className="text-sm text-base-content/80">
-                    {line}
-                  </p>
-                ))}
+            {/* 상승확률 & 신뢰도 */}
+            <div className="grid grid-cols-2 gap-3 mb-4">
+              <div className="bg-base-200 p-3 rounded text-center">
+                <p className="text-xs text-base-content/60 mb-1">상승 확률</p>
+                <p className={`text-2xl font-bold ${
+                  (analysis.probability || 50) >= 60 ? 'text-success' :
+                  (analysis.probability || 50) <= 40 ? 'text-error' : ''
+                }`}>
+                  {analysis.probability?.toFixed(1) || '50.0'}%
+                </p>
+              </div>
+              <div className="bg-base-200 p-3 rounded text-center">
+                <p className="text-xs text-base-content/60 mb-1">신뢰도</p>
+                <p className="text-2xl font-bold">
+                  {analysis.confidence?.toFixed(1) || '50.0'}%
+                </p>
+                <div className="w-full bg-base-300 rounded-full h-1.5 mt-1">
+                  <div
+                    className={`h-1.5 rounded-full ${
+                      (analysis.confidence || 50) >= 70 ? 'bg-success' :
+                      (analysis.confidence || 50) >= 50 ? 'bg-warning' : 'bg-error'
+                    }`}
+                    style={{ width: `${analysis.confidence || 50}%` }}
+                  ></div>
+                </div>
+              </div>
+            </div>
+
+            {/* 신호 불릿 리스트 */}
+            {analysis.signal_descriptions?.length > 0 && (
+              <div className="mb-3">
+                <div className="space-y-1">
+                  {analysis.signal_descriptions.map((desc, idx) => (
+                    <p key={idx} className="text-sm">{desc}</p>
+                  ))}
+                </div>
               </div>
             )}
+
+            {/* AI 코멘트 */}
+            {analysis.comment && (
+              <div className="bg-base-200 p-3 rounded">
+                <p className="text-sm text-base-content/80 leading-relaxed">
+                  {analysis.comment}
+                </p>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* 지지/저항선 */}
+      {analysis?.support_resistance && (
+        <div className="card bg-base-100 shadow mb-4">
+          <div className="card-body p-4">
+            <h3 className="font-bold mb-3">지지/저항선</h3>
+            <div className="grid grid-cols-2 gap-3 text-sm">
+              <div>
+                <p className="text-xs text-base-content/60 mb-2">저항선</p>
+                <div className="space-y-1">
+                  <div className="flex justify-between">
+                    <span className="text-error">2차</span>
+                    <span className="font-medium">{analysis.support_resistance.resistance_2?.toLocaleString()}원</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-error">1차</span>
+                    <span className="font-medium">{analysis.support_resistance.resistance_1?.toLocaleString()}원</span>
+                  </div>
+                </div>
+              </div>
+              <div>
+                <p className="text-xs text-base-content/60 mb-2">지지선</p>
+                <div className="space-y-1">
+                  <div className="flex justify-between">
+                    <span className="text-info">1차</span>
+                    <span className="font-medium">{analysis.support_resistance.support_1?.toLocaleString()}원</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-info">2차</span>
+                    <span className="font-medium">{analysis.support_resistance.support_2?.toLocaleString()}원</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+            <div className="divider my-2"></div>
+            <div className="flex justify-between text-xs text-base-content/60">
+              <span>20일 저점: {analysis.support_resistance.recent_low?.toLocaleString()}원</span>
+              <span>20일 고점: {analysis.support_resistance.recent_high?.toLocaleString()}원</span>
+            </div>
           </div>
         </div>
       )}

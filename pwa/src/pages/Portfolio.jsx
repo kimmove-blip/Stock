@@ -18,20 +18,21 @@ export default function Portfolio() {
   const [buyPrice, setBuyPrice] = useState('');
   const [quantity, setQuantity] = useState(1);
 
-  // 포트폴리오 목록 (화면 표시될 때마다 새로고침)
+  // 포트폴리오 목록 (1분 캐시로 서버 부하 감소)
   const { data, isLoading, error, refetch } = useQuery({
     queryKey: ['portfolio'],
     queryFn: () => portfolioAPI.list().then((res) => res.data),
-    staleTime: 0,  // 항상 새 데이터 가져오기
-    refetchOnMount: 'always',  // 마운트 시 항상 새로고침
-    refetchOnWindowFocus: true,  // 창 포커스 시 새로고침
+    staleTime: 1000 * 60 * 1,  // 1분 캐시
+    refetchOnMount: 'stale',  // stale일 때만 새로고침
+    refetchOnWindowFocus: false,  // 창 포커스 시 새로고침 비활성화
   });
 
-  // 포트폴리오 분석 (진단 버튼 클릭 시)
+  // 포트폴리오 분석 (진단 버튼 클릭 시, 5분 캐시)
   const { data: analysisData, isLoading: analysisLoading, refetch: refetchAnalysis } = useQuery({
     queryKey: ['portfolio-analysis'],
     queryFn: () => portfolioAPI.analysis().then((res) => res.data),
     enabled: showDiagnosis,
+    staleTime: 1000 * 60 * 5,  // 5분 캐시 (분석은 자주 바뀌지 않음)
   });
 
   const addMutation = useMutation({
@@ -45,7 +46,10 @@ export default function Portfolio() {
 
   const deleteMutation = useMutation({
     mutationFn: (id) => portfolioAPI.delete(id),
-    onSuccess: () => queryClient.invalidateQueries(['portfolio']),
+    onSuccess: () => {
+      queryClient.invalidateQueries(['portfolio']);
+      alert('삭제하였습니다.');
+    },
   });
 
   const updateMutation = useMutation({

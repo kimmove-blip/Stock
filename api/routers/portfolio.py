@@ -5,6 +5,7 @@
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from typing import List, Optional
+from concurrent.futures import ThreadPoolExecutor, as_completed
 import sys
 import os
 
@@ -48,8 +49,33 @@ async def get_portfolio(
     current_user: dict = Depends(get_current_user_required),
     db: DatabaseManager = Depends(get_db)
 ):
-    """포트폴리오 조회"""
+    """포트폴리오 조회 (현재가 병렬 조회)"""
     items = db.get_portfolio(current_user['id'])
+
+    if not items:
+        return PortfolioResponse(
+            summary=PortfolioSummary(
+                total_investment=0,
+                total_value=0,
+                total_profit_loss=0,
+                total_profit_loss_rate=0,
+                stock_count=0
+            ),
+            items=[]
+        )
+
+    # 현재가 병렬 조회
+    price_map = {}
+    stock_codes = [item['stock_code'] for item in items]
+
+    with ThreadPoolExecutor(max_workers=min(len(stock_codes), 5)) as executor:
+        future_to_code = {executor.submit(get_current_price, code): code for code in stock_codes}
+        for future in as_completed(future_to_code):
+            code = future_to_code[future]
+            try:
+                price_map[code] = future.result()
+            except Exception:
+                price_map[code] = None
 
     portfolio_items = []
     total_investment = 0
@@ -60,7 +86,7 @@ async def get_portfolio(
         quantity = int(item['quantity'] or 1)
         investment = buy_price * quantity
 
-        current_price = get_current_price(item['stock_code'])
+        current_price = price_map.get(item['stock_code'])
         current_value = (current_price or buy_price) * quantity
 
         profit_loss = current_value - investment
@@ -203,6 +229,15 @@ async def delete_portfolio_item(
     db.delete_portfolio_item(item_id)
 
 
+@router.delete("/clear", status_code=status.HTTP_204_NO_CONTENT)
+async def clear_portfolio(
+    current_user: dict = Depends(get_current_user_required),
+    db: DatabaseManager = Depends(get_db)
+):
+    """포트폴리오 전체 삭제"""
+    db.clear_portfolio(current_user['id'])
+
+
 def analyze_stock_technical(code: str) -> dict:
     """기술적 분석 기반 종목 분석 - 종목 상세와 동일한 로직"""
     try:
@@ -266,7 +301,7 @@ async def analyze_portfolio(
     current_user: dict = Depends(get_current_user_required),
     db: DatabaseManager = Depends(get_db)
 ):
-    """포트폴리오 분석"""
+    """포트폴리오 분석 (병렬 처리)"""
     items = db.get_portfolio(current_user['id'])
     if not items:
         return PortfolioAnalysis(
@@ -282,7 +317,20 @@ async def analyze_portfolio(
             recommendations=["보유종목을 추가해주세요."]
         )
 
-    # 분석 실행
+    # 기술적 분석 병렬 실행
+    analysis_map = {}
+    stock_codes = [item['stock_code'] for item in items]
+
+    with ThreadPoolExecutor(max_workers=min(len(stock_codes), 5)) as executor:
+        future_to_code = {executor.submit(analyze_stock_technical, code): code for code in stock_codes}
+        for future in as_completed(future_to_code):
+            code = future_to_code[future]
+            try:
+                analysis_map[code] = future.result()
+            except Exception:
+                analysis_map[code] = None
+
+    # 분석 결과 처리
     analysis_results = []
     risk_stocks = []
     recommendations = []
@@ -294,8 +342,8 @@ async def analyze_portfolio(
         buy_price = int(item['buy_price'] or 0)
         quantity = int(item['quantity'] or 1)
 
-        # 기술적 분석 실행 (종목 상세와 동일)
-        result = analyze_stock_technical(item['stock_code'])
+        # 병렬로 미리 조회한 결과 사용
+        result = analysis_map.get(item['stock_code'])
 
         if result:
             opinion = result['opinion']
