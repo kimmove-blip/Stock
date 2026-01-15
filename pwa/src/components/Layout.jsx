@@ -1,6 +1,8 @@
 import { Outlet, NavLink, useLocation, useNavigate } from 'react-router-dom';
+import { useQuery } from '@tanstack/react-query';
 import { Home, Info, MessageCircle, Settings, ArrowLeft, Bell } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
+import { alertsAPI } from '../api/client';
 
 // 페이지별 타이틀 매핑
 const pageTitles = {
@@ -17,6 +19,8 @@ const pageTitles = {
   '/contact': '문의하기',
   '/settings': '설정',
   '/telegram': '텔레그램 알림',
+  '/push': '푸시 알림',
+  '/alerts': '알림 기록',
   '/login': '로그인',
   '/register': '회원가입',
 };
@@ -27,6 +31,22 @@ export default function Layout() {
   const { user } = useAuth();
   const isHome = location.pathname === '/';
   const isStockDetail = location.pathname.startsWith('/stock/');
+
+  // 알림 기록 조회
+  const { data: alertsData } = useQuery({
+    queryKey: ['alerts'],
+    queryFn: () => alertsAPI.list(7).then((res) => res.data),
+    staleTime: 1000 * 60 * 5, // 5분 캐시
+    enabled: !!user,
+  });
+
+  // 읽지 않은 알림 계산 (localStorage에 마지막 확인 시간 저장)
+  const lastViewedAlerts = localStorage.getItem('lastViewedAlerts');
+  const unreadCount = alertsData?.items?.filter((alert) => {
+    if (!lastViewedAlerts) return true;
+    return new Date(alert.created_at) > new Date(lastViewedAlerts);
+  }).length || 0;
+  const hasUnread = unreadCount > 0;
 
   // 현재 페이지 타이틀
   const pageTitle = pageTitles[location.pathname] || (isStockDetail ? '종목 상세' : '');
@@ -60,11 +80,18 @@ export default function Layout() {
                 </div>
               )}
               <button
-                onClick={() => navigate('/telegram')}
-                className="relative p-2 text-white hover:bg-white/10 rounded-full transition-colors"
+                onClick={() => navigate('/alerts')}
+                className={`relative p-2 rounded-full transition-colors ${
+                  hasUnread
+                    ? 'text-white hover:bg-white/10'
+                    : 'text-white/50 cursor-default'
+                }`}
+                disabled={!hasUnread}
               >
                 <Bell size={20} />
-                <span className="absolute top-1 right-1 w-2 h-2 bg-red-500 rounded-full"></span>
+                {hasUnread && (
+                  <span className="absolute top-1 right-1 w-2 h-2 bg-red-500 rounded-full animate-pulse"></span>
+                )}
               </button>
             </div>
           </div>

@@ -1,7 +1,7 @@
 import { useNavigate } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 import { useAuth } from '../contexts/AuthContext';
-import { portfolioAPI } from '../api/client';
+import { portfolioAPI, alertsAPI } from '../api/client';
 import {
   Zap,
   TrendingUp,
@@ -27,6 +27,22 @@ export default function Home() {
     refetchOnMount: 'stale',  // stale일 때만 새로고침
     refetchOnWindowFocus: false,  // 창 포커스 시 새로고침 비활성화
   });
+
+  // 알림 기록 조회
+  const { data: alertsData } = useQuery({
+    queryKey: ['alerts'],
+    queryFn: () => alertsAPI.list(7).then((res) => res.data),
+    staleTime: 1000 * 60 * 5,
+    enabled: !!user,
+  });
+
+  // 읽지 않은 알림 계산
+  const lastViewedAlerts = localStorage.getItem('lastViewedAlerts');
+  const unreadCount = alertsData?.items?.filter((alert) => {
+    if (!lastViewedAlerts) return true;
+    return new Date(alert.created_at) > new Date(lastViewedAlerts);
+  }).length || 0;
+  const hasUnread = unreadCount > 0;
 
   // 퀵 액션 목록 - 배경색과 아이콘색 분리
   const quickActions = [
@@ -64,9 +80,17 @@ export default function Home() {
               <p className="font-bold">{user?.name || user?.username || '사용자'}님</p>
             </div>
           </div>
-          <button className="relative p-2" onClick={() => navigate('/telegram')}>
-            <Bell className="text-white" size={22} />
-            <span className="absolute top-1 right-1 w-2 h-2 bg-red-500 rounded-full"></span>
+          <button
+            className={`relative p-2 rounded-full transition-colors ${
+              hasUnread ? 'text-white' : 'text-white/50'
+            }`}
+            onClick={() => navigate('/alerts')}
+            disabled={!hasUnread}
+          >
+            <Bell size={22} />
+            {hasUnread && (
+              <span className="absolute top-1 right-1 w-2 h-2 bg-red-500 rounded-full animate-pulse"></span>
+            )}
           </button>
         </div>
       </div>

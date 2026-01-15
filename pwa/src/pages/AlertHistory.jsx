@@ -1,3 +1,4 @@
+import { useEffect } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useNavigate } from 'react-router-dom';
 import { Bell, Trash2, AlertTriangle, TrendingDown, ChevronRight } from 'lucide-react';
@@ -7,6 +8,13 @@ import Loading from '../components/Loading';
 export default function AlertHistory() {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
+
+  // 페이지 진입 시 알림을 읽음으로 표시
+  useEffect(() => {
+    localStorage.setItem('lastViewedAlerts', new Date().toISOString());
+    // Layout의 알림 쿼리 갱신을 위해 invalidate
+    queryClient.invalidateQueries(['alerts']);
+  }, [queryClient]);
 
   const { data, isLoading, error } = useQuery({
     queryKey: ['alerts'],
