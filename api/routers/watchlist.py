@@ -151,3 +151,12 @@ async def delete_category(
         user_id=current_user['id'],
         category=category_name
     )
+
+
+@router.delete("/clear", status_code=status.HTTP_204_NO_CONTENT)
+async def clear_watchlist(
+    current_user: dict = Depends(get_current_user_required),
+    db: DatabaseManager = Depends(get_db)
+):
+    """관심종목 전체 삭제 (모든 카테고리)"""
+    db.clear_watchlist(current_user['id'])

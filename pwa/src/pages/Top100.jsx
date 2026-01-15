@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { useNavigate } from 'react-router-dom';
-import { top100API } from '../api/client';
+import { top100API, portfolioAPI, watchlistAPI } from '../api/client';
 import StockCard from '../components/StockCard';
 import Loading from '../components/Loading';
 import { RefreshCw, Calendar } from 'lucide-react';
@@ -15,6 +15,25 @@ export default function Top100() {
     queryFn: () => top100API.list(selectedDate).then((res) => res.data),
     staleTime: 1000 * 60 * 5, // 5분
   });
+
+  // 보유종목/관심종목 데이터
+  const { data: portfolio } = useQuery({
+    queryKey: ['portfolio'],
+    queryFn: () => portfolioAPI.list().then((res) => res.data),
+    staleTime: 1000 * 60 * 5,
+  });
+
+  const { data: watchlist } = useQuery({
+    queryKey: ['watchlist'],
+    queryFn: () => watchlistAPI.list().then((res) => res.data),
+    staleTime: 1000 * 60 * 5,
+  });
+
+  // 보유/관심 여부 확인 함수
+  const isInPortfolio = (code) =>
+    portfolio?.items?.some((item) => item.stock_code === code);
+  const isInWatchlist = (code) =>
+    watchlist?.items?.some((item) => item.stock_code === code);
 
   if (isLoading) return <Loading text="AI 추천 종목 불러오는 중..." />;
 
@@ -76,6 +95,8 @@ export default function Top100() {
               <StockCard
                 stock={stock}
                 onClick={() => navigate(`/stock/${stock.code}`)}
+                inPortfolio={isInPortfolio(stock.code)}
+                inWatchlist={isInWatchlist(stock.code)}
               />
             </div>
           </div>

@@ -20,9 +20,13 @@ import GlobalMarkets from './pages/GlobalMarkets';
 import PopularStocks from './pages/PopularStocks';
 import Admin from './pages/Admin';
 import TelegramSettings from './pages/TelegramSettings';
+import PushSettings from './pages/PushSettings';
 import Privacy from './pages/Privacy';
+import DeleteAccount from './pages/DeleteAccount';
+import DeleteData from './pages/DeleteData';
 import Loading from './components/Loading';
 import Disclaimer from './components/Disclaimer';
+import PushPermissionPrompt from './components/PushPermissionPrompt';
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -86,7 +90,10 @@ function AppRoutes() {
         <Route path="/contact" element={<Contact />} />
         <Route path="/settings" element={<Settings />} />
         <Route path="/telegram" element={<TelegramSettings />} />
+        <Route path="/push" element={<PushSettings />} />
         <Route path="/admin" element={<Admin />} />
+        <Route path="/delete-account" element={<DeleteAccount />} />
+        <Route path="/delete-data" element={<DeleteData />} />
       </Route>
 
       {/* 404 리다이렉트 */}
@@ -101,6 +108,7 @@ export default function App() {
       <BrowserRouter>
         <AuthProvider>
           <Disclaimer />
+          <PushPermissionPrompt />
           <AppRoutes />
         </AuthProvider>
       </BrowserRouter>

@@ -2,10 +2,12 @@
 포트폴리오 알림 서비스
 - 사용자 포트폴리오 상태 모니터링
 - 텔레그램 알림 발송
+- 푸시 알림 발송
 """
 
 import sys
 import os
+import json
 from pathlib import Path
 from datetime import datetime, timedelta
 
@@ -13,6 +15,10 @@ PROJECT_ROOT = Path(__file__).parent.parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
 from database.db_manager import DatabaseManager
+
+# VAPID 설정
+VAPID_PRIVATE_KEY = os.getenv("VAPID_PRIVATE_KEY", "")
+VAPID_EMAIL = os.getenv("VAPID_EMAIL", "mailto:admin@example.com")
 
 # 마지막 알림 상태 저장 (메모리)
 # {user_id: {stock_code: {'opinion': str, 'profit_loss_rate': float, 'last_alert': datetime}}}
@@ -39,6 +45,49 @@ def send_telegram_message(chat_id: str, message: str) -> bool:
     except Exception as e:
         print(f"[텔레그램] 메시지 전송 실패: {e}")
         return False
+
+
+def send_push_notification(subscription: dict, title: str, body: str, url: str = None) -> bool:
+    """푸시 알림 전송"""
+    try:
+        from pywebpush import webpush, WebPushException
+
+        payload = json.dumps({
+            "title": title,
+            "body": body,
+            "icon": "/icons/icon-192x192.png",
+            "badge": "/icons/icon-72x72.png",
+            "url": url or "/"
+        })
+
+        webpush(
+            subscription_info={
+                "endpoint": subscription["endpoint"],
+                "keys": {
+                    "p256dh": subscription["p256dh"],
+                    "auth": subscription["auth"]
+                }
+            },
+            data=payload,
+            vapid_private_key=VAPID_PRIVATE_KEY,
+            vapid_claims={"sub": VAPID_EMAIL}
+        )
+        return True
+    except Exception as e:
+        print(f"[푸시] 알림 전송 실패: {e}")
+        return False
+
+
+def send_push_to_user(db: DatabaseManager, user_id: int, title: str, body: str, url: str = None) -> int:
+    """사용자의 모든 구독에 푸시 알림 전송"""
+    subscriptions = db.get_all_push_subscriptions_for_user(user_id)
+    success_count = 0
+
+    for sub in subscriptions:
+        if send_push_notification(sub, title, body, url):
+            success_count += 1
+
+    return success_count
 
 
 def analyze_stock_for_alert(code: str) -> dict:
@@ -111,14 +160,14 @@ def check_portfolio_alerts():
     try:
         db = DatabaseManager()
 
-        # 텔레그램 알림 활성화된 사용자 조회
+        # 알림 활성화된 사용자 조회 (텔레그램 또는 푸시)
         with db.get_connection() as conn:
             users = conn.execute("""
-                SELECT id, username, telegram_chat_id
+                SELECT id, username, telegram_chat_id, telegram_alerts_enabled, push_alerts_enabled
                 FROM users
-                WHERE telegram_alerts_enabled = 1
-                  AND telegram_chat_id IS NOT NULL
-                  AND is_active = 1
+                WHERE (telegram_alerts_enabled = 1 AND telegram_chat_id IS NOT NULL)
+                   OR push_alerts_enabled = 1
+                AND is_active = 1
             """).fetchall()
 
         if not users:
@@ -131,6 +180,8 @@ def check_portfolio_alerts():
             user_id = user['id']
             username = user['username']
             chat_id = user['telegram_chat_id']
+            telegram_enabled = user['telegram_alerts_enabled']
+            push_enabled = user['push_alerts_enabled']
 
             # 사용자 포트폴리오 조회
             portfolio = db.get_portfolio(user_id)
@@ -220,7 +271,8 @@ def check_portfolio_alerts():
             # 알림 발송
             if alerts_to_send:
                 for alert in alerts_to_send:
-                    message = f"""<b>📊 포트폴리오 알림</b>
+                    # 텔레그램 메시지 (HTML 형식)
+                    telegram_message = f"""<b>📊 포트폴리오 알림</b>
 
 <b>{alert['name']}</b> ({alert['code']})
 
@@ -233,16 +285,36 @@ def check_portfolio_alerts():
 
 <i>※ 본 알림은 참고용이며, 투자 판단은 본인의 책임입니다.</i>"""
 
-                    success = send_telegram_message(chat_id, message)
+                    # 푸시 알림용 간단 메시지
+                    push_title = f"📊 {alert['name']} - {alert['reason']}"
+                    push_body = f"현재가: {alert['current_price']:,}원 | 수익률: {alert['profit_loss_rate']:+.2f}% | {alert['opinion']}"
 
-                    if success:
-                        print(f"[알림] 전송 성공: {username} - {alert['name']} ({alert['reason']})")
-                        # 알림 기록 저장
+                    telegram_success = False
+                    push_success = False
+
+                    # 텔레그램 알림 발송
+                    if telegram_enabled and chat_id:
+                        telegram_success = send_telegram_message(chat_id, telegram_message)
+                        if telegram_success:
+                            print(f"[텔레그램] 전송 성공: {username} - {alert['name']}")
+
+                    # 푸시 알림 발송
+                    if push_enabled:
+                        push_count = send_push_to_user(
+                            db, user_id, push_title, push_body,
+                            url=f"/stock/{alert['code']}"
+                        )
+                        if push_count > 0:
+                            push_success = True
+                            print(f"[푸시] 전송 성공: {username} - {alert['name']} ({push_count}개 기기)")
+
+                    # 알림 기록 저장 (하나라도 성공하면)
+                    if telegram_success or push_success:
                         with db.get_connection() as conn:
                             conn.execute("""
                                 INSERT INTO alert_history (user_id, stock_code, alert_type, message)
                                 VALUES (?, ?, ?, ?)
-                            """, (user_id, alert['code'], alert['reason'], message))
+                            """, (user_id, alert['code'], alert['reason'], telegram_message))
                             conn.commit()
                     else:
                         print(f"[알림] 전송 실패: {username} - {alert['name']}")

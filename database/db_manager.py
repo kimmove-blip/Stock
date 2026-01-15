@@ -107,11 +107,25 @@ class DatabaseManager:
                 CREATE INDEX IF NOT EXISTS idx_alert_history_user ON alert_history(user_id);
                 CREATE UNIQUE INDEX IF NOT EXISTS idx_alert_daily ON alert_history(user_id, stock_code, alert_type, date(created_at));
                 CREATE INDEX IF NOT EXISTS idx_contacts_status ON contacts(status);
+
+                -- 푸시 구독 테이블
+                CREATE TABLE IF NOT EXISTS push_subscriptions (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    user_id INTEGER NOT NULL,
+                    endpoint TEXT NOT NULL UNIQUE,
+                    p256dh TEXT NOT NULL,
+                    auth TEXT NOT NULL,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+                );
+
+                CREATE INDEX IF NOT EXISTS idx_push_subscriptions_user ON push_subscriptions(user_id);
             """)
             conn.commit()
 
             # 기존 users 테이블에 telegram 컬럼 추가 (마이그레이션)
             self._migrate_telegram_columns(conn)
+            self._migrate_push_columns(conn)
 
     def _migrate_telegram_columns(self, conn):
         """users 테이블에 telegram 관련 컬럼 추가 (마이그레이션)"""
@@ -129,6 +143,16 @@ class DatabaseManager:
 
         if 'is_admin' not in columns:
             conn.execute("ALTER TABLE users ADD COLUMN is_admin BOOLEAN DEFAULT 0")
+
+        conn.commit()
+
+    def _migrate_push_columns(self, conn):
+        """users 테이블에 푸시 알림 컬럼 추가 (마이그레이션)"""
+        cursor = conn.execute("PRAGMA table_info(users)")
+        columns = [row[1] for row in cursor.fetchall()]
+
+        if 'push_alerts_enabled' not in columns:
+            conn.execute("ALTER TABLE users ADD COLUMN push_alerts_enabled BOOLEAN DEFAULT 0")
 
         conn.commit()
 
@@ -535,3 +559,93 @@ class DatabaseManager:
                 "SELECT COUNT(*) as count FROM contacts WHERE status = 'pending'"
             )
             return cursor.fetchone()['count']
+
+    # ==================== 푸시 알림 구독 ====================
+
+    def add_push_subscription(self, user_id, endpoint, p256dh, auth):
+        """푸시 구독 추가/업데이트"""
+        with self.get_connection() as conn:
+            # 기존 구독이 있으면 삭제 (endpoint 기준)
+            conn.execute("DELETE FROM push_subscriptions WHERE endpoint = ?", (endpoint,))
+            # 새 구독 추가
+            cursor = conn.execute(
+                "INSERT INTO push_subscriptions (user_id, endpoint, p256dh, auth) VALUES (?, ?, ?, ?)",
+                (user_id, endpoint, p256dh, auth)
+            )
+            # 푸시 알림 활성화
+            conn.execute("UPDATE users SET push_alerts_enabled = 1 WHERE id = ?", (user_id,))
+            conn.commit()
+            return cursor.lastrowid
+
+    def remove_push_subscription(self, user_id, endpoint=None):
+        """푸시 구독 삭제"""
+        with self.get_connection() as conn:
+            if endpoint:
+                conn.execute(
+                    "DELETE FROM push_subscriptions WHERE user_id = ? AND endpoint = ?",
+                    (user_id, endpoint)
+                )
+            else:
+                conn.execute("DELETE FROM push_subscriptions WHERE user_id = ?", (user_id,))
+            # 구독이 없으면 푸시 알림 비활성화
+            cursor = conn.execute(
+                "SELECT COUNT(*) as count FROM push_subscriptions WHERE user_id = ?", (user_id,)
+            )
+            if cursor.fetchone()['count'] == 0:
+                conn.execute("UPDATE users SET push_alerts_enabled = 0 WHERE id = ?", (user_id,))
+            conn.commit()
+
+    def get_push_subscriptions(self, user_id):
+        """사용자의 푸시 구독 목록"""
+        with self.get_connection() as conn:
+            cursor = conn.execute(
+                "SELECT id, endpoint, p256dh, auth FROM push_subscriptions WHERE user_id = ?",
+                (user_id,)
+            )
+            return [dict(row) for row in cursor.fetchall()]
+
+    def get_all_push_subscriptions_for_user(self, user_id):
+        """사용자의 모든 푸시 구독 정보 (알림 발송용)"""
+        with self.get_connection() as conn:
+            cursor = conn.execute(
+                "SELECT endpoint, p256dh, auth FROM push_subscriptions WHERE user_id = ?",
+                (user_id,)
+            )
+            return [dict(row) for row in cursor.fetchall()]
+
+    def get_users_with_push_enabled(self):
+        """푸시 알림이 활성화된 사용자 목록"""
+        with self.get_connection() as conn:
+            cursor = conn.execute(
+                "SELECT id, username, name FROM users WHERE push_alerts_enabled = 1 AND is_active = 1"
+            )
+            return [dict(row) for row in cursor.fetchall()]
+
+    def get_push_settings(self, user_id):
+        """푸시 알림 설정 조회"""
+        with self.get_connection() as conn:
+            cursor = conn.execute(
+                "SELECT push_alerts_enabled FROM users WHERE id = ?", (user_id,)
+            )
+            row = cursor.fetchone()
+            enabled = bool(row['push_alerts_enabled']) if row else False
+
+            # 구독 수 확인
+            cursor = conn.execute(
+                "SELECT COUNT(*) as count FROM push_subscriptions WHERE user_id = ?", (user_id,)
+            )
+            subscription_count = cursor.fetchone()['count']
+
+            return {
+                'enabled': enabled,
+                'subscription_count': subscription_count
+            }
+
+    def update_push_settings(self, user_id, enabled):
+        """푸시 알림 활성화/비활성화"""
+        with self.get_connection() as conn:
+            conn.execute(
+                "UPDATE users SET push_alerts_enabled = ? WHERE id = ?",
+                (1 if enabled else 0, user_id)
+            )
+            conn.commit()

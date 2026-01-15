@@ -57,6 +57,23 @@ export default function StockDetail() {
     refetchOnWindowFocus: false,
   });
 
+  // 보유종목/관심종목 데이터
+  const { data: portfolio } = useQuery({
+    queryKey: ['portfolio'],
+    queryFn: () => portfolioAPI.list().then((res) => res.data),
+    staleTime: 1000 * 60 * 5,
+  });
+
+  const { data: watchlist } = useQuery({
+    queryKey: ['watchlist'],
+    queryFn: () => watchlistAPI.list().then((res) => res.data),
+    staleTime: 1000 * 60 * 5,
+  });
+
+  // 보유/관심 여부 확인
+  const isInPortfolio = portfolio?.items?.some((item) => item.stock_code === code);
+  const isInWatchlist = watchlist?.items?.some((item) => item.stock_code === code);
+
   const addToPortfolioMutation = useMutation({
     mutationFn: (data) =>
       portfolioAPI.add({
@@ -156,19 +173,31 @@ export default function StockDetail() {
 
           {/* 액션 버튼 */}
           <div className="flex gap-2 mt-4">
-            <button
-              onClick={handleOpenAddModal}
-              className="btn btn-primary btn-sm flex-1"
-            >
-              <Plus size={16} /> 보유종목
-            </button>
-            <button
-              onClick={() => addToWatchlistMutation.mutate()}
-              className="btn btn-outline btn-sm flex-1"
-              disabled={addToWatchlistMutation.isPending}
-            >
-              <Star size={16} /> 관심종목
-            </button>
+            {isInPortfolio ? (
+              <button disabled className="btn btn-ghost btn-sm flex-1 text-blue-500">
+                <Plus size={16} /> 보유중
+              </button>
+            ) : (
+              <button
+                onClick={handleOpenAddModal}
+                className="btn btn-primary btn-sm flex-1"
+              >
+                <Plus size={16} /> 보유종목
+              </button>
+            )}
+            {isInWatchlist ? (
+              <button disabled className="btn btn-ghost btn-sm flex-1 text-yellow-500">
+                <Star size={16} /> 관심중
+              </button>
+            ) : (
+              <button
+                onClick={() => addToWatchlistMutation.mutate()}
+                className="btn btn-outline btn-sm flex-1"
+                disabled={addToWatchlistMutation.isPending}
+              >
+                <Star size={16} /> 관심종목
+              </button>
+            )}
           </div>
         </div>
       </div>

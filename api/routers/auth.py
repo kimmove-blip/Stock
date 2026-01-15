@@ -260,3 +260,25 @@ async def google_login(request: Request, login_request: GoogleLoginRequest, db: 
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Google 로그인 처리 중 오류가 발생했습니다"
         )
+
+
+@router.delete("/delete-account")
+async def delete_account(
+    current_user: dict = Depends(get_current_user_required),
+    db: DatabaseManager = Depends(get_db)
+):
+    """계정 삭제 (모든 관련 데이터 포함)"""
+    user_id = current_user['id']
+    username = current_user['username']
+
+    try:
+        # 사용자 및 관련 데이터 삭제
+        db.delete_user(user_id)
+        print(f"[Account Deleted] User: {username} (ID: {user_id})")
+        return {"message": "계정이 성공적으로 삭제되었습니다"}
+    except Exception as e:
+        print(f"[Delete Account Error] User: {username}, Error: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="계정 삭제 중 오류가 발생했습니다"
+        )

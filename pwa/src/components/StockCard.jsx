@@ -1,6 +1,6 @@
 import { TrendingUp, TrendingDown } from 'lucide-react';
 
-export default function StockCard({ stock, onClick, showScore = true }) {
+export default function StockCard({ stock, onClick, showScore = true, inPortfolio = false, inWatchlist = false }) {
   const isPositive = (stock.change_rate || 0) >= 0;
 
   return (
@@ -11,7 +11,19 @@ export default function StockCard({ stock, onClick, showScore = true }) {
       <div className="card-body p-4">
         <div className="flex justify-between items-start">
           <div>
-            <h3 className="font-bold text-base">{stock.name}</h3>
+            <div className="flex items-center gap-1.5">
+              <h3 className="font-bold text-base">{stock.name}</h3>
+              {inPortfolio && (
+                <span className="bg-blue-100 text-blue-600 text-[10px] px-1.5 py-0.5 rounded font-medium">
+                  보유
+                </span>
+              )}
+              {inWatchlist && (
+                <span className="bg-yellow-100 text-yellow-600 text-[10px] px-1.5 py-0.5 rounded font-medium">
+                  관심
+                </span>
+              )}
+            </div>
             <p className="text-xs text-base-content/60">{stock.code}</p>
           </div>
           {showScore && stock.score !== undefined && (

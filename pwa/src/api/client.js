@@ -167,4 +167,20 @@ export const adminAPI = {
   getStats: () => api.get('/admin/stats'),
 };
 
+// 푸시 알림 API
+export const pushAPI = {
+  // 설정 조회
+  getSettings: () => api.get('/push'),
+  // 푸시 구독
+  subscribe: (subscription) => api.post('/push/subscribe', subscription),
+  // 푸시 구독 해제
+  unsubscribe: (endpoint) => api.delete(`/push/unsubscribe${endpoint ? `?endpoint=${encodeURIComponent(endpoint)}` : ''}`),
+  // 설정 업데이트
+  updateSettings: (data) => api.post('/push/settings', data),
+  // 테스트 알림 전송
+  test: () => api.post('/push/test'),
+  // VAPID 공개키 조회
+  getVapidKey: () => api.get('/push/vapid-key'),
+};
+
 export default api;

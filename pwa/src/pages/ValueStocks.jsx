@@ -61,6 +61,25 @@ export default function ValueStocks() {
     staleTime: 1000 * 60 * 30, // 30분 캐시
   });
 
+  // 보유종목/관심종목 데이터
+  const { data: portfolio } = useQuery({
+    queryKey: ['portfolio'],
+    queryFn: () => portfolioAPI.list().then((res) => res.data),
+    staleTime: 1000 * 60 * 5,
+  });
+
+  const { data: watchlist } = useQuery({
+    queryKey: ['watchlist'],
+    queryFn: () => watchlistAPI.list().then((res) => res.data),
+    staleTime: 1000 * 60 * 5,
+  });
+
+  // 보유/관심 여부 확인 함수
+  const isInPortfolio = (code) =>
+    portfolio?.items?.some((item) => item.stock_code === code);
+  const isInWatchlist = (code) =>
+    watchlist?.items?.some((item) => item.stock_code === code);
+
   // 관심종목 추가
   const addToWatchlistMutation = useMutation({
     mutationFn: (stock) => watchlistAPI.add({
@@ -209,7 +228,19 @@ export default function ValueStocks() {
             >
               <div className="flex justify-between items-start mb-2">
                 <div>
-                  <h3 className="font-semibold text-gray-800">{stock.name}</h3>
+                  <div className="flex items-center gap-1.5">
+                    <h3 className="font-semibold text-gray-800">{stock.name}</h3>
+                    {isInPortfolio(stock.code) && (
+                      <span className="bg-blue-100 text-blue-600 text-[10px] px-1.5 py-0.5 rounded font-medium">
+                        보유
+                      </span>
+                    )}
+                    {isInWatchlist(stock.code) && (
+                      <span className="bg-yellow-100 text-yellow-600 text-[10px] px-1.5 py-0.5 rounded font-medium">
+                        관심
+                      </span>
+                    )}
+                  </div>
                   <p className="text-sm text-gray-500">{stock.code}</p>
                 </div>
                 <div className="text-right">
@@ -281,19 +312,31 @@ export default function ValueStocks() {
 
               {/* 액션 버튼 */}
               <div className="flex gap-2 mt-3 pt-3 border-t border-gray-100">
-                <button
-                  onClick={() => handleOpenAddModal(stock, stockData.current_price)}
-                  className="btn btn-sm btn-primary flex-1"
-                >
-                  <Plus size={14} /> 보유종목
-                </button>
-                <button
-                  onClick={() => addToWatchlistMutation.mutate(stock)}
-                  disabled={addToWatchlistMutation.isPending}
-                  className="btn btn-sm btn-outline flex-1"
-                >
-                  <Star size={14} /> 관심종목
-                </button>
+                {isInPortfolio(stock.code) ? (
+                  <button disabled className="btn btn-sm btn-ghost flex-1 text-blue-500">
+                    <Plus size={14} /> 보유중
+                  </button>
+                ) : (
+                  <button
+                    onClick={() => handleOpenAddModal(stock, stockData.current_price)}
+                    className="btn btn-sm btn-primary flex-1"
+                  >
+                    <Plus size={14} /> 보유종목
+                  </button>
+                )}
+                {isInWatchlist(stock.code) ? (
+                  <button disabled className="btn btn-sm btn-ghost flex-1 text-yellow-500">
+                    <Star size={14} /> 관심중
+                  </button>
+                ) : (
+                  <button
+                    onClick={() => addToWatchlistMutation.mutate(stock)}
+                    disabled={addToWatchlistMutation.isPending}
+                    className="btn btn-sm btn-outline flex-1"
+                  >
+                    <Star size={14} /> 관심종목
+                  </button>
+                )}
               </div>
             </div>
           );

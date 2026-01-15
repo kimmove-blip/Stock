@@ -9,6 +9,7 @@ import {
   ChevronRight,
   Shield,
   MessageCircle,
+  Bell,
   FileText,
   Trash2,
   UserX,
@@ -117,6 +118,21 @@ export default function Settings() {
           <h3 className="font-semibold text-gray-700 text-sm">알림 설정</h3>
         </div>
 
+        {/* 푸시 알림 */}
+        <button
+          onClick={() => navigate('/push')}
+          className="w-full flex items-center justify-between p-4 hover:bg-gray-50 transition-colors border-b border-gray-100"
+        >
+          <div className="flex items-center gap-3">
+            <Bell size={20} className="text-purple-500" />
+            <div className="text-left">
+              <span className="text-gray-700 block">푸시 알림</span>
+              <span className="text-xs text-gray-400">하락/매도 신호 실시간 알림</span>
+            </div>
+          </div>
+          <ChevronRight size={20} className="text-gray-400" />
+        </button>
+
         {/* 텔레그램 알림 */}
         <button
           onClick={() => navigate('/telegram')}
@@ -126,7 +142,7 @@ export default function Settings() {
             <MessageCircle size={20} className="text-blue-500" />
             <div className="text-left">
               <span className="text-gray-700 block">텔레그램 알림</span>
-              <span className="text-xs text-gray-400">하락/매도 신호 실시간 알림</span>
+              <span className="text-xs text-gray-400">텔레그램으로 알림 받기</span>
             </div>
           </div>
           <ChevronRight size={20} className="text-gray-400" />
