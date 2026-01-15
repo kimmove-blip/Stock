@@ -70,7 +70,8 @@ export default function Settings() {
     }
   };
 
-  const settingsItems = [
+  // 개인정보 설정 메뉴 (관리자, 개인정보처리방침, 데이터삭제, 회원탈퇴)
+  const privacyItems = [
     // 관리자만 보이도록
     ...(user?.is_admin ? [{
       icon: Shield,
@@ -78,18 +79,14 @@ export default function Settings() {
       action: () => navigate('/admin'),
     }] : []),
     {
-      icon: Trash2,
-      label: '데이터 삭제',
-      action: () => navigate('/delete-data'),
-    },
-  ];
-
-  // 하단 메뉴 (개인정보처리방침, 회원탈퇴)
-  const bottomItems = [
-    {
       icon: FileText,
       label: '개인정보처리방침',
       action: () => navigate('/privacy'),
+    },
+    {
+      icon: Trash2,
+      label: '데이터 삭제',
+      action: () => navigate('/delete-data'),
     },
     {
       icon: UserX,
@@ -112,25 +109,6 @@ export default function Settings() {
             <p className="text-gray-500 text-sm">{user?.email || '이메일 미등록'}</p>
           </div>
         </div>
-      </div>
-
-      {/* 설정 항목 */}
-      <div className="bg-white rounded-xl shadow-sm mb-4">
-        {settingsItems.map(({ icon: Icon, label, action, danger }, idx) => (
-          <button
-            key={label}
-            onClick={action}
-            className={`w-full flex items-center justify-between p-4 hover:bg-gray-50 transition-colors ${
-              idx < settingsItems.length - 1 ? 'border-b border-gray-100' : ''
-            }`}
-          >
-            <div className="flex items-center gap-3">
-              <Icon size={20} className={danger ? 'text-red-500' : 'text-gray-500'} />
-              <span className={danger ? 'text-red-500' : 'text-gray-700'}>{label}</span>
-            </div>
-            <ChevronRight size={20} className="text-gray-400" />
-          </button>
-        ))}
       </div>
 
       {/* 알림 설정 섹션 */}
@@ -214,14 +192,17 @@ export default function Settings() {
         </div>
       </div>
 
-      {/* 개인정보 및 계정 관리 (하단) */}
+      {/* 개인정보 설정 */}
       <div className="bg-white rounded-xl shadow-sm mb-4">
-        {bottomItems.map(({ icon: Icon, label, action, danger }, idx) => (
+        <div className="px-4 py-3 border-b border-gray-100">
+          <h3 className="font-semibold text-gray-700 text-sm">개인정보 설정</h3>
+        </div>
+        {privacyItems.map(({ icon: Icon, label, action, danger }, idx) => (
           <button
             key={label}
             onClick={action}
             className={`w-full flex items-center justify-between p-4 hover:bg-gray-50 transition-colors ${
-              idx < bottomItems.length - 1 ? 'border-b border-gray-100' : ''
+              idx < privacyItems.length - 1 ? 'border-b border-gray-100' : ''
             }`}
           >
             <div className="flex items-center gap-3">

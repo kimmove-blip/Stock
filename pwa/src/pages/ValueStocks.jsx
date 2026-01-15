@@ -171,6 +171,12 @@ export default function ValueStocks() {
         </span>
       </div>
 
+      {/* 안내 문구 (강조) */}
+      <div className="bg-gradient-to-r from-blue-600 to-indigo-600 rounded-xl p-4 mb-4 text-white">
+        <p className="font-bold text-base mb-1">저평가된 우량주를 AI가 선별했습니다</p>
+        <p className="text-sm text-blue-100">단기 시세보다 기업 가치에 집중하는 중장기 투자자분들께 추천드립니다.</p>
+      </div>
+
       {/* 선별 기준 */}
       <div className="bg-blue-50 rounded-xl p-4 mb-4">
         <p className="text-sm text-blue-700 font-medium mb-2">가치주 선별 기준</p>
@@ -189,12 +195,6 @@ export default function ValueStocks() {
           </div>
         </div>
       </div>
-
-      {/* 안내 문구 */}
-      <p className="text-xs text-gray-500 mb-4 flex items-start gap-1">
-        <span>💡</span>
-        <span>저평가된 우량주를 AI가 선별했습니다. 단기 시세보다 기업 가치에 집중하는 중장기 투자자분들께 추천드립니다.</span>
-      </p>
 
       {/* 종목 리스트 */}
       <div className="space-y-3">
