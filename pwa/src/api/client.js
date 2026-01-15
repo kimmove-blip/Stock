@@ -167,6 +167,14 @@ export const adminAPI = {
   getStats: () => api.get('/admin/stats'),
 };
 
+// 알림 기록 API
+export const alertsAPI = {
+  // 알림 기록 조회
+  list: (days = 30) => api.get(`/alerts?days=${days}`),
+  // 알림 기록 전체 삭제
+  clear: () => api.delete('/alerts/clear'),
+};
+
 // 푸시 알림 API
 export const pushAPI = {
   // 설정 조회

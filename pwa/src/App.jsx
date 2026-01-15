@@ -21,6 +21,7 @@ import PopularStocks from './pages/PopularStocks';
 import Admin from './pages/Admin';
 import TelegramSettings from './pages/TelegramSettings';
 import PushSettings from './pages/PushSettings';
+import AlertHistory from './pages/AlertHistory';
 import Privacy from './pages/Privacy';
 import DeleteAccount from './pages/DeleteAccount';
 import DeleteData from './pages/DeleteData';
@@ -91,6 +92,7 @@ function AppRoutes() {
         <Route path="/settings" element={<Settings />} />
         <Route path="/telegram" element={<TelegramSettings />} />
         <Route path="/push" element={<PushSettings />} />
+        <Route path="/alerts" element={<AlertHistory />} />
         <Route path="/admin" element={<Admin />} />
         <Route path="/delete-account" element={<DeleteAccount />} />
         <Route path="/delete-data" element={<DeleteData />} />

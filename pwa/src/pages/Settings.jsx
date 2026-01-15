@@ -10,6 +10,7 @@ import {
   Shield,
   MessageCircle,
   Bell,
+  BellRing,
   FileText,
   Trash2,
   UserX,
@@ -128,6 +129,21 @@ export default function Settings() {
             <div className="text-left">
               <span className="text-gray-700 block">푸시 알림</span>
               <span className="text-xs text-gray-400">하락/매도 신호 실시간 알림</span>
+            </div>
+          </div>
+          <ChevronRight size={20} className="text-gray-400" />
+        </button>
+
+        {/* 알림 기록 */}
+        <button
+          onClick={() => navigate('/alerts')}
+          className="w-full flex items-center justify-between p-4 hover:bg-gray-50 transition-colors border-b border-gray-100"
+        >
+          <div className="flex items-center gap-3">
+            <BellRing size={20} className="text-orange-500" />
+            <div className="text-left">
+              <span className="text-gray-700 block">알림 기록</span>
+              <span className="text-xs text-gray-400">받은 알림 확인하기</span>
             </div>
           </div>
           <ChevronRight size={20} className="text-gray-400" />
