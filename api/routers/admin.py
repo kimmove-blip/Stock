@@ -57,7 +57,7 @@ async def get_all_users(
                 (SELECT COUNT(*) FROM portfolios WHERE user_id = u.id) as portfolio_count,
                 (SELECT COUNT(*) FROM watchlists WHERE user_id = u.id) as watchlist_count
             FROM users u
-            ORDER BY u.created_at DESC
+            ORDER BY COALESCE(u.last_login, u.created_at) DESC
         """)
         rows = cursor.fetchall()
 

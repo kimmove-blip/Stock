@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { valueStocksAPI, realtimeAPI, portfolioAPI, watchlistAPI } from '../api/client';
-import { TrendingUp, TrendingDown, Shield, Percent, Building2, RefreshCw, Sparkles, Star, Plus } from 'lucide-react';
+import { TrendingUp, TrendingDown, Shield, Percent, Building2, Sparkles, Star, Plus } from 'lucide-react';
 import Loading from '../components/Loading';
 
 // AI 분석 중 로딩 컴포넌트
@@ -175,21 +175,6 @@ export default function ValueStocks() {
 
   return (
     <div className="max-w-md mx-auto">
-      {/* 상단 컨트롤 */}
-      <div className="flex items-center justify-between mb-3">
-        <button
-          onClick={() => refetch()}
-          disabled={isFetching}
-          className="btn btn-sm btn-ghost gap-2"
-        >
-          <RefreshCw size={16} className={isFetching ? 'animate-spin' : ''} />
-          새로고침
-        </button>
-        <span className="text-xs text-gray-500">
-          {data?.generated_at ? new Date(data.generated_at).toLocaleTimeString('ko-KR') : ''}
-        </span>
-      </div>
-
       {/* 안내 문구 (강조) */}
       <div className="bg-gradient-to-r from-blue-600 to-indigo-600 rounded-xl p-4 mb-4 text-white">
         <p className="font-bold text-base mb-1">저평가된 우량주를 AI가 선별했습니다</p>
@@ -228,8 +213,9 @@ export default function ValueStocks() {
             >
               <div className="flex justify-between items-start mb-2">
                 <div>
+                  <h3 className="font-semibold text-gray-800">{stock.name}</h3>
                   <div className="flex items-center gap-1.5">
-                    <h3 className="font-semibold text-gray-800">{stock.name}</h3>
+                    <p className="text-sm text-gray-500">{stock.code}</p>
                     {isInPortfolio(stock.code) && (
                       <span className="bg-blue-100 text-blue-600 text-[10px] px-1.5 py-0.5 rounded font-medium">
                         보유
@@ -241,7 +227,6 @@ export default function ValueStocks() {
                       </span>
                     )}
                   </div>
-                  <p className="text-sm text-gray-500">{stock.code}</p>
                 </div>
                 <div className="text-right">
                   <p className="font-semibold">

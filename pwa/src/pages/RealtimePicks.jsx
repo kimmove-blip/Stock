@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { useNavigate } from 'react-router-dom';
-import { top100API, realtimeAPI } from '../api/client';
+import { top100API, realtimeAPI, portfolioAPI, watchlistAPI } from '../api/client';
 import { Zap, TrendingUp, TrendingDown, RefreshCw, Brain, Activity } from 'lucide-react';
 
 // AI 분석 중 로딩 컴포넌트
@@ -62,6 +62,25 @@ export default function RealtimePicks() {
     queryKey: ['top100'],
     queryFn: () => top100API.list().then((res) => res.data),
   });
+
+  // 보유종목/관심종목 데이터
+  const { data: portfolio } = useQuery({
+    queryKey: ['portfolio'],
+    queryFn: () => portfolioAPI.list().then((res) => res.data),
+    staleTime: 1000 * 60 * 5,
+  });
+
+  const { data: watchlist } = useQuery({
+    queryKey: ['watchlist'],
+    queryFn: () => watchlistAPI.list().then((res) => res.data),
+    staleTime: 1000 * 60 * 5,
+  });
+
+  // 보유/관심 여부 확인 함수
+  const isInPortfolio = (code) =>
+    portfolio?.items?.some((item) => item.stock_code === code);
+  const isInWatchlist = (code) =>
+    watchlist?.items?.some((item) => item.stock_code === code);
 
   // 초기 로딩 시 2초간 분석 애니메이션 표시 (첫 방문시만)
   useEffect(() => {
@@ -214,7 +233,19 @@ export default function RealtimePicks() {
               </div>
               <div className="flex-1">
                 <h3 className="font-semibold text-gray-800">{stockData.name}</h3>
-                <p className="text-sm text-gray-500">{stockData.code}</p>
+                <div className="flex items-center gap-1.5">
+                  <p className="text-sm text-gray-500">{stockData.code}</p>
+                  {isInPortfolio(stock.code) && (
+                    <span className="bg-blue-100 text-blue-600 text-[10px] px-1.5 py-0.5 rounded font-medium">
+                      보유
+                    </span>
+                  )}
+                  {isInWatchlist(stock.code) && (
+                    <span className="bg-yellow-100 text-yellow-600 text-[10px] px-1.5 py-0.5 rounded font-medium">
+                      관심
+                    </span>
+                  )}
+                </div>
               </div>
               <div className="text-right">
                 <p className="font-semibold">
