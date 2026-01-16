@@ -128,8 +128,8 @@ export default function Home() {
           </div>
         </div>
 
-        {/* 퀵 액션 그리드 - 카드 스타일 */}
-        <div className="mt-6 flex-shrink-0">
+        {/* 퀵 액션 그리드 - 화면 부족시 세로 스크롤 */}
+        <div className="mt-6 flex-1 overflow-y-auto min-h-0">
           <div className="grid grid-cols-3 gap-3">
             {quickActions.map(({ icon: Icon, label, bgColor, iconColor, path }) => (
               <button
