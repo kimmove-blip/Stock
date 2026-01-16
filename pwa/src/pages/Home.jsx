@@ -67,9 +67,9 @@ export default function Home() {
   const isPositive = summary.total_profit_loss >= 0;
 
   return (
-    <div className="h-screen bg-gray-50 flex flex-col overflow-hidden">
-      {/* 헤더 - 그라데이션 */}
-      <div className="bg-gradient-to-r from-purple-600 to-indigo-600 px-4 pt-14 pb-16 flex-shrink-0">
+    <div className="h-screen bg-gray-50 flex flex-col">
+      {/* 헤더 - 고정 */}
+      <div className="bg-gradient-to-r from-purple-600 to-indigo-600 px-4 pt-14 pb-16 flex-shrink-0 sticky top-0 z-10">
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-3">
             <div className="w-10 h-10 bg-white/20 rounded-full flex items-center justify-center text-white font-bold">
@@ -96,10 +96,10 @@ export default function Home() {
       </div>
 
       {/* 메인 컨텐츠 영역 */}
-      <div className="px-4 -mt-8 flex-1 flex flex-col pb-20">
-        {/* 포트폴리오 카드 */}
+      <div className="px-4 -mt-8 flex-1 flex flex-col pb-20 overflow-hidden">
+        {/* 포트폴리오 카드 - 고정 */}
         <div
-          className="bg-gradient-to-br from-purple-500 via-purple-600 to-indigo-600 rounded-2xl p-4 text-white shadow-lg flex-shrink-0 cursor-pointer"
+          className="bg-gradient-to-br from-purple-500 via-purple-600 to-indigo-600 rounded-2xl p-4 text-white shadow-lg flex-shrink-0 cursor-pointer z-10"
           onClick={() => navigate('/portfolio')}
         >
           {/* 상단: 제목 + 아이콘 */}
@@ -128,7 +128,7 @@ export default function Home() {
           </div>
         </div>
 
-        {/* 퀵 액션 그리드 - 화면 부족시 세로 스크롤 */}
+        {/* 퀵 액션 그리드 - 필요시 스크롤 */}
         <div className="mt-6 flex-1 overflow-y-auto min-h-0">
           <div className="grid grid-cols-3 gap-3">
             {quickActions.map(({ icon: Icon, label, bgColor, iconColor, path }) => (

@@ -99,7 +99,7 @@ export default function Layout() {
       )}
 
       {/* 메인 컨텐츠 */}
-      <main className={`flex-1 overflow-y-auto pb-20 ${isHome ? '' : 'p-4'}`}>
+      <main className={`flex-1 pb-20 ${isHome ? 'overflow-hidden' : 'overflow-y-auto p-4'}`}>
         <Outlet />
       </main>
 
