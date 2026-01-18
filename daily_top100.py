@@ -30,6 +30,16 @@ from config import (
 from email_sender import send_daily_report
 from pdf_generator import generate_detailed_pdf
 from result_tracker import update_with_next_day_results, get_previous_result_file, get_yesterday_results, create_two_sheet_excel
+from streak_tracker import (
+    calculate_streak_and_rank_change,
+    format_rank_change,
+    format_streak,
+    get_streak_stats,
+    apply_streak_weighted_score,
+    classify_stocks,
+    get_classification_stats
+)
+from technical_analyst import apply_signal_reliability_weights
 
 
 def run_screening(mode="quick", top_n=100):
@@ -79,12 +89,62 @@ def categorize_results(results):
     return categorized
 
 
-def save_results(results, top_n=100, yesterday_df=None, yesterday_summary=None, stats=None):
-    """결과 저장 (Excel 2시트, JSON, CSV, PDF)"""
+def save_results(results, top_n=100, yesterday_df=None, yesterday_summary=None, stats=None, apply_improvements=True):
+    """결과 저장 (Excel 2시트, JSON, CSV, PDF)
+
+    Args:
+        results: 스크리닝 결과
+        top_n: 상위 N개 선정
+        yesterday_df: 전날 결과
+        yesterday_summary: 전날 요약
+        stats: 통계 정보
+        apply_improvements: 신뢰도 개선 적용 여부
+    """
     print("\n[저장] 결과 파일 생성 중...")
 
     # 상위 N개만 추출
     top_results = results[:top_n]
+
+    # 연속 출현 및 순위 변동 계산
+    print("    → 연속 출현/순위 변동 계산 중...")
+    top_results = calculate_streak_and_rank_change(top_results)
+    streak_stats = get_streak_stats(top_results)
+    print(f"    → 신규 진입: {streak_stats['new_entries']}개, 연속 유지: {streak_stats['continued']}개")
+
+    # 신뢰도 개선 적용 (방안 A + D)
+    if apply_improvements:
+        print("    → 분류 처리 중...")
+
+        # 신뢰도/지속성 가중치 비활성화 (원점수 사용)
+        # # 1. 신호별 신뢰도 가중치 적용 (방안 D)
+        # for r in top_results:
+        #     signals = r.get('signals', [])
+        #     base_score = r.get('score', 0)
+        #     adjusted_score, reliability_info = apply_signal_reliability_weights(signals, base_score)
+        #     r['reliability_adjusted_score'] = adjusted_score
+        #     r['reliability_info'] = reliability_info
+
+        # # 2. 신호 지속성 가중치 적용 (방안 A)
+        # top_results = apply_streak_weighted_score(top_results)
+
+        # 3. 2단계 분류 (방안 C)
+        stable, new_interest = classify_stocks(top_results)
+        class_stats = get_classification_stats(stable, new_interest)
+        print(f"    → 안정 추천: {class_stats['stable']['count']}개, 신규 관심: {class_stats['new_interest']['count']}개")
+
+        # 분류 정보 추가
+        for r in stable:
+            r['classification'] = 'stable'
+        for r in new_interest:
+            r['classification'] = 'new'
+
+        # stats에 분류 통계 추가
+        if stats:
+            stats['classification_stats'] = class_stats
+
+    # stats에 streak 통계 추가
+    if stats:
+        stats['streak_stats'] = streak_stats
 
     # DataFrame 생성 (CSV용)
     df = create_dataframe(top_results)
@@ -125,8 +185,9 @@ def create_dataframe(results):
         safe_signals = signals or []
         signals_kr = [get_signal_kr(s) for s in safe_signals[:5]]  # 상위 5개
 
-        # 목표가 계산 (점수 기반)
-        score = r["score"]
+        # 조정된 점수 사용
+        score = r.get("adjusted_score", r["score"])
+        original_score = r.get("original_score", r["score"])
         close_price = int(r.get("close", 0))
         if score >= 80:
             target_mul = 1.20
@@ -138,12 +199,26 @@ def create_dataframe(results):
             target_mul = 1.0
         target_price = int(close_price * target_mul)
 
+        # 순위 변동 및 연속 출현
+        rank_change = r.get("rank_change")
+        streak = r.get("streak", 1)
+        rank_change_str = format_rank_change(rank_change)
+        streak_str = format_streak(streak)
+
+        # 분류 정보
+        classification = r.get("classification", "")
+        class_str = "★" if classification == "stable" else ("NEW" if classification == "new" else "-")
+
         row = {
             "순위": i,
             "종목코드": r["code"],
             "종목명": r["name"],
+            "분류": class_str,
+            "변동": rank_change_str,
+            "연속": streak_str,
             "시장": r["market"],
-            "종합점수": r["score"],
+            "종합점수": score,
+            "원점수": original_score,
             "현재가": close_price,
             "목표가": target_price,
             "기대수익률(%)": round((target_mul - 1) * 100, 1),
@@ -188,9 +263,11 @@ def save_json(results, filepath, stats=None):
     }
 
     for r in results:
-        # 목표가 계산
-        score = r["score"]
+        # 조정된 점수 사용 (있으면)
+        score = r.get("adjusted_score", r["score"])
+        original_score = r.get("original_score", r["score"])
         close_price = r.get("close", 0)
+
         if score >= 80:
             target_mul = 1.20
         elif score >= 60:
@@ -205,7 +282,8 @@ def save_json(results, filepath, stats=None):
             "code": r["code"],
             "name": r["name"],
             "market": r["market"],
-            "score": r["score"],
+            "score": score,
+            "original_score": original_score,
             "close": r.get("close", 0),
             "target_price": target_price,
             "expected_return": round((target_mul - 1) * 100, 1),
@@ -213,6 +291,13 @@ def save_json(results, filepath, stats=None):
             "volume": r.get("volume", 0),
             "signals": r.get("signals", []),
             "patterns": r.get("patterns", []),
+            # 연속 출현 및 순위 변동
+            "streak": r.get("streak", 1),
+            "rank_change": r.get("rank_change"),  # None이면 NEW
+            "prev_rank": r.get("prev_rank"),
+            # 신뢰도 개선 정보
+            "streak_weight": r.get("streak_weight", 1.0),
+            "classification": r.get("classification", ""),  # stable 또는 new
         }
 
         # 지표 추가
@@ -239,6 +324,32 @@ def print_summary(results, categorized):
     print(f"  - 매수 관심: {len(categorized['buy'])}개")
     print(f"  - 일반 관심: {len(categorized['watch'])}개")
 
+    # 2단계 분류 통계
+    stable = [r for r in results if r.get('classification') == 'stable']
+    new_interest = [r for r in results if r.get('classification') == 'new']
+
+    if stable or new_interest:
+        print("\n" + "-" * 70)
+        print("  [신뢰도 기반 분류]")
+        print("-" * 70)
+        print(f"  - 안정 추천 (3일+ 연속): {len(stable)}개")
+        print(f"  - 신규 관심 (NEW/단기): {len(new_interest)}개")
+
+    # 안정 추천 종목 (최대 10개)
+    if stable:
+        print("\n" + "-" * 70)
+        print("  [안정 추천 종목] (3일 이상 연속 출현)")
+        print("-" * 70)
+        for r in stable[:10]:
+            signals = [get_signal_kr(s) for s in r.get("signals", [])[:2]]
+            streak = r.get('streak', 1)
+            adj_score = r.get('adjusted_score', r.get('score', 0))
+            orig_score = r.get('original_score', r.get('score', 0))
+            print(
+                f"  {r['code']} {r['name']:<10} "
+                f"연속:{streak}일 점수:{adj_score:>2}({orig_score:>2}) | {', '.join(signals)}"
+            )
+
     # 강력 매수 종목 출력
     if categorized["strong_buy"]:
         print("\n" + "-" * 70)
@@ -246,8 +357,9 @@ def print_summary(results, categorized):
         print("-" * 70)
         for r in categorized["strong_buy"][:10]:
             signals = [get_signal_kr(s) for s in r.get("signals", [])[:3]]
+            adj_score = r.get('adjusted_score', r.get('score', 0))
             print(
-                f"  {r['code']} {r['name']:<12} 점수:{r['score']:>3} | {', '.join(signals)}"
+                f"  {r['code']} {r['name']:<12} 점수:{adj_score:>3} | {', '.join(signals)}"
             )
 
     # 상위 20개 종목 테이블

@@ -97,6 +97,57 @@ class TelegramConfig:
     ENABLED = True  # 텔레그램 알림 활성화 여부
 
 
+class AutoTraderConfig:
+    """자동매매 설정"""
+    # 투자 모드 (True: 모의투자, False: 실전투자)
+    IS_VIRTUAL = True
+
+    # 매매 규칙
+    MIN_BUY_SCORE = 85# 최소 매수 점수
+    MIN_VOLUME_RATIO = 1.0          # 최소 거래량 비율 (20일 평균 대비)
+
+    # 포지션 관리
+    MAX_POSITION_PCT = 0.05# 종목당 최대 포지션 비율 (5%)
+    MAX_HOLDINGS = 20# 최대 보유 종목 수
+    MAX_DAILY_TRADES = 30# 일일 최대 거래 횟수
+
+    # 손절/매도
+    STOP_LOSS_PCT = -0.1# 손절 비율 (-7%)
+    TAKE_PROFIT_PCT = None          # 익절 비활성화 (신호 기반 매도)
+    MIN_HOLD_SCORE = 45# 최소 보유 점수 (이하 시 매도)
+    MAX_HOLD_DAYS = 10# 최대 보유 기간 (일)
+
+    # 신뢰도 높은 매수 신호 (이 신호들 중 하나 이상 포함 시 매수)
+    STRONG_BUY_SIGNALS = [
+        "GOLDEN_CROSS_20_60",
+        "MACD_GOLDEN_CROSS",
+        "SUPERTREND_BUY",
+        "STOCH_GOLDEN_OVERSOLD",
+        "MORNING_STAR",
+        "MA_ALIGNED",
+    ]
+
+    # 매도 신호 (이 신호들 중 2개 이상 발생 시 매도)
+    SELL_SIGNALS = [
+        "RSI_OVERBOUGHT",
+        "MACD_DEAD_CROSS",
+        "DEAD_CROSS_5_20",
+        "DEAD_CROSS_20_60",
+        "BB_UPPER_BREAK",
+        "BEARISH_ENGULFING",
+        "EVENING_STAR",
+        "SUPERTREND_SELL",
+        "PSAR_SELL_SIGNAL",
+    ]
+
+    # 알림 설정
+    TELEGRAM_NOTIFY = True          # 텔레그램 알림 활성화
+
+    # 긴급 정지 조건
+    MAX_DAILY_LOSS_PCT = -0.05      # 일일 최대 손실률 (-5%)
+    EMERGENCY_STOP = False          # 긴급 정지 플래그
+
+
 class IndicatorWeights:
     """지표별 가중치"""
     # 강력 신호 (높은 가중치)
@@ -156,6 +207,107 @@ class IndicatorWeights:
     EVENING_STAR = -15
     CCI_OVERBOUGHT = -5
     WILLR_OVERBOUGHT = -5
+
+
+class SignalReliability:
+    """
+    신호별 신뢰도 설정 (방안 D)
+    - 백테스트 결과 기반으로 조정
+    - 100%가 기본, 낮을수록 가중치 감소
+    """
+    # 고신뢰 신호 (70%+ 적중률)
+    GOLDEN_CROSS_20_60 = 100      # 중장기 신호, 높은 신뢰도
+    MA_ALIGNED = 110              # 정배열, 신뢰도 높음 (보너스)
+    MACD_GOLDEN_CROSS = 100       # 중기 신호
+    ADX_STRONG_UPTREND = 105      # 추세 확인, 신뢰도 높음
+
+    # 중간 신뢰 신호 (50~70% 적중률)
+    RSI_OVERSOLD = 90             # 반등 기대
+    BB_LOWER_BOUNCE = 90          # 저점 반등
+    SUPERTREND_BUY = 95           # 추세 전환
+    ICHIMOKU_GOLDEN_CROSS = 90    # 일목 신호
+    ICHIMOKU_ABOVE_CLOUD = 95     # 일목 구름대
+    MFI_OVERSOLD = 85             # 자금흐름
+    STOCH_GOLDEN_OVERSOLD = 90    # 스토캐스틱
+    CMF_STRONG_INFLOW = 85        # 자금유입
+
+    # 저신뢰 신호 (40~50% 적중률, 단기/노이즈)
+    GOLDEN_CROSS_5_20 = 60        # 단기 신호, 변동성 높음
+    VOLUME_SURGE = 50             # 일시적 급등 가능성
+    VOLUME_HIGH = 55              # 거래량 증가
+    VOLUME_ABOVE_AVG = 60         # 거래량
+    PSAR_BUY_SIGNAL = 70          # PSAR 전환
+    ROC_POSITIVE_CROSS = 65       # ROC 전환
+
+    # 보조 신호 (보너스 역할, 단독 신뢰 낮음)
+    RSI_RECOVERING = 70
+    MACD_HIST_POSITIVE = 75
+    MACD_HIST_RISING = 60
+    BB_LOWER_TOUCH = 70
+    STOCH_GOLDEN_CROSS = 75
+    STOCH_OVERSOLD = 65
+    ADX_UPTREND = 80
+    CCI_OVERSOLD = 70
+    WILLR_OVERSOLD = 70
+    OBV_ABOVE_MA = 75
+    OBV_RISING = 65
+    MFI_LOW = 60
+    SUPERTREND_UPTREND = 70
+    PSAR_UPTREND = 65
+    ROC_STRONG_MOMENTUM = 70
+    CMF_POSITIVE = 70
+
+    # 캔들 패턴 (단독 신뢰 낮음, 보조 역할)
+    HAMMER = 65
+    INVERTED_HAMMER = 60
+    BULLISH_ENGULFING = 75
+    MORNING_STAR = 80
+    DOJI = 50
+
+
+class StreakConfig:
+    """
+    신호 지속성 설정 (방안 A)
+    - 연속 출현 일수에 따른 가중치 배율
+    """
+    # 연속 출현 일수별 배율
+    STREAK_WEIGHTS = {
+        1: 0.5,   # 신규 신호 (약하게)
+        2: 0.8,   # 2일 연속
+        3: 1.0,   # 3일 연속 (확인됨)
+        4: 1.1,   # 4일 연속
+        5: 1.2,   # 5일+ (강력한 신호)
+    }
+
+    # 최대 배율 (5일 이상)
+    MAX_STREAK_WEIGHT = 1.2
+
+    # 신규 진입 종목 페널티 (NEW 종목은 점수 감소)
+    NEW_ENTRY_PENALTY = 0.8
+
+    @classmethod
+    def get_streak_weight(cls, streak_days: int) -> float:
+        """연속 출현 일수에 따른 가중치 반환"""
+        if streak_days >= 5:
+            return cls.MAX_STREAK_WEIGHT
+        return cls.STREAK_WEIGHTS.get(streak_days, 0.5)
+
+
+class ClassificationConfig:
+    """
+    2단계 분류 설정 (방안 C)
+    - 안정 추천 vs 신규 관심
+    """
+    # 안정 추천 기준
+    STABLE_MIN_STREAK = 3         # 최소 연속 출현 일수
+    STABLE_MIN_SCORE = 50         # 최소 점수
+
+    # 신규 관심 기준
+    NEW_MIN_SCORE = 40            # 최소 점수
+
+    # 분류별 최대 종목 수
+    MAX_STABLE = 50               # 안정 추천 최대 50개
+    MAX_NEW = 50                  # 신규 관심 최대 50개
 
 
 # 신호 이름 한글 변환

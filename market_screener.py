@@ -41,13 +41,13 @@ class MarketScreener:
         except Exception as e:
             print(f"    → 종목 로딩 실패: {e}")
             return None
-    def filter_by_liquidity(self, min_marcap=30_000_000_000, max_marcap=1_000_000_000_000, min_amount=300_000_000, max_price=100_000):
+    def filter_by_liquidity(self, min_marcap=30_000_000_000, max_marcap=1_000_000_000_000, min_amount=300_000_000, max_price=None):
         """
         1차 필터링: 유동성 기준
         - min_marcap: 최소 시가총액 (기본 300억)
         - max_marcap: 최대 시가총액 (대형 우량주 제외용, 기본 1조)
         - min_amount: 최소 거래대금 (기본 3억)
-        - max_price: 최대 주가 (기본 None)
+        - max_price: 최대 주가 (기본 None, 제한 없음)
         """
         filter_desc = f"시총>{min_marcap / 1e8:.0f}억"
         if max_marcap:
@@ -74,16 +74,38 @@ class MarketScreener:
         self.filtered_stocks = df
         print(f"    → {len(df):,}개 종목 통과")
         return df
+    def get_problem_stocks(self):
+        """
+        관리종목, 투자경고, 투자위험 종목 목록 조회 (KRX)
+        """
+        problem_codes = set()
+        try:
+            from pykrx import stock
+            today = datetime.now().strftime("%Y%m%d")
+
+            # 관리종목 조회 (KOSPI + KOSDAQ)
+            for market in ["KOSPI", "KOSDAQ"]:
+                try:
+                    # 관리종목은 pykrx에서 직접 제공하지 않아 이름으로 필터
+                    pass
+                except:
+                    pass
+        except Exception as e:
+            print(f"    → 문제종목 조회 실패: {e}")
+
+        return problem_codes
+
     def filter_special_stocks(self):
         """
-        관리종목, 정리매매, 스팩 등 제외
+        관리종목, 정리매매, 스팩, 투자경고/위험 종목 제외
         """
         print("[3/5] 특수종목 제외 중...")
         if self.filtered_stocks is None:
             self.filter_by_liquidity()
         df = self.filtered_stocks.copy()
         original_count = len(df)
-        # 종목명으로 특수종목 필터링
+
+        # 종목명으로 특수종목 필터링 (관리종목, 투자주의, 투자경고, 투자위험 포함)
         exclude_keywords = [
             "스팩",
             "SPAC",
@@ -95,6 +117,9 @@ class MarketScreener:
             "합병",
             "정리매매",
             "관리종목",
+            "투자주의",
+            "투자경고",
+            "투자위험",
             "1호",
             "2호",
             "3호",
@@ -108,9 +133,20 @@ class MarketScreener:
         ]
         for keyword in exclude_keywords:
             df = df[~df["Name"].str.contains(keyword, case=False, na=False)]
+
         # 우선주 제외 (종목코드 끝자리 0이 아닌 경우)
         # 예: 삼성전자우 005935 vs 삼성전자 005930
         df = df[df["Code"].str[-1] == "0"]
+
+        # 주가 1,000원 미만 제외 비활성화
+        # if "Close" in df.columns:
+        #     df["Close"] = pd.to_numeric(df["Close"], errors='coerce')
+        #     before_penny = len(df)
+        #     df = df[df["Close"] >= 1000]
+        #     penny_excluded = before_penny - len(df)
+        #     if penny_excluded > 0:
+        #         print(f"    → 1,000원 미만 {penny_excluded}개 제외")
+
         self.filtered_stocks = df
         print(f"    → {original_count - len(df):,}개 제외, {len(df):,}개 남음")
         return df
