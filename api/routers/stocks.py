@@ -66,6 +66,28 @@ _CACHE_TTL = 300  # 5분
 _analysis_cache: Dict[str, Tuple[Any, float]] = {}
 _ANALYSIS_CACHE_TTL = 1800  # 30분
 
+# KRX 종목 리스트 전역 캐시 (24시간 TTL) - 성능 최적화
+_krx_listing_cache: Tuple[Any, float] = (None, 0)
+_KRX_CACHE_TTL = 86400  # 24시간
+
+
+def get_krx_listing():
+    """KRX 종목 리스트 캐시 조회 (1시간 캐싱)"""
+    global _krx_listing_cache
+    data, timestamp = _krx_listing_cache
+    if data is not None and time.time() - timestamp < _KRX_CACHE_TTL:
+        return data
+
+    try:
+        libs = get_stock_libs()
+        if libs:
+            krx = libs['fdr'].StockListing("KRX")
+            _krx_listing_cache = (krx, time.time())
+            return krx
+    except Exception as e:
+        print(f"KRX 리스트 조회 실패: {e}")
+    return None
+
 
 def get_cached_stock_detail(code: str) -> Optional[Any]:
     """캐시된 종목 상세 조회"""
@@ -404,13 +426,13 @@ def get_stock_name(code: str) -> str:
     except:
         pass
 
-    # 2. FDR에서 조회
+    # 2. 캐시된 KRX 리스트에서 조회
     try:
-        import FinanceDataReader as fdr
-        krx = fdr.StockListing("KRX")
-        match = krx[krx['Code'] == code]
-        if not match.empty:
-            return match.iloc[0]['Name']
+        krx = get_krx_listing()
+        if krx is not None:
+            match = krx[krx['Code'] == code]
+            if not match.empty:
+                return match.iloc[0]['Name']
     except:
         pass
 
@@ -442,14 +464,14 @@ async def get_stock_detail(code: str):
             # KIS에서 종목명이 있으면 사용, 없으면 로컬 데이터 사용
             name = kis_data.get('stock_name') or stock_name
 
-            # 이동평균/RSI/MACD/볼린저밴드는 FDR에서 계산
+            # 이동평균/RSI/MACD/피보나치는 FDR에서 계산
             ma5, ma20, ma60, rsi, macd, macd_signal = None, None, None, None, None, None
             bb_mid, bb_upper, bb_lower = None, None, None
             try:
                 libs = get_stock_libs()
                 if libs:
                     get_ohlcv = libs['get_ohlcv']
-                    ohlcv = get_ohlcv(code, 120)
+                    ohlcv = get_ohlcv(code, 90)  # 90일 (60거래일 확보용)
                     if ohlcv is not None and not ohlcv.empty:
                         close = ohlcv['종가']
                         ma5 = round(close.tail(5).mean(), 0) if len(ohlcv) >= 5 else None
@@ -481,12 +503,11 @@ async def get_stock_detail(code: str):
             except Exception as ma_err:
                 print(f"이동평균 계산 오류: {ma_err}")
 
-            # 시장 구분 조회 (KOSPI/KOSDAQ)
+            # 시장 구분 조회 (KOSPI/KOSDAQ) - 캐시 사용
             market_type = None
             try:
-                libs = get_stock_libs()
-                if libs:
-                    krx = libs['fdr'].StockListing("KRX")
+                krx = get_krx_listing()
+                if krx is not None:
                     stock_info = krx[krx['Code'] == code]
                     if not stock_info.empty and 'Market' in stock_info.columns:
                         market_type = stock_info.iloc[0]['Market']
@@ -526,8 +547,8 @@ async def get_stock_detail(code: str):
         fdr = libs['fdr']
         get_ohlcv = libs['get_ohlcv']
 
-        # OHLCV 데이터 직접 조회
-        ohlcv = get_ohlcv(code, 120)
+        # OHLCV 데이터 직접 조회 (60일로 축소)
+        ohlcv = get_ohlcv(code, 90)
         if ohlcv is None or ohlcv.empty:
             raise HTTPException(status_code=404, detail="가격 데이터를 가져올 수 없습니다")
 
@@ -573,20 +594,21 @@ async def get_stock_detail(code: str):
             bb_upper = round(high60, 0)  # 60일 고점
             bb_lower = round(low60, 0)   # 60일 저점
 
-        # 시가총액 조회 (FDR StockListing에서)
+        # 시가총액 조회 (캐시된 KRX 리스트 사용)
         market_cap = None
         market_type = None
         try:
-            krx = fdr.StockListing("KRX")
-            stock_info = krx[krx['Code'] == code]
-            if not stock_info.empty:
-                row = stock_info.iloc[0]
-                # 시가총액 (Marcap 컬럼)
-                if 'Marcap' in row.index and row['Marcap']:
-                    market_cap = int(row['Marcap'])
-                # 시장 구분
-                if 'Market' in row.index:
-                    market_type = row['Market']
+            krx = get_krx_listing()
+            if krx is not None:
+                stock_info = krx[krx['Code'] == code]
+                if not stock_info.empty:
+                    row = stock_info.iloc[0]
+                    # 시가총액 (Marcap 컬럼)
+                    if 'Marcap' in row.index and row['Marcap']:
+                        market_cap = int(row['Marcap'])
+                    # 시장 구분
+                    if 'Market' in row.index:
+                        market_type = row['Market']
         except Exception as mc_err:
             print(f"시가총액 조회 실패: {mc_err}")
 
