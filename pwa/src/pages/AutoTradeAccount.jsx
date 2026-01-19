@@ -38,6 +38,13 @@ export default function AutoTradeAccount() {
     refetchOnWindowFocus: true,
   });
 
+  // 설정 조회 (초기투자금)
+  const { data: settings } = useQuery({
+    queryKey: ['autoTradeSettings'],
+    queryFn: () => autoTradeAPI.getSettings().then((res) => res.data),
+    staleTime: 1000 * 60,
+  });
+
   if (isLoading) return <Loading text="계좌 현황 불러오는 중..." />;
 
   if (error) {
@@ -80,28 +87,91 @@ export default function AutoTradeAccount() {
         </button>
       </div>
 
-      {/* 총 자산 */}
-      <div className={`bg-gradient-to-r ${data?.is_mock ? 'from-blue-500 to-indigo-600' : 'from-green-500 to-emerald-600'} rounded-xl p-4 text-white`}>
-        <div className="flex items-center justify-between mb-3">
-          <div className="flex items-center gap-2">
-            <Wallet size={20} />
-            <span className="font-medium">계좌 잔고</span>
+      {/* 총 자산 및 수익률 */}
+      {(() => {
+        const initialInvestment = settings?.initial_investment || 0;
+        const totalAsset = summary?.total_asset || 0;
+        const totalProfit = initialInvestment > 0 ? totalAsset - initialInvestment : 0;
+        const profitRate = initialInvestment > 0 ? ((totalAsset / initialInvestment) - 1) * 100 : 0;
+        const isProfit = totalProfit >= 0;
+
+        return (
+          <div className={`bg-gradient-to-r ${
+            initialInvestment > 0
+              ? (isProfit ? 'from-red-500 to-pink-500' : 'from-blue-500 to-indigo-600')
+              : ((summary?.total_profit || 0) >= 0 ? 'from-red-500 to-pink-500' : 'from-blue-500 to-indigo-600')
+          } rounded-xl p-4 text-white`}>
+            <div className="flex items-center justify-between mb-3">
+              <div className="flex items-center gap-2">
+                <Wallet size={20} />
+                <span className="font-medium">계좌 현황</span>
+              </div>
+              <span className="text-xs px-2 py-0.5 rounded-full bg-white/20">
+                {data?.is_mock ? '🎮 모의투자' : '💰 실제투자'}
+              </span>
+            </div>
+
+            {/* 초기투자금 대비 수익률 */}
+            {initialInvestment > 0 ? (
+              <>
+                <div className="mb-3">
+                  <p className="text-xs opacity-80">총 수익</p>
+                  <div className="flex items-end gap-2">
+                    <p className="text-3xl font-bold">
+                      {isProfit ? '+' : ''}{totalProfit.toLocaleString()}원
+                    </p>
+                    <p className="text-lg opacity-90 mb-1">
+                      ({isProfit ? '+' : ''}{profitRate.toFixed(2)}%)
+                    </p>
+                  </div>
+                </div>
+                <div className="grid grid-cols-3 gap-2 pt-3 border-t border-white/20">
+                  <div>
+                    <p className="text-xs opacity-70">초기투자금</p>
+                    <p className="text-sm font-medium">{initialInvestment.toLocaleString()}원</p>
+                  </div>
+                  <div>
+                    <p className="text-xs opacity-70">총 자산</p>
+                    <p className="text-sm font-medium">{totalAsset.toLocaleString()}원</p>
+                  </div>
+                  <div>
+                    <p className="text-xs opacity-70">예수금</p>
+                    <p className="text-sm font-medium">{(balance?.cash || 0).toLocaleString()}원</p>
+                  </div>
+                </div>
+              </>
+            ) : (
+              <>
+                <div className="mb-3">
+                  <p className="text-xs opacity-80">평가손익</p>
+                  <div className="flex items-end gap-2">
+                    <p className="text-3xl font-bold">
+                      {(summary?.total_profit || 0) >= 0 ? '+' : ''}{(summary?.total_profit || 0).toLocaleString()}원
+                    </p>
+                    <p className="text-lg opacity-90 mb-1">
+                      ({(summary?.profit_rate || 0) >= 0 ? '+' : ''}{(summary?.profit_rate || 0).toFixed(2)}%)
+                    </p>
+                  </div>
+                </div>
+                <div className="grid grid-cols-3 gap-2 pt-3 border-t border-white/20">
+                  <div>
+                    <p className="text-xs opacity-70">매입금액</p>
+                    <p className="text-sm font-medium">{(summary?.total_purchase || 0).toLocaleString()}원</p>
+                  </div>
+                  <div>
+                    <p className="text-xs opacity-70">총 자산</p>
+                    <p className="text-sm font-medium">{totalAsset.toLocaleString()}원</p>
+                  </div>
+                  <div>
+                    <p className="text-xs opacity-70">예수금</p>
+                    <p className="text-sm font-medium">{(balance?.cash || 0).toLocaleString()}원</p>
+                  </div>
+                </div>
+              </>
+            )}
           </div>
-          <span className={`text-xs px-2 py-0.5 rounded-full ${data?.is_mock ? 'bg-white/20' : 'bg-white/20'}`}>
-            {data?.is_mock ? '🎮 모의투자' : '💰 실제투자'}
-          </span>
-        </div>
-        <div className="grid grid-cols-2 gap-3">
-          <div>
-            <p className="text-xs text-green-100">총 자산</p>
-            <p className="text-2xl font-bold">{summary?.total_asset?.toLocaleString() || 0}원</p>
-          </div>
-          <div>
-            <p className="text-xs text-green-100">예수금</p>
-            <p className="text-xl font-bold">{balance?.cash?.toLocaleString() || 0}원</p>
-          </div>
-        </div>
-      </div>
+        );
+      })()}
 
       {/* 평가손익 */}
       <div className="bg-white rounded-xl p-4 shadow-sm">

@@ -19,7 +19,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 # Rate Limiter 설정
 limiter = Limiter(key_func=get_remote_address)
 
-from api.routers import auth, stocks, portfolio, watchlist, top100, realtime, value_stocks, contact, themes, popular, news, market, telegram, admin, alerts, push, announcements
+from api.routers import auth, stocks, portfolio, watchlist, top100, realtime, value_stocks, contact, themes, popular, news, market, telegram, admin, alerts, push, announcements, auto_trade
 
 
 @asynccontextmanager
@@ -31,7 +31,7 @@ async def lifespan(app: FastAPI):
     # 백그라운드 스케줄러 시작 (30분마다 TOP100 스크리닝)
     try:
         from api.services.scheduler import start_scheduler, run_initial_screening, run_initial_caching
-        start_scheduler(interval_minutes=30)
+        start_scheduler(interval_minutes=10)
         # 장 시간이면 시작 시 한 번 실행
         run_initial_screening()
         # 서버 시작 시 TOP100 캐싱 (10초 후)
@@ -122,6 +122,7 @@ app.include_router(admin.router, prefix="/api/admin", tags=["관리자"])
 app.include_router(alerts.router, prefix="/api/alerts", tags=["알림"])
 app.include_router(push.router, prefix="/api/push", tags=["푸시알림"])
 app.include_router(announcements.router, prefix="/api/announcements", tags=["공지사항"])
+app.include_router(auto_trade.router, prefix="/api/auto-trade", tags=["자동매매"])
 
 
 @app.get("/", tags=["헬스체크"])

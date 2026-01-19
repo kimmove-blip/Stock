@@ -1,6 +1,6 @@
 """
 백그라운드 스케줄러
-- 30분마다 TOP100 스크리닝 실행 + 캐싱
+- 10분마다 TOP100 스크리닝 실행 + 캐싱
 - 하루 한 번 (16:00) 가치주 스크리닝
 """
 
@@ -30,7 +30,7 @@ _is_alert_running = False
 
 
 def is_market_hours() -> bool:
-    """장 운영 시간인지 확인 (09:00 ~ 15:30)"""
+    """장 운영 시간인지 확인 (07:00 1회 + 09:00~15:30 10분간격)"""
     now = datetime.now()
 
     # 주말 제외
@@ -38,10 +38,16 @@ def is_market_hours() -> bool:
         return False
 
     current_time = now.time()
-    market_open = dt_time(9, 0)
-    market_close = dt_time(15, 30)
 
-    return market_open <= current_time <= market_close
+    # 07:00~07:10 (장 시작 전 1회)
+    if dt_time(7, 0) <= current_time < dt_time(7, 10):
+        return True
+
+    # 09:00~15:30 (장중 10분 간격)
+    if dt_time(9, 0) <= current_time <= dt_time(15, 30):
+        return True
+
+    return False
 
 
 def run_screening_sync():
@@ -92,7 +98,7 @@ def run_screening_sync():
         _is_running = False
 
 
-async def screening_loop(interval_minutes: int = 30):
+async def screening_loop(interval_minutes: int = 10):
     """비동기 스크리닝 루프"""
     global _scheduler_task
 
@@ -125,7 +131,7 @@ async def screening_loop(interval_minutes: int = 30):
             await asyncio.sleep(60)  # 오류 시 1분 후 재시도
 
 
-def start_scheduler(interval_minutes: int = 30):
+def start_scheduler(interval_minutes: int = 10):
     """스케줄러 시작 (별도 스레드에서)"""
     global _scheduler_task
 

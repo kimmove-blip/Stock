@@ -80,6 +80,38 @@ def send_push_notification(subscription: dict, title: str, body: str, url: str =
         return False
 
 
+def send_push_to_user(user_id: int, title: str, body: str, url: str = None) -> int:
+    """특정 사용자에게 푸시 알림 전송 (외부 호출용)
+
+    Args:
+        user_id: 사용자 ID
+        title: 알림 제목
+        body: 알림 내용
+        url: 클릭 시 이동할 URL
+
+    Returns:
+        성공한 알림 개수
+    """
+    try:
+        db = DatabaseManager()
+        subscriptions = db.get_all_push_subscriptions_for_user(user_id)
+
+        if not subscriptions:
+            print(f"[푸시] user_id={user_id}: 등록된 구독 없음")
+            return 0
+
+        success_count = 0
+        for sub in subscriptions:
+            if send_push_notification(sub, title, body, url):
+                success_count += 1
+
+        print(f"[푸시] user_id={user_id}: {success_count}/{len(subscriptions)}개 전송 성공")
+        return success_count
+    except Exception as e:
+        print(f"[푸시] user_id={user_id} 전송 오류: {e}")
+        return 0
+
+
 @router.get("", response_model=PushSettingsResponse)
 async def get_push_settings(
     current_user: dict = Depends(get_current_user_required),

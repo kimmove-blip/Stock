@@ -62,9 +62,9 @@ router = APIRouter()
 _stock_detail_cache: Dict[str, Tuple[Any, float]] = {}
 _CACHE_TTL = 300  # 5분
 
-# AI 분석 캐시 (30분 TTL)
+# AI 분석 캐시 (10분 TTL)
 _analysis_cache: Dict[str, Tuple[Any, float]] = {}
-_ANALYSIS_CACHE_TTL = 1800  # 30분
+_ANALYSIS_CACHE_TTL = 600  # 10분
 
 # KRX 종목 리스트 전역 캐시 (24시간 TTL) - 성능 최적화
 _krx_listing_cache: Tuple[Any, float] = (None, 0)
@@ -305,7 +305,7 @@ def get_top100_analysis(code: str) -> Optional[Dict]:
                         elif score >= 30:
                             opinion = '주의'
                         else:
-                            opinion = '하락 신호'
+                            opinion = '주의'
 
                         # 시그널 기반 코멘트 생성
                         signal_desc = {
@@ -666,7 +666,7 @@ async def analyze_stock(code: str):
             elif score >= 30:
                 opinion = '주의'
             else:
-                opinion = '하락 신호'
+                opinion = '주의'
 
         # 확률/신뢰도 계산 (TOP100용 간이 계산)
         from technical_analyst import TechnicalAnalyst
@@ -795,7 +795,7 @@ async def analyze_stock(code: str):
         elif score >= 30:
             opinion = '주의'
         else:
-            opinion = '하락 신호'
+            opinion = '주의'
 
         # 신호 정리
         signals = {

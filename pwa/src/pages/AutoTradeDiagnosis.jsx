@@ -73,6 +73,8 @@ export default function AutoTradeDiagnosis() {
         return 'bg-red-100 text-red-600';
       case 'hold':
         return 'bg-gray-100 text-gray-600';
+      case 'take_profit':
+        return 'bg-green-100 text-green-600';
       case 'sell':
         return 'bg-blue-100 text-blue-600';
       case 'strong_sell':
@@ -90,6 +92,8 @@ export default function AutoTradeDiagnosis() {
         return '매수';
       case 'hold':
         return '보유';
+      case 'take_profit':
+        return '익절 고려';
       case 'sell':
         return '매도';
       case 'strong_sell':
@@ -173,6 +177,13 @@ export default function AutoTradeDiagnosis() {
                   <div className="flex items-center gap-2">
                     {getHealthIcon(holding.health_score || 50)}
                     <p className="font-bold text-gray-800">{holding.stock_name}</p>
+                    <span className={`text-xs font-bold px-1.5 py-0.5 rounded ${
+                      (holding.health_score || 50) >= 80 ? 'bg-green-100 text-green-600' :
+                      (holding.health_score || 50) >= 60 ? 'bg-yellow-100 text-yellow-600' :
+                      'bg-red-100 text-red-600'
+                    }`}>
+                      {holding.health_score || 50}점
+                    </span>
                   </div>
                   <p className="text-xs text-gray-500">{holding.stock_code}</p>
                 </div>

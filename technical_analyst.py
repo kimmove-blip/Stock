@@ -154,7 +154,7 @@ class TechnicalAnalyst:
             return None
 
         result = {
-            'score': 0,
+            'score': 50,  # 기본 중립 점수에서 시작
             'signals': [],
             'indicators': {},
             'patterns': []
@@ -533,18 +533,17 @@ class TechnicalAnalyst:
             self._analyze_candle_patterns(df, result)
 
             # 최종 점수 조정
-            # 점수 구간별 차등 스케일링:
-            # - 낮은 점수(0-60)는 비교적 그대로 유지
-            # - 높은 점수(60+)는 더 강하게 압축
-            # 이를 통해 80점 이상은 정말 강한 신호, 90점 이상은 매우 드문 경우
+            # 기본 50점에서 시작, 신호에 따라 증감
+            # 최소 30점, 최대 95점으로 제한
             raw_score = result['score']
-            if raw_score <= 60:
-                scaled_score = int(raw_score * 0.9)  # 0-60 -> 0-54
+            # 스케일링: raw 0-50 -> 30-50, raw 50-100 -> 50-75, raw 100+ -> 75-95
+            if raw_score <= 50:
+                scaled_score = 30 + int((raw_score / 50) * 20)  # 0-50 -> 30-50
             elif raw_score <= 100:
-                scaled_score = 54 + int((raw_score - 60) * 0.65)  # 60-100 -> 54-80
+                scaled_score = 50 + int(((raw_score - 50) / 50) * 25)  # 50-100 -> 50-75
             else:
-                scaled_score = 80 + int((raw_score - 100) * 0.4)  # 100+ -> 80-100
-            result['score'] = max(0, min(100, scaled_score))
+                scaled_score = 75 + int(((raw_score - 100) / 50) * 20)  # 100+ -> 75-95
+            result['score'] = max(30, min(95, scaled_score))
 
             return result
 

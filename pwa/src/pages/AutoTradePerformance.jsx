@@ -64,6 +64,10 @@ export default function AutoTradePerformance() {
     worst_trade = null,
     stock_performance = [],
     monthly_performance = [],
+    initial_investment = 0,
+    current_total_asset = 0,
+    total_profit_from_initial = 0,
+    total_profit_rate_from_initial = 0,
   } = data || {};
 
   return (
@@ -98,26 +102,75 @@ export default function AutoTradePerformance() {
         </div>
       </div>
 
-      {/* 총 수익률 */}
+      {/* 총 수익 (초기투자금 기준) */}
+      {initial_investment > 0 ? (
+        <div
+          className={`rounded-xl p-4 ${
+            total_profit_from_initial >= 0
+              ? 'bg-gradient-to-r from-red-500 to-pink-500'
+              : 'bg-gradient-to-r from-blue-500 to-indigo-500'
+          } text-white`}
+        >
+          <div className="flex items-center justify-between mb-2">
+            <div className="flex items-center gap-2">
+              {total_profit_from_initial >= 0 ? <TrendingUp size={20} /> : <TrendingDown size={20} />}
+              <span className="font-medium">총 수익</span>
+            </div>
+            <span className="text-xs opacity-70">초기투자금 기준</span>
+          </div>
+          <div className="flex items-end gap-2">
+            <p className="text-3xl font-bold">
+              {total_profit_from_initial >= 0 ? '+' : ''}
+              {total_profit_from_initial?.toLocaleString()}원
+            </p>
+            <p className="text-lg opacity-80 mb-1">
+              ({total_profit_rate_from_initial >= 0 ? '+' : ''}
+              {total_profit_rate_from_initial?.toFixed(2)}%)
+            </p>
+          </div>
+          <div className="mt-3 pt-3 border-t border-white/20 grid grid-cols-2 gap-2 text-sm">
+            <div>
+              <p className="opacity-70">초기투자금</p>
+              <p className="font-medium">{initial_investment?.toLocaleString()}원</p>
+            </div>
+            <div>
+              <p className="opacity-70">현재 총자산</p>
+              <p className="font-medium">{current_total_asset?.toLocaleString()}원</p>
+            </div>
+          </div>
+        </div>
+      ) : (
+        <div className="rounded-xl p-4 bg-gradient-to-r from-gray-500 to-gray-600 text-white">
+          <div className="flex items-center gap-2 mb-2">
+            <TrendingUp size={20} />
+            <span className="font-medium">총 수익</span>
+          </div>
+          <p className="text-lg mb-2">초기투자금을 설정하면 총수익을 확인할 수 있습니다</p>
+          <p className="text-xs opacity-70">
+            자동매매 설정 &gt; 초기 투자금에서 설정하세요
+          </p>
+        </div>
+      )}
+
+      {/* 실현 손익 */}
       <div
         className={`rounded-xl p-4 ${
           total_profit >= 0
-            ? 'bg-gradient-to-r from-red-500 to-pink-500'
-            : 'bg-gradient-to-r from-blue-500 to-indigo-500'
+            ? 'bg-gradient-to-r from-orange-400 to-red-400'
+            : 'bg-gradient-to-r from-cyan-400 to-blue-400'
         } text-white`}
       >
         <div className="flex items-center gap-2 mb-2">
           {total_profit >= 0 ? <TrendingUp size={20} /> : <TrendingDown size={20} />}
-          <span className="font-medium">총 수익</span>
+          <span className="font-medium">실현 손익</span>
         </div>
         <div className="flex items-end gap-2">
-          <p className="text-3xl font-bold">
+          <p className="text-2xl font-bold">
             {total_profit >= 0 ? '+' : ''}
             {total_profit?.toLocaleString()}원
           </p>
-          <p className="text-lg opacity-80 mb-1">
-            ({total_profit_rate >= 0 ? '+' : ''}
-            {total_profit_rate?.toFixed(2)}%)
+          <p className="text-sm opacity-80 mb-1">
+            (매도 완료 종목)
           </p>
         </div>
       </div>
@@ -144,11 +197,11 @@ export default function AutoTradePerformance() {
             </p>
           </div>
           <div className="bg-green-50 rounded-lg p-3">
-            <p className="text-xs text-green-600">익절</p>
+            <p className="text-xs text-green-600">수익</p>
             <p className="text-xl font-bold text-green-700">{win_count}건</p>
           </div>
           <div className="bg-red-50 rounded-lg p-3">
-            <p className="text-xs text-red-600">손절</p>
+            <p className="text-xs text-red-600">손실</p>
             <p className="text-xl font-bold text-red-700">{loss_count}건</p>
           </div>
           <div className="bg-gray-50 rounded-lg p-3">
@@ -182,9 +235,9 @@ export default function AutoTradePerformance() {
           />
         </div>
         <div className="flex justify-between mt-2 text-sm">
-          <span className="text-green-600">익절 {win_count}건 ({win_rate?.toFixed(1)}%)</span>
+          <span className="text-green-600">수익 {win_count}건 ({win_rate?.toFixed(1)}%)</span>
           <span className="text-red-600">
-            손절 {loss_count}건 ({(100 - win_rate)?.toFixed(1)}%)
+            손실 {loss_count}건 ({(100 - win_rate)?.toFixed(1)}%)
           </span>
         </div>
       </div>

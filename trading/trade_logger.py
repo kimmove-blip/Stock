@@ -112,6 +112,7 @@ class TradeLogger:
             cursor.execute("""
                 CREATE TABLE IF NOT EXISTS trade_log (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    user_id INTEGER,
                     trade_date TEXT NOT NULL,
                     trade_time TEXT NOT NULL,
                     stock_code TEXT NOT NULL,
@@ -134,13 +135,15 @@ class TradeLogger:
             cursor.execute("""
                 CREATE TABLE IF NOT EXISTS holdings (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    stock_code TEXT UNIQUE NOT NULL,
+                    user_id INTEGER,
+                    stock_code TEXT NOT NULL,
                     stock_name TEXT,
                     quantity INTEGER NOT NULL,
                     avg_price INTEGER NOT NULL,
                     buy_date TEXT NOT NULL,
                     buy_reason TEXT,
-                    updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+                    updated_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                    UNIQUE(user_id, stock_code)
                 )
             """)
 
@@ -148,7 +151,8 @@ class TradeLogger:
             cursor.execute("""
                 CREATE TABLE IF NOT EXISTS daily_performance (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    trade_date TEXT UNIQUE NOT NULL,
+                    user_id INTEGER,
+                    trade_date TEXT NOT NULL,
                     total_assets INTEGER,
                     total_invested INTEGER,
                     total_profit INTEGER,
@@ -156,7 +160,8 @@ class TradeLogger:
                     buy_count INTEGER DEFAULT 0,
                     sell_count INTEGER DEFAULT 0,
                     holdings_count INTEGER DEFAULT 0,
-                    created_at TEXT DEFAULT CURRENT_TIMESTAMP
+                    created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                    UNIQUE(user_id, trade_date)
                 )
             """)
 
@@ -164,6 +169,7 @@ class TradeLogger:
             cursor.execute("""
                 CREATE TABLE IF NOT EXISTS pending_buy_suggestions (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    user_id INTEGER,
                     stock_code TEXT NOT NULL,
                     stock_name TEXT,
                     score INTEGER,
@@ -189,6 +195,7 @@ class TradeLogger:
             cursor.execute("""
                 CREATE TABLE IF NOT EXISTS virtual_balance (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    user_id INTEGER UNIQUE,
                     initial_cash INTEGER NOT NULL,
                     current_cash INTEGER NOT NULL,
                     total_invested INTEGER DEFAULT 0,
@@ -221,9 +228,13 @@ class TradeLogger:
                     user_id INTEGER UNIQUE,
                     trade_mode TEXT DEFAULT 'manual',
                     max_investment INTEGER DEFAULT 1000000,
-                    max_per_stock INTEGER DEFAULT 200000,
-                    stop_loss_rate REAL DEFAULT 5.0,
-                    take_profit_rate REAL DEFAULT 10.0,
+                    stock_ratio INTEGER DEFAULT 5,
+                    stop_loss_rate REAL DEFAULT -7.0,
+                    min_buy_score INTEGER DEFAULT 70,
+                    sell_score INTEGER DEFAULT 40,
+                    max_holdings INTEGER DEFAULT 10,
+                    max_daily_trades INTEGER DEFAULT 10,
+                    max_holding_days INTEGER DEFAULT 14,
                     trading_enabled BOOLEAN DEFAULT 1,
                     trading_start_time TEXT DEFAULT '09:00',
                     trading_end_time TEXT DEFAULT '15:20',
@@ -232,14 +243,47 @@ class TradeLogger:
                 )
             """)
 
+            # 새 컬럼 추가 (기존 테이블 호환)
+            new_columns = [
+                ("stock_ratio", "INTEGER DEFAULT 5"),
+                ("min_buy_score", "INTEGER DEFAULT 70"),
+                ("sell_score", "INTEGER DEFAULT 40"),
+                ("max_holdings", "INTEGER DEFAULT 10"),
+                ("max_daily_trades", "INTEGER DEFAULT 10"),
+                ("max_holding_days", "INTEGER DEFAULT 14"),
+            ]
+            for col_name, col_type in new_columns:
+                try:
+                    cursor.execute(f"ALTER TABLE auto_trade_settings ADD COLUMN {col_name} {col_type}")
+                except:
+                    pass  # 이미 존재하는 컬럼
+
+            # user_id 컬럼 추가 (기존 테이블 호환 - 다중 사용자 지원)
+            user_id_tables = [
+                "trade_log",
+                "holdings",
+                "daily_performance",
+                "pending_buy_suggestions",
+                "virtual_balance",
+            ]
+            for table in user_id_tables:
+                try:
+                    cursor.execute(f"ALTER TABLE {table} ADD COLUMN user_id INTEGER")
+                except:
+                    pass  # 이미 존재하는 컬럼
+
             # 인덱스 생성
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_trade_log_date ON trade_log(trade_date)")
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_trade_log_stock ON trade_log(stock_code)")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_trade_log_user ON trade_log(user_id)")
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_holdings_stock ON holdings(stock_code)")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_holdings_user ON holdings(user_id)")
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_suggestions_status ON pending_buy_suggestions(status)")
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_suggestions_stock ON pending_buy_suggestions(stock_code)")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_suggestions_user ON pending_buy_suggestions(user_id)")
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_api_key_user ON api_key_settings(user_id)")
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_settings_user ON auto_trade_settings(user_id)")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_daily_perf_user ON daily_performance(user_id)")
 
     def log_order(
         self,
@@ -253,7 +297,8 @@ class TradeLogger:
         trade_reason: str = None,
         status: str = "pending",
         profit_loss: int = None,
-        profit_rate: float = None
+        profit_rate: float = None,
+        user_id: int = None
     ) -> int:
         """
         주문 기록
@@ -270,6 +315,7 @@ class TradeLogger:
             status: 상태 (pending, executed, cancelled)
             profit_loss: 실현 손익 (매도 시)
             profit_rate: 수익률 (매도 시)
+            user_id: 사용자 ID
 
         Returns:
             생성된 레코드 ID
@@ -283,8 +329,8 @@ class TradeLogger:
                 INSERT INTO trade_log (
                     trade_date, trade_time, stock_code, stock_name,
                     side, quantity, price, amount, order_no, order_type,
-                    trade_reason, status, profit_loss, profit_rate
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    trade_reason, status, profit_loss, profit_rate, user_id
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, (
                 now.strftime("%Y-%m-%d"),
                 now.strftime("%H:%M:%S"),
@@ -299,7 +345,8 @@ class TradeLogger:
                 trade_reason,
                 status,
                 profit_loss,
-                profit_rate
+                profit_rate,
+                user_id
             ))
             return cursor.lastrowid
 
@@ -384,11 +431,15 @@ class TradeLogger:
             cursor = conn.cursor()
             cursor.execute("DELETE FROM holdings WHERE stock_code = ?", (stock_code,))
 
-    def get_holdings(self) -> List[Dict]:
+    def get_holdings(self, user_id: int = None) -> List[Dict]:
         """보유 종목 조회"""
+        # user_id가 없으면 빈 리스트 반환 (보안)
+        if user_id is None:
+            return []
+
         with self._get_connection() as conn:
             cursor = conn.cursor()
-            cursor.execute("SELECT * FROM holdings ORDER BY buy_date DESC")
+            cursor.execute("SELECT * FROM holdings WHERE user_id = ? ORDER BY buy_date DESC", (user_id,))
             rows = cursor.fetchall()
             return [dict(row) for row in rows]
 
@@ -409,6 +460,7 @@ class TradeLogger:
 
     def get_trade_history(
         self,
+        user_id: int = None,
         start_date: str = None,
         end_date: str = None,
         stock_code: str = None,
@@ -418,6 +470,7 @@ class TradeLogger:
         거래 내역 조회
 
         Args:
+            user_id: 사용자 ID (None이면 빈 리스트 반환)
             start_date: 시작일 (YYYY-MM-DD)
             end_date: 종료일 (YYYY-MM-DD)
             stock_code: 종목코드
@@ -426,8 +479,12 @@ class TradeLogger:
         Returns:
             거래 내역 리스트
         """
-        query = "SELECT * FROM trade_log WHERE 1=1"
-        params = []
+        # user_id가 없으면 빈 리스트 반환 (보안)
+        if user_id is None:
+            return []
+
+        query = "SELECT * FROM trade_log WHERE user_id = ?"
+        params = [user_id]
 
         if start_date:
             query += " AND trade_date >= ?"
@@ -504,6 +561,7 @@ class TradeLogger:
 
     def get_performance(
         self,
+        user_id: int = None,
         start_date: str = None,
         end_date: str = None
     ) -> List[Dict]:
@@ -511,14 +569,19 @@ class TradeLogger:
         성과 조회
 
         Args:
+            user_id: 사용자 ID (None이면 빈 리스트 반환)
             start_date: 시작일
             end_date: 종료일
 
         Returns:
             일별 성과 리스트
         """
-        query = "SELECT * FROM daily_performance WHERE 1=1"
-        params = []
+        # user_id가 없으면 빈 리스트 반환 (보안)
+        if user_id is None:
+            return []
+
+        query = "SELECT * FROM daily_performance WHERE user_id = ?"
+        params = [user_id]
 
         if start_date:
             query += " AND trade_date >= ?"
@@ -535,30 +598,44 @@ class TradeLogger:
             rows = cursor.fetchall()
             return [dict(row) for row in rows]
 
-    def get_performance_summary(self, days: int = 30) -> Dict:
+    def get_performance_summary(self, user_id: int = None, days: int = 30) -> Dict:
         """
         성과 요약
 
         Args:
+            user_id: 사용자 ID
             days: 조회 기간 (일)
 
         Returns:
             성과 요약 딕셔너리
         """
+        empty_result = {
+            "period_days": days,
+            "total_trades": 0,
+            "total_profit": 0,
+            "win_rate": 0,
+            "avg_profit_rate": 0,
+            "buy_count": 0,
+            "sell_count": 0,
+            "win_count": 0,
+            "loss_count": 0,
+            "max_profit": 0,
+            "max_loss": 0,
+            "daily_summary": []
+        }
+
+        # user_id가 없으면 빈 결과 반환
+        if user_id is None:
+            return empty_result
+
         start_date = (datetime.now() - timedelta(days=days)).strftime("%Y-%m-%d")
-        performances = self.get_performance(start_date=start_date)
+        performances = self.get_performance(user_id=user_id, start_date=start_date)
 
         if not performances:
-            return {
-                "period_days": days,
-                "total_trades": 0,
-                "total_profit": 0,
-                "win_rate": 0,
-                "avg_profit_rate": 0
-            }
+            return empty_result
 
         # 기간 내 거래 내역
-        trades = self.get_trade_history(start_date=start_date)
+        trades = self.get_trade_history(user_id=user_id, start_date=start_date)
         executed_trades = [t for t in trades if t.get("status") == "executed"]
 
         # 수익/손실 거래 분리
@@ -572,18 +649,25 @@ class TradeLogger:
         profit_rates = [t.get("profit_rate") or 0 for t in executed_trades if t.get("profit_rate")]
         avg_profit_rate = sum(profit_rates) / len(profit_rates) if profit_rates else 0
 
+        # 최대 수익/손실
+        max_profit = max([t.get("profit_loss") or 0 for t in executed_trades]) if executed_trades else 0
+        max_loss = min([t.get("profit_loss") or 0 for t in executed_trades]) if executed_trades else 0
+
         return {
             "period_days": days,
             "total_trades": len(executed_trades),
-            "buy_trades": len([t for t in executed_trades if t.get("side") == "buy"]),
-            "sell_trades": len([t for t in executed_trades if t.get("side") == "sell"]),
-            "winning_trades": len(winning_trades),
-            "losing_trades": len(losing_trades),
+            "buy_count": len([t for t in executed_trades if t.get("side") == "buy"]),
+            "sell_count": len([t for t in executed_trades if t.get("side") == "sell"]),
+            "win_count": len(winning_trades),
+            "loss_count": len(losing_trades),
             "total_profit": total_profit,
             "win_rate": win_rate,
             "avg_profit_rate": avg_profit_rate,
+            "max_profit": max_profit,
+            "max_loss": max_loss,
             "latest_assets": performances[0].get("total_assets") if performances else 0,
-            "latest_holdings": performances[0].get("holdings_count") if performances else 0
+            "latest_holdings": performances[0].get("holdings_count") if performances else 0,
+            "daily_summary": performances[:7] if performances else []
         }
 
     # ========== 모의투자 가상 잔고 관리 ==========
@@ -620,11 +704,15 @@ class TradeLogger:
 
             return True
 
-    def get_virtual_balance(self) -> Optional[Dict]:
+    def get_virtual_balance(self, user_id: int = None) -> Optional[Dict]:
         """모의투자 가상 잔고 조회"""
+        # user_id가 없으면 None 반환 (보안)
+        if user_id is None:
+            return None
+
         with self._get_connection() as conn:
             cursor = conn.cursor()
-            cursor.execute("SELECT * FROM virtual_balance LIMIT 1")
+            cursor.execute("SELECT * FROM virtual_balance WHERE user_id = ? LIMIT 1", (user_id,))
             row = cursor.fetchone()
 
             if row:
@@ -875,10 +963,10 @@ class TradeLogger:
 
             if row:
                 result = dict(row)
-                # 민감 정보 복호화
-                result['app_key'] = decrypt_value(result.get('app_key', ''))
-                result['app_secret'] = decrypt_value(result.get('app_secret', ''))
-                result['account_number'] = decrypt_value(result.get('account_number', ''))
+                # 민감 정보 복호화 및 공백/개행 문자 제거
+                result['app_key'] = decrypt_value(result.get('app_key', '')).strip()
+                result['app_secret'] = decrypt_value(result.get('app_secret', '')).strip()
+                result['account_number'] = decrypt_value(result.get('account_number', '')).strip()
                 return result
             return None
 
@@ -894,10 +982,10 @@ class TradeLogger:
         """API 키 설정 저장 (암호화)"""
         now = datetime.now()
 
-        # 민감 정보 암호화
-        encrypted_app_key = encrypt_value(app_key)
-        encrypted_app_secret = encrypt_value(app_secret)
-        encrypted_account_number = encrypt_value(account_number)
+        # 공백/개행 문자 제거 후 암호화
+        encrypted_app_key = encrypt_value(app_key.strip())
+        encrypted_app_secret = encrypt_value(app_secret.strip())
+        encrypted_account_number = encrypt_value(account_number.strip())
 
         with self._get_connection() as conn:
             cursor = conn.cursor()
@@ -921,6 +1009,39 @@ class TradeLogger:
             else:
                 cursor.execute("DELETE FROM api_key_settings")
             return cursor.rowcount > 0
+
+    def get_auto_trade_users(self) -> List[Dict]:
+        """자동매매 활성화된 모든 사용자와 API 키 조회"""
+        users = []
+        stock_db_path = Path(__file__).parent.parent / "database" / "stock_data.db"
+
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            # stock_data.db를 attach하여 users 테이블 접근
+            cursor.execute(f"ATTACH DATABASE '{stock_db_path}' AS stock_db")
+
+            # auto_trade_enabled 유저 중 API 키가 설정된 유저만 조회
+            cursor.execute("""
+                SELECT u.id, u.username, u.name, u.telegram_chat_id,
+                       a.app_key, a.app_secret, a.account_number,
+                       a.account_product_code, a.is_mock
+                FROM stock_db.users u
+                JOIN api_key_settings a ON u.id = a.user_id
+                WHERE u.auto_trade_enabled = 1 AND u.is_active = 1
+            """)
+            rows = cursor.fetchall()
+
+            for row in rows:
+                user_data = dict(row)
+                # 민감 정보 복호화
+                user_data['app_key'] = decrypt_value(user_data.get('app_key', '')).strip()
+                user_data['app_secret'] = decrypt_value(user_data.get('app_secret', '')).strip()
+                user_data['account_number'] = decrypt_value(user_data.get('account_number', '')).strip()
+                users.append(user_data)
+
+            cursor.execute("DETACH DATABASE stock_db")
+
+        return users
 
     def get_real_account_balance(
         self,
@@ -1040,37 +1161,48 @@ class TradeLogger:
             cursor = conn.cursor()
             cursor.execute("""
                 INSERT OR REPLACE INTO auto_trade_settings (
-                    user_id, trade_mode, max_investment, max_per_stock,
-                    stop_loss_rate, take_profit_rate, trading_enabled,
-                    trading_start_time, trading_end_time, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    user_id, trade_mode, max_investment, stock_ratio,
+                    stop_loss_rate, min_buy_score, sell_score,
+                    max_holdings, max_daily_trades, max_holding_days,
+                    trading_enabled, trading_start_time, trading_end_time,
+                    initial_investment, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, (
                 user_id,
                 settings.get('trade_mode', 'manual'),
                 settings.get('max_investment', 1000000),
-                settings.get('max_per_stock', 200000),
-                settings.get('stop_loss_rate', 5.0),
-                settings.get('take_profit_rate', 10.0),
+                settings.get('stock_ratio', 5),
+                settings.get('stop_loss_rate', -7.0),
+                settings.get('min_buy_score', 70),
+                settings.get('sell_score', 40),
+                settings.get('max_holdings', 10),
+                settings.get('max_daily_trades', 10),
+                settings.get('max_holding_days', 14),
                 1 if settings.get('trading_enabled', True) else 0,
                 settings.get('trading_start_time', '09:00'),
                 settings.get('trading_end_time', '15:20'),
+                settings.get('initial_investment', 0),
                 now.isoformat()
             ))
             return cursor.rowcount > 0
 
     # ========== 매수 제안 관리 (BuySuggestionManager 기능 통합) ==========
 
-    def get_pending_suggestions(self) -> List[Dict]:
+    def get_pending_suggestions(self, user_id: int = None) -> List[Dict]:
         """대기 중인 매수 제안 목록 조회"""
+        # user_id가 없으면 빈 리스트 반환 (보안)
+        if user_id is None:
+            return []
+
         with self._get_connection() as conn:
             cursor = conn.cursor()
             cursor.execute("""
                 SELECT id, stock_code, stock_name, recommended_price as suggested_price,
                        1 as quantity, signals as reason, score, status, created_at
                 FROM pending_buy_suggestions
-                WHERE status = 'pending'
+                WHERE status = 'pending' AND user_id = ?
                 ORDER BY score DESC, created_at DESC
-            """)
+            """, (user_id,))
             rows = cursor.fetchall()
 
             results = []
@@ -1088,17 +1220,21 @@ class TradeLogger:
 
             return results
 
-    def get_approved_suggestions(self) -> List[Dict]:
+    def get_approved_suggestions(self, user_id: int = None) -> List[Dict]:
         """승인된 매수 제안 목록 조회"""
+        # user_id가 없으면 빈 리스트 반환 (보안)
+        if user_id is None:
+            return []
+
         with self._get_connection() as conn:
             cursor = conn.cursor()
             cursor.execute("""
                 SELECT id, stock_code, stock_name, recommended_price as suggested_price,
                        1 as quantity, signals as reason, score, status, created_at
                 FROM pending_buy_suggestions
-                WHERE status = 'approved'
+                WHERE status = 'approved' AND user_id = ?
                 ORDER BY approved_at DESC
-            """)
+            """, (user_id,))
             rows = cursor.fetchall()
 
             results = []
@@ -1181,20 +1317,71 @@ class TradeLogger:
                 'avg_profit_rate': avg_profit_rate
             }
 
+    def get_trade_reasons_by_order_nos(self, order_nos: List[str], user_id: int = None) -> Dict[str, Dict]:
+        """
+        주문번호 목록으로 매매 사유 조회
+
+        Args:
+            order_nos: 주문번호 리스트
+            user_id: 사용자 ID
+
+        Returns:
+            {order_no: {'trade_reason': str, 'profit_loss': int, 'profit_rate': float}, ...}
+        """
+        if not order_nos:
+            return {}
+
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            placeholders = ','.join(['?' for _ in order_nos])
+
+            if user_id:
+                query = f"""
+                    SELECT order_no, trade_reason, profit_loss, profit_rate, created_at
+                    FROM trade_log
+                    WHERE order_no IN ({placeholders}) AND user_id = ?
+                """
+                cursor.execute(query, order_nos + [user_id])
+            else:
+                query = f"""
+                    SELECT order_no, trade_reason, profit_loss, profit_rate, created_at
+                    FROM trade_log
+                    WHERE order_no IN ({placeholders})
+                """
+                cursor.execute(query, order_nos)
+
+            rows = cursor.fetchall()
+
+            result = {}
+            for row in rows:
+                row_dict = dict(row)
+                order_no = row_dict.get('order_no')
+                if order_no:
+                    result[order_no] = {
+                        'trade_reason': row_dict.get('trade_reason'),
+                        'profit_loss': row_dict.get('profit_loss'),
+                        'profit_rate': row_dict.get('profit_rate'),
+                        'created_at': row_dict.get('created_at')
+                    }
+
+            return result
+
 
 class BuySuggestionManager:
     """매수 제안 관리자 (semi-auto 모드용)"""
 
-    def __init__(self, db_path: str = None):
+    def __init__(self, db_path: str = None, user_id: int = None):
         """
         Args:
             db_path: DB 파일 경로 (기본: database/auto_trade.db)
+            user_id: 사용자 ID (다중 사용자 지원)
         """
         if db_path is None:
             db_path = Path(__file__).parent.parent / "database" / "auto_trade.db"
 
         self.db_path = Path(db_path)
         self.db_path.parent.mkdir(exist_ok=True)
+        self.user_id = user_id
 
         # TradeLogger와 동일한 DB 사용 (테이블 생성은 TradeLogger에서 담당)
         self._ensure_table()
@@ -1503,3 +1690,52 @@ class BuySuggestionManager:
     def reject_sell_suggestion(self, suggestion_id: int) -> bool:
         """매도 제안 거부 (현재 미구현)"""
         return False
+
+    def get_trade_reasons_by_order_nos(self, order_nos: List[str], user_id: int = None) -> Dict[str, Dict]:
+        """
+        주문번호 목록으로 매매 사유 조회
+
+        Args:
+            order_nos: 주문번호 리스트
+            user_id: 사용자 ID
+
+        Returns:
+            {order_no: {'trade_reason': str, 'ai_score': float, ...}, ...}
+        """
+        if not order_nos:
+            return {}
+
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            placeholders = ','.join(['?' for _ in order_nos])
+
+            if user_id:
+                query = f"""
+                    SELECT order_no, trade_reason, profit_loss, profit_rate, created_at
+                    FROM trade_log
+                    WHERE order_no IN ({placeholders}) AND user_id = ?
+                """
+                cursor.execute(query, order_nos + [user_id])
+            else:
+                query = f"""
+                    SELECT order_no, trade_reason, profit_loss, profit_rate, created_at
+                    FROM trade_log
+                    WHERE order_no IN ({placeholders})
+                """
+                cursor.execute(query, order_nos)
+
+            rows = cursor.fetchall()
+
+            result = {}
+            for row in rows:
+                row_dict = dict(row)
+                order_no = row_dict.get('order_no')
+                if order_no:
+                    result[order_no] = {
+                        'trade_reason': row_dict.get('trade_reason'),
+                        'profit_loss': row_dict.get('profit_loss'),
+                        'profit_rate': row_dict.get('profit_rate'),
+                        'created_at': row_dict.get('created_at')
+                    }
+
+            return result

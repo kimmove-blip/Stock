@@ -32,12 +32,13 @@ from config import AutoTraderConfig, TelegramConfig, OUTPUT_DIR, SIGNAL_NAMES_KR
 
 
 class TelegramNotifier:
-    """텔레그램 알림 발송"""
+    """텔레그램 + 푸시 알림 발송"""
 
-    def __init__(self, bot_token: str, chat_id: str, enabled: bool = True):
+    def __init__(self, bot_token: str, chat_id: str, enabled: bool = True, user_id: int = None):
         self.bot_token = bot_token
         self.chat_id = chat_id
         self.enabled = enabled
+        self.user_id = user_id  # 푸시 알림용
 
     def send(self, message: str):
         """메시지 발송"""
@@ -93,6 +94,17 @@ class TelegramNotifier:
         msg = f"<b>[오류]</b>\n{error_msg}"
         self.send(msg)
 
+    def send_push(self, title: str, body: str, url: str = None):
+        """앱 푸시 알림 전송"""
+        if not self.enabled or not self.user_id:
+            return
+
+        try:
+            from api.routers.push import send_push_to_user
+            send_push_to_user(self.user_id, title, body, url)
+        except Exception as e:
+            print(f"푸시 알림 전송 실패: {e}")
+
     def notify_buy_suggestion(
         self,
         stock_name: str,
@@ -133,6 +145,14 @@ class TelegramNotifier:
 
         self.send(msg)
 
+        # 앱 푸시 알림도 전송
+        push_body = f"{stock_name} {score}점 | 추천가 {recommended_price:,}원"
+        self.send_push(
+            title="📊 매수 제안",
+            body=push_body,
+            url=f"/stock/{stock_code}"
+        )
+
     def notify_suggestion_executed(self, stock_name: str, price: int, quantity: int):
         """제안 매수 실행 알림"""
         msg = f"<b>✅ [제안 매수 완료]</b>\n{stock_name}\n{price:,}원 x {quantity}주\n\n추천 매수가 도달로 자동 매수"
@@ -142,16 +162,34 @@ class TelegramNotifier:
 class AutoTrader:
     """자동매매 시스템"""
 
-    def __init__(self, dry_run: bool = False):
+    def __init__(self, dry_run: bool = False, user_id: int = None, user_config: dict = None):
         """
         Args:
             dry_run: True면 주문을 실제로 실행하지 않음
+            user_id: 사용자 ID (다중 사용자 지원)
+            user_config: 사용자별 설정 (API 키, 텔레그램 등)
         """
         self.dry_run = dry_run
+        self.user_id = user_id
+        self.user_config = user_config or {}
         self.config = AutoTraderConfig
 
+        # 사용자별 API 키가 있으면 사용, 없으면 환경변수 사용
+        app_key = self.user_config.get('app_key')
+        app_secret = self.user_config.get('app_secret')
+        account_number = self.user_config.get('account_number')
+        is_mock = self.user_config.get('is_mock', self.config.IS_VIRTUAL)
+
         # KIS 클라이언트 초기화
-        self.kis_client = KISClient(is_virtual=self.config.IS_VIRTUAL)
+        if app_key and app_secret and account_number:
+            self.kis_client = KISClient(
+                is_virtual=is_mock,
+                app_key=app_key,
+                app_secret=app_secret,
+                account_number=account_number
+            )
+        else:
+            self.kis_client = KISClient(is_virtual=self.config.IS_VIRTUAL)
 
         # 모듈 초기화
         self.executor = OrderExecutor(self.kis_client)
@@ -167,18 +205,22 @@ class AutoTrader:
             min_volume_ratio=self.config.MIN_VOLUME_RATIO,
         ))
         self.logger = TradeLogger()
-        self.suggestion_manager = BuySuggestionManager()
+        self.suggestion_manager = BuySuggestionManager(user_id=user_id)
         self.analyst = TechnicalAnalyst()
+
+        # 사용자별 텔레그램 + 푸시 설정
+        telegram_chat_id = self.user_config.get('telegram_chat_id') or TelegramConfig.CHAT_ID
         self.notifier = TelegramNotifier(
             bot_token=TelegramConfig.BOT_TOKEN,
-            chat_id=TelegramConfig.CHAT_ID,
+            user_id=user_id,  # 푸시 알림용
+            chat_id=telegram_chat_id,
             enabled=self.config.TELEGRAM_NOTIFY and not dry_run
         )
 
         # 모의투자 가상 잔고 초기화
-        if self.config.IS_VIRTUAL:
+        if is_mock:
             initial_cash = getattr(self.config, 'VIRTUAL_INITIAL_CASH', 100_000_000)
-            self.logger.init_virtual_balance(initial_cash)
+            self.logger.init_virtual_balance(initial_cash, user_id=user_id)
 
         # 실행 통계
         self.stats = {

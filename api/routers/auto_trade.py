@@ -15,8 +15,28 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspa
 
 from api.dependencies import get_current_user_required
 from trading.trade_logger import TradeLogger
+import httpx
 
 router = APIRouter()
+
+async def get_stock_ai_score(stock_code: str) -> dict:
+    """종목의 AI 기술분석 점수 조회"""
+    try:
+        async with httpx.AsyncClient() as client:
+            response = await client.get(
+                f"http://localhost:8000/api/stocks/{stock_code}/analysis",
+                timeout=10.0
+            )
+            if response.status_code == 200:
+                data = response.json()
+                return {
+                    'score': data.get('score', 50),
+                    'opinion': data.get('opinion', '관망'),
+                    'comment': data.get('comment', '')
+                }
+    except Exception as e:
+        print(f"AI 점수 조회 실패 [{stock_code}]: {e}")
+    return {'score': 50, 'opinion': '관망', 'comment': ''}
 
 
 def get_trade_logger():
@@ -116,9 +136,10 @@ async def get_auto_trade_status(
     check_auto_trade_permission(current_user)
 
     logger = get_trade_logger()
+    user_id = current_user.get('id')
 
     # API 키가 없으면 빈 데이터 반환 (다른 사용자 데이터 노출 방지)
-    api_key_data = logger.get_api_key_settings(current_user.get('id'))
+    api_key_data = logger.get_api_key_settings(user_id)
     if not api_key_data:
         return AutoTradeStatusResponse(
             holdings=[],
@@ -131,8 +152,8 @@ async def get_auto_trade_status(
             )
         )
 
-    # 보유 종목
-    holdings_raw = logger.get_holdings()
+    # 보유 종목 (user_id로 필터링)
+    holdings_raw = logger.get_holdings(user_id=user_id)
     holdings = [HoldingResponse(
         stock_code=h['stock_code'],
         stock_name=h.get('stock_name'),
@@ -142,9 +163,9 @@ async def get_auto_trade_status(
         buy_reason=h.get('buy_reason')
     ) for h in holdings_raw]
 
-    # 최근 거래 내역 (7일)
+    # 최근 거래 내역 (7일, user_id로 필터링)
     start_date = (datetime.now() - timedelta(days=7)).strftime("%Y-%m-%d")
-    trades_raw = logger.get_trade_history(start_date=start_date)
+    trades_raw = logger.get_trade_history(user_id=user_id, start_date=start_date)
     recent_trades = [TradeLogResponse(
         id=t['id'],
         trade_date=t['trade_date'],
@@ -161,8 +182,8 @@ async def get_auto_trade_status(
         profit_rate=t.get('profit_rate')
     ) for t in trades_raw]
 
-    # 대기 중인 매수 제안
-    suggestions_raw = logger.get_pending_suggestions()
+    # 대기 중인 매수 제안 (user_id로 필터링)
+    suggestions_raw = logger.get_pending_suggestions(user_id=user_id)
     pending_suggestions = [SuggestionResponse(
         id=s['id'],
         stock_code=s['stock_code'],
@@ -175,8 +196,8 @@ async def get_auto_trade_status(
         created_at=s['created_at']
     ) for s in suggestions_raw]
 
-    # 가상 잔고
-    virtual_raw = logger.get_virtual_balance()
+    # 가상 잔고 (user_id로 필터링)
+    virtual_raw = logger.get_virtual_balance(user_id=user_id)
     virtual_balance = None
     if virtual_raw:
         virtual_balance = VirtualBalanceResponse(
@@ -215,13 +236,15 @@ async def get_holdings(
     check_auto_trade_permission(current_user)
 
     logger = get_trade_logger()
+    user_id = current_user.get('id')
 
     # API 키가 없으면 빈 데이터 반환 (다른 사용자 데이터 노출 방지)
-    api_key_data = logger.get_api_key_settings(current_user.get('id'))
+    api_key_data = logger.get_api_key_settings(user_id)
     if not api_key_data:
         return []
 
-    holdings_raw = logger.get_holdings()
+    # user_id로 필터링하여 해당 사용자의 보유 종목만 조회
+    holdings_raw = logger.get_holdings(user_id=user_id)
 
     return [HoldingResponse(
         stock_code=h['stock_code'],
@@ -235,37 +258,124 @@ async def get_holdings(
 
 @router.get("/trades", response_model=List[TradeLogResponse])
 async def get_trade_history(
-    days: int = 30,
+    days: int = 7,
     current_user: dict = Depends(get_current_user_required)
 ):
-    """거래 내역 조회"""
+    """거래 내역 조회 (실시간 증권사 API)"""
     check_auto_trade_permission(current_user)
 
     logger = get_trade_logger()
+    user_id = current_user.get('id')
 
-    # API 키가 없으면 빈 데이터 반환 (다른 사용자 데이터 노출 방지)
-    api_key_data = logger.get_api_key_settings(current_user.get('id'))
+    # API 키 확인
+    api_key_data = logger.get_api_key_settings(user_id)
     if not api_key_data:
         return []
 
-    start_date = (datetime.now() - timedelta(days=days)).strftime("%Y-%m-%d")
-    trades_raw = logger.get_trade_history(start_date=start_date)
+    # 실시간 증권사 API에서 체결내역 조회
+    try:
+        from api.services.kis_client import KISClient
 
-    return [TradeLogResponse(
-        id=t['id'],
-        trade_date=t['trade_date'],
-        trade_time=t['trade_time'],
-        stock_code=t['stock_code'],
-        stock_name=t.get('stock_name'),
-        side=t['side'],
-        quantity=t['quantity'],
-        price=t.get('price'),
-        amount=t.get('amount'),
-        status=t.get('status', 'completed'),
-        trade_reason=t.get('trade_reason'),
-        profit_loss=t.get('profit_loss'),
-        profit_rate=t.get('profit_rate')
-    ) for t in trades_raw]
+        client = KISClient(
+            app_key=api_key_data.get('app_key'),
+            app_secret=api_key_data.get('app_secret'),
+            account_number=api_key_data.get('account_number'),
+            account_product_code=api_key_data.get('account_product_code', '01'),
+            is_mock=bool(api_key_data.get('is_mock', True))
+        )
+
+        # 조회 기간 설정
+        end_date = datetime.now().strftime("%Y%m%d")
+        start_date = (datetime.now() - timedelta(days=days)).strftime("%Y%m%d")
+
+        history = client.get_order_history(start_date=start_date, end_date=end_date)
+
+        if not history:
+            return []
+
+        # 체결된 주문만 필터링 (체결수량 > 0)
+        history = [h for h in history if h.get('executed_qty', 0) > 0]
+
+        if not history:
+            return []
+
+        # 주문번호 목록 추출
+        order_nos = [h.get('order_no') for h in history if h.get('order_no')]
+
+        # DB에서 매매사유 조회 (order_no로 매칭)
+        trade_reasons = {}
+        if order_nos:
+            trade_reasons = logger.get_trade_reasons_by_order_nos(order_nos, user_id)
+
+        # 종목별 매수 평균가 계산 (매도 손익 계산용)
+        from collections import defaultdict
+        stock_buys = defaultdict(lambda: {'total_amount': 0, 'total_qty': 0})
+        for h in history:
+            if h.get('side') == 'buy':
+                code = h.get('stock_code')
+                qty = h.get('executed_qty', 0)
+                price = h.get('executed_price', 0)
+                stock_buys[code]['total_amount'] += qty * price
+                stock_buys[code]['total_qty'] += qty
+
+        # 종목별 매수 평균가
+        stock_avg_buy_price = {}
+        for code, data in stock_buys.items():
+            if data['total_qty'] > 0:
+                stock_avg_buy_price[code] = data['total_amount'] / data['total_qty']
+
+        # 응답 형식 변환 (매매사유 병합 + 매도 손익 계산)
+        result = []
+        for idx, h in enumerate(history):
+            # 날짜 형식 변환 (YYYYMMDD -> YYYY-MM-DD)
+            order_date = h.get('order_date', '')
+            if len(order_date) == 8:
+                order_date = f"{order_date[:4]}-{order_date[4:6]}-{order_date[6:8]}"
+
+            # 주문번호로 매매사유 조회
+            order_no = h.get('order_no', '')
+            reason_data = trade_reasons.get(order_no, {})
+
+            # 매도인 경우 손익 계산
+            profit_loss = reason_data.get('profit_loss')
+            profit_rate = reason_data.get('profit_rate')
+
+            if h.get('side') == 'sell' and profit_loss is None:
+                code = h.get('stock_code')
+                sell_price = h.get('executed_price', 0)
+                sell_qty = h.get('executed_qty', 0)
+                avg_buy_price = stock_avg_buy_price.get(code, 0)
+
+                if avg_buy_price > 0 and sell_price > 0:
+                    profit_loss = int((sell_price - avg_buy_price) * sell_qty)
+                    profit_rate = round(((sell_price / avg_buy_price) - 1) * 100, 2)
+
+            result.append(TradeLogResponse(
+                id=idx + 1,
+                trade_date=order_date,
+                trade_time="",
+                stock_code=h.get('stock_code', ''),
+                stock_name=h.get('stock_name'),
+                side=h.get('side', 'buy'),
+                quantity=h.get('executed_qty', 0),
+                price=h.get('executed_price'),
+                amount=h.get('executed_amount'),
+                status='completed' if h.get('executed_qty', 0) > 0 else 'pending',
+                trade_reason=reason_data.get('trade_reason'),
+                profit_loss=profit_loss,
+                profit_rate=profit_rate
+            ))
+
+        return result
+
+    except Exception as e:
+        import traceback
+        print(f"[거래내역 조회 에러] {e}")
+        traceback.print_exc()
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"거래내역 조회 실패: {str(e)}"
+        )
 
 
 @router.get("/suggestions", response_model=List[SuggestionResponse])
@@ -277,19 +387,21 @@ async def get_suggestions(
     check_auto_trade_permission(current_user)
 
     logger = get_trade_logger()
+    user_id = current_user.get('id')
 
     # API 키가 없으면 빈 데이터 반환 (다른 사용자 데이터 노출 방지)
-    api_key_data = logger.get_api_key_settings(current_user.get('id'))
+    api_key_data = logger.get_api_key_settings(user_id)
     if not api_key_data:
         return []
 
+    # user_id로 필터링하여 해당 사용자의 제안만 조회
     if status == 'pending':
-        suggestions_raw = logger.get_pending_suggestions()
+        suggestions_raw = logger.get_pending_suggestions(user_id=user_id)
     elif status == 'approved':
-        suggestions_raw = logger.get_approved_suggestions()
+        suggestions_raw = logger.get_approved_suggestions(user_id=user_id)
     else:
         # 전체 조회 (pending + approved)
-        suggestions_raw = logger.get_pending_suggestions() + logger.get_approved_suggestions()
+        suggestions_raw = logger.get_pending_suggestions(user_id=user_id) + logger.get_approved_suggestions(user_id=user_id)
 
     return [SuggestionResponse(
         id=s['id'],
@@ -309,30 +421,195 @@ async def get_performance(
     days: int = 30,
     current_user: dict = Depends(get_current_user_required)
 ):
-    """성과 분석"""
+    """성과 분석 (실시간 증권사 API 기반)"""
     check_auto_trade_permission(current_user)
 
     logger = get_trade_logger()
+    user_id = current_user.get('id')
 
-    # API 키가 없으면 빈 데이터 반환 (다른 사용자 데이터 노출 방지)
-    api_key_data = logger.get_api_key_settings(current_user.get('id'))
+    empty_response = {
+        "period_days": days,
+        "total_trades": 0,
+        "buy_count": 0,
+        "sell_count": 0,
+        "win_count": 0,
+        "loss_count": 0,
+        "win_rate": 0.0,
+        "total_profit": 0,
+        "avg_profit_rate": 0.0,
+        "max_profit": 0,
+        "max_loss": 0,
+        "realized_trades": [],
+        "initial_investment": 0,
+        "current_total_asset": 0,
+        "total_profit_from_initial": 0,
+        "total_profit_rate_from_initial": 0.0
+    }
+
+    # API 키가 없으면 빈 데이터 반환
+    api_key_data = logger.get_api_key_settings(user_id)
     if not api_key_data:
+        return empty_response
+
+    # 초기투자금 조회
+    settings = logger.get_auto_trade_settings(user_id)
+    initial_investment = settings.get('initial_investment', 0) if settings else 0
+
+    try:
+        from api.services.kis_client import KISClient
+        from collections import defaultdict
+
+        client = KISClient(
+            app_key=api_key_data.get('app_key'),
+            app_secret=api_key_data.get('app_secret'),
+            account_number=api_key_data.get('account_number'),
+            account_product_code=api_key_data.get('account_product_code', '01'),
+            is_mock=bool(api_key_data.get('is_mock', True))
+        )
+
+        # 조회 기간 설정
+        end_date = datetime.now().strftime("%Y%m%d")
+        start_date = (datetime.now() - timedelta(days=days)).strftime("%Y%m%d")
+
+        # 체결 내역 조회
+        history = client.get_order_history(start_date=start_date, end_date=end_date)
+        history = [h for h in history if h.get('executed_qty', 0) > 0]
+
+        if not history:
+            return empty_response
+
+        # 매수/매도 분류
+        buys = [h for h in history if h.get('side') == 'buy']
+        sells = [h for h in history if h.get('side') == 'sell']
+
+        # 종목별 매수/매도 분석
+        stock_trades = defaultdict(lambda: {'buys': [], 'sells': [], 'name': ''})
+        for h in history:
+            code = h.get('stock_code')
+            name = h.get('stock_name', '')
+            if h.get('side') == 'buy':
+                stock_trades[code]['buys'].append(h)
+            else:
+                stock_trades[code]['sells'].append(h)
+            stock_trades[code]['name'] = name
+
+        # 실현 손익 계산 (매도된 종목)
+        realized_trades = []
+        total_profit = 0
+        win_count = 0
+        loss_count = 0
+        max_profit = 0
+        max_loss = 0
+        profit_rates = []
+
+        for code, trades in stock_trades.items():
+            if trades['sells']:
+                name = trades['name']
+
+                # 매수 평균가
+                total_buy_amount = sum(h.get('executed_qty', 0) * h.get('executed_price', 0) for h in trades['buys'])
+                total_buy_qty = sum(h.get('executed_qty', 0) for h in trades['buys'])
+                avg_buy_price = total_buy_amount / total_buy_qty if total_buy_qty > 0 else 0
+
+                # 매도 평균가
+                total_sell_amount = sum(h.get('executed_qty', 0) * h.get('executed_price', 0) for h in trades['sells'])
+                total_sell_qty = sum(h.get('executed_qty', 0) for h in trades['sells'])
+                avg_sell_price = total_sell_amount / total_sell_qty if total_sell_qty > 0 else 0
+
+                # 실현 손익
+                profit = int((avg_sell_price - avg_buy_price) * total_sell_qty)
+                profit_rate = ((avg_sell_price / avg_buy_price) - 1) * 100 if avg_buy_price > 0 else 0
+
+                total_profit += profit
+                profit_rates.append(profit_rate)
+
+                if profit > 0:
+                    win_count += 1
+                    max_profit = max(max_profit, profit)
+                elif profit < 0:
+                    loss_count += 1
+                    max_loss = min(max_loss, profit)
+
+                realized_trades.append({
+                    "stock_code": code,
+                    "stock_name": name,
+                    "buy_price": int(avg_buy_price),
+                    "sell_price": int(avg_sell_price),
+                    "quantity": total_sell_qty,
+                    "profit": profit,
+                    "profit_rate": round(profit_rate, 2)
+                })
+
+        # 승률 계산
+        total_realized = win_count + loss_count
+        win_rate = (win_count / total_realized * 100) if total_realized > 0 else 0.0
+        avg_profit_rate = sum(profit_rates) / len(profit_rates) if profit_rates else 0.0
+
+        # 현재 총자산 계산 (계좌 잔고 + 평가금액)
+        current_total_asset = 0
+        total_profit_from_initial = 0
+        total_profit_rate_from_initial = 0.0
+
+        try:
+            # 계좌 잔고 조회
+            is_mock = bool(api_key_data.get('is_mock', True))
+            account_data = logger.get_real_account_balance(
+                app_key=api_key_data.get('app_key'),
+                app_secret=api_key_data.get('app_secret'),
+                account_number=api_key_data.get('account_number'),
+                account_product_code=api_key_data.get('account_product_code', '01'),
+                is_mock=is_mock
+            )
+
+            if account_data:
+                holdings = account_data.get('holdings', [])
+                holdings = [h for h in holdings if h.get('quantity', 0) > 0]
+                summary = account_data.get('summary', {})
+
+                # 총 평가금액
+                if summary and summary.get('total_eval_amount', 0) > 0:
+                    total_evaluation = summary.get('total_eval_amount', 0)
+                    cash_balance = summary.get('cash_balance', 0)
+                else:
+                    total_evaluation = sum(h.get('eval_amount', 0) for h in holdings)
+                    cash_balance = summary.get('cash_balance', 0)
+
+                current_total_asset = total_evaluation + cash_balance
+
+                # 초기투자금 기준 총수익 계산
+                if initial_investment > 0:
+                    total_profit_from_initial = current_total_asset - initial_investment
+                    total_profit_rate_from_initial = round(
+                        ((current_total_asset / initial_investment) - 1) * 100, 2
+                    )
+
+        except Exception as e:
+            print(f"[성과분석] 계좌잔고 조회 실패: {e}")
+
         return {
             "period_days": days,
-            "total_trades": 0,
-            "buy_count": 0,
-            "sell_count": 0,
-            "win_count": 0,
-            "loss_count": 0,
-            "win_rate": 0,
-            "total_profit": 0,
-            "avg_profit_rate": 0,
-            "max_profit": 0,
-            "max_loss": 0,
-            "daily_summary": []
+            "total_trades": len(history),
+            "buy_count": len(buys),
+            "sell_count": len(sells),
+            "win_count": win_count,
+            "loss_count": loss_count,
+            "win_rate": round(win_rate, 1),
+            "total_profit": total_profit,
+            "avg_profit_rate": round(avg_profit_rate, 2),
+            "max_profit": max_profit,
+            "max_loss": max_loss,
+            "realized_trades": realized_trades,
+            "initial_investment": initial_investment,
+            "current_total_asset": current_total_asset,
+            "total_profit_from_initial": total_profit_from_initial,
+            "total_profit_rate_from_initial": total_profit_rate_from_initial
         }
 
-    return logger.get_performance_summary(days=days)
+    except Exception as e:
+        import traceback
+        print(f"[성과분석 에러] {e}")
+        traceback.print_exc()
+        return empty_response
 
 
 # ==================== API 키 관리 ====================
@@ -388,15 +665,67 @@ async def save_api_key(
     request: ApiKeyRequest,
     current_user: dict = Depends(get_current_user_required)
 ):
-    """API 키 저장"""
+    """API 키 저장 (연동 테스트 후 저장)"""
     check_auto_trade_permission(current_user)
 
     logger = get_trade_logger()
+    mode_text = "모의투자" if request.is_mock else "실제투자"
+
+    # 1. 먼저 API 연동 테스트
+    try:
+        print(f"[API키저장] 연동 테스트 시작 - {mode_text}, 계좌: {request.account_number}")
+
+        # 입력값 공백 제거
+        app_key = request.app_key.strip()
+        app_secret = request.app_secret.strip()
+        account_number = request.account_number.strip()
+
+        # KIS API 토큰 발급 및 계좌 조회 테스트
+        test_result = logger.get_real_account_balance(
+            app_key=app_key,
+            app_secret=app_secret,
+            account_number=account_number,
+            account_product_code=request.account_product_code,
+            is_mock=request.is_mock
+        )
+
+        # 테스트 결과 확인 - holdings가 비어있어도 조회 자체가 성공하면 OK
+        # (빈 계좌일 수 있음)
+        if test_result is None:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"API 연동 테스트 실패: KIS API 응답 없음. API 키와 계좌번호를 확인해주세요."
+            )
+
+        print(f"[API키저장] 연동 테스트 성공 - 보유종목: {len(test_result.get('holdings', []))}개")
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        error_msg = str(e)
+        print(f"[API키저장] 연동 테스트 실패: {error_msg}")
+
+        # 에러 메시지 가공
+        if "INVALID_CHECK_ACNO" in error_msg or "계좌" in error_msg.lower():
+            detail = f"계좌번호가 올바르지 않습니다. {mode_text} 계좌번호를 확인해주세요."
+        elif "token" in error_msg.lower() or "401" in error_msg or "403" in error_msg:
+            detail = f"API 키가 올바르지 않습니다. {mode_text}용 APP Key와 Secret을 확인해주세요."
+        elif "rate" in error_msg.lower() or "1분" in error_msg:
+            detail = "토큰 발급 제한 (1분당 1회). 잠시 후 다시 시도해주세요."
+        else:
+            detail = f"API 연동 테스트 실패: {error_msg}"
+
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=detail
+        )
+
+    # 2. 테스트 성공 시 API 키 저장
     success = logger.save_api_key_settings(
         user_id=current_user.get('id'),
-        app_key=request.app_key,
-        app_secret=request.app_secret,
-        account_number=request.account_number,
+        app_key=app_key,
+        app_secret=app_secret,
+        account_number=account_number,
         account_product_code=request.account_product_code,
         is_mock=request.is_mock
     )
@@ -407,8 +736,15 @@ async def save_api_key(
             detail="API 키 저장에 실패했습니다"
         )
 
-    mode_text = "모의투자" if request.is_mock else "실제투자"
-    return {"message": f"API 키가 저장되었습니다 ({mode_text} 모드)", "is_connected": True, "is_mock": request.is_mock}
+    return {
+        "message": f"API 키가 저장되었습니다 ({mode_text} 모드)",
+        "is_connected": True,
+        "is_mock": request.is_mock,
+        "test_result": {
+            "holdings_count": len(test_result.get('holdings', [])),
+            "cash_balance": test_result.get('summary', {}).get('cash_balance', 0)
+        }
+    }
 
 
 @router.delete("/api-key")
@@ -486,6 +822,8 @@ async def get_account(
 
         # 프론트엔드가 기대하는 형식으로 변환
         holdings = account_data.get('holdings', [])
+        # 0주인 종목 필터링
+        holdings = [h for h in holdings if h.get('quantity', 0) > 0]
         summary = account_data.get('summary', {})
 
         # 총 매입금액 계산 (평균단가 * 수량의 합)
@@ -496,15 +834,15 @@ async def get_account(
             # summary 데이터 사용
             total_evaluation = summary.get('total_eval_amount', 0)
             total_profit_loss = summary.get('total_profit_loss', 0)
-            profit_rate = summary.get('profit_rate', 0)
             cash_balance = summary.get('cash_balance', 0)
         else:
             # holdings 데이터에서 직접 계산
             total_evaluation = sum(h.get('eval_amount', 0) for h in holdings)
             total_profit_loss = sum(h.get('profit_loss', 0) for h in holdings)
-            # 수익률: (평가금액 - 매입금액) / 매입금액 * 100
-            profit_rate = ((total_evaluation - total_purchase) / total_purchase * 100) if total_purchase > 0 else 0
             cash_balance = summary.get('cash_balance', 0)  # 예수금은 summary에서만
+
+        # 수익률은 항상 직접 계산 (KIS API가 0을 반환하는 경우가 있음)
+        profit_rate = ((total_evaluation - total_purchase) / total_purchase * 100) if total_purchase > 0 else 0
 
         # 총 자산 = 평가금액 + 예수금
         total_asset = total_evaluation + cash_balance
@@ -543,12 +881,17 @@ class AutoTradeSettingsRequest(BaseModel):
     """자동매매 설정 요청"""
     trade_mode: str = "manual"  # auto, semi, manual
     max_investment: int = 1000000
-    max_per_stock: int = 200000
-    stop_loss_rate: float = 5.0
-    take_profit_rate: float = 10.0
+    stock_ratio: int = 5  # 종목당 투자비율 (1~20%)
+    stop_loss_rate: float = -7.0  # 손절률 (-20 ~ 0%)
+    min_buy_score: int = 70  # 최소 매수 점수 (50~100)
+    sell_score: int = 40  # 매도 점수 (이 점수 이하면 매도)
+    max_holdings: int = 10  # 최대 보유 종목 (1~20)
+    max_daily_trades: int = 10  # 일일 최대 거래 (1~50)
+    max_holding_days: int = 14  # 최대 보유 기간 (1~30일)
     trading_enabled: bool = True
     trading_start_time: str = "09:00"
     trading_end_time: str = "15:20"
+    initial_investment: int = 0  # 초기 투자금
 
 
 @router.get("/settings")
@@ -561,19 +904,31 @@ async def get_settings(
     logger = get_trade_logger()
     settings = logger.get_auto_trade_settings(current_user.get('id'))
 
-    # 기본값 반환
-    if not settings:
-        return {
-            "trade_mode": "manual",
-            "max_investment": 1000000,
-            "max_per_stock": 200000,
-            "stop_loss_rate": 5.0,
-            "take_profit_rate": 10.0,
-            "trading_enabled": True,
-            "trading_start_time": "09:00",
-            "trading_end_time": "15:20"
-        }
+    # 기본값 설정
+    default_settings = {
+        "trade_mode": "manual",
+        "max_investment": 1000000,
+        "stock_ratio": 5,
+        "stop_loss_rate": -7.0,
+        "min_buy_score": 70,
+        "sell_score": 40,
+        "max_holdings": 10,
+        "max_daily_trades": 10,
+        "max_holding_days": 14,
+        "trading_enabled": True,
+        "trading_start_time": "09:00",
+        "trading_end_time": "15:20",
+        "initial_investment": 0
+    }
 
+    if not settings:
+        return default_settings
+
+    # 기존 설정에 initial_investment가 없으면 기본값 추가
+    if 'initial_investment' not in settings:
+        settings['initial_investment'] = 0
+
+    print(f"[설정조회] user_id={current_user.get('id')}, initial_investment={settings.get('initial_investment')}")
     return settings
 
 
@@ -818,61 +1173,57 @@ async def get_diagnosis(
         )
 
     holdings = account_data.get('holdings', [])
+    # 0주인 종목 필터링
+    holdings = [h for h in holdings if h.get('quantity', 0) > 0]
+
     diagnosed_holdings = []
     total_health = 0
     warning_count = 0
     total_profit_rate = 0
 
-    for h in holdings:
+    import asyncio
+
+    # 모든 종목의 AI 점수를 병렬로 조회
+    stock_codes = [h.get('stock_code', '') for h in holdings]
+    ai_scores = await asyncio.gather(*[get_stock_ai_score(code) for code in stock_codes])
+
+    for i, h in enumerate(holdings):
         profit_rate = h.get('profit_rate', 0)
-
-        # 간단한 건강 점수 계산 (실제로는 더 복잡한 AI 분석 필요)
-        health_score = 70  # 기본 점수
-        signal = 'hold'
-
-        if profit_rate >= 20:
-            health_score = 90
-            signal = 'sell'  # 익절 고려
-        elif profit_rate >= 10:
-            health_score = 85
-            signal = 'hold'
-        elif profit_rate >= 0:
-            health_score = 75
-            signal = 'hold'
-        elif profit_rate >= -5:
-            health_score = 60
-            signal = 'hold'
-            warning_count += 1
-        elif profit_rate >= -10:
-            health_score = 45
-            signal = 'sell'
-            warning_count += 1
-        else:
-            health_score = 30
-            signal = 'strong_sell'
-            warning_count += 1
-
         current_price = h.get('current_price', 0)
         avg_price = h.get('avg_price', 0)
+
+        # AI 기술분석 점수 사용
+        ai_data = ai_scores[i]
+        health_score = int(ai_data.get('score', 50))
+        ai_opinion = ai_data.get('opinion', '관망')
+        ai_comment = ai_data.get('comment', '')
+
+        # 시그널 결정: AI 점수 + 수익률 고려
+        signal = 'hold'
+        if profit_rate >= 20:
+            signal = 'take_profit'  # 익절 고려
+            if not ai_comment:
+                ai_comment = "목표 수익률 달성. 일부 익절을 고려해보세요."
+        elif profit_rate <= -10:
+            signal = 'strong_sell'
+            warning_count += 1
+            if not ai_comment:
+                ai_comment = "손절을 고려해야 할 시점입니다."
+        elif profit_rate <= -5:
+            signal = 'sell'
+            warning_count += 1
+            if not ai_comment:
+                ai_comment = "주의가 필요합니다. 손절 라인을 확인하세요."
+        elif health_score >= 70:
+            signal = 'buy'
+        elif health_score <= 40:
+            signal = 'sell'
+            if profit_rate < 0:
+                warning_count += 1
 
         # 목표가/손절가 계산
         target_price = int(avg_price * 1.15) if avg_price else None  # 15% 수익
         stop_loss_price = int(avg_price * 0.93) if avg_price else None  # 7% 손실
-
-        # AI 코멘트 생성
-        ai_comment = None
-        if profit_rate >= 20:
-            ai_comment = "목표 수익률 달성. 일부 익절을 고려해보세요."
-        elif profit_rate >= 10:
-            ai_comment = "양호한 수익률입니다. 추세를 지켜보세요."
-        elif profit_rate >= 0:
-            ai_comment = "손익분기점 근처입니다. 시장 상황을 모니터링하세요."
-        elif profit_rate >= -5:
-            ai_comment = "소폭 하락 중입니다. 추가 매수 또는 홀딩 검토."
-        elif profit_rate >= -10:
-            ai_comment = "주의가 필요합니다. 손절 라인을 확인하세요."
-        else:
-            ai_comment = "손절을 고려해야 할 시점입니다."
 
         diagnosed_holdings.append(DiagnosisHolding(
             stock_code=h.get('stock_code', ''),
