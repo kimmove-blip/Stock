@@ -1,6 +1,6 @@
 import { Outlet, NavLink, useLocation, useNavigate } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
-import { Home, Info, MessageCircle, Settings, ArrowLeft, Bell } from 'lucide-react';
+import { Home, Info, MessageCircle, Settings, ArrowLeft, Bell, Bot } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
 import { alertsAPI } from '../api/client';
 
@@ -23,6 +23,16 @@ const pageTitles = {
   '/alerts': '알림 기록',
   '/login': '로그인',
   '/register': '회원가입',
+  '/auto-trade': '자동매매',
+  '/auto-trade/api-key': 'API 키 설정',
+  '/auto-trade/account': '계좌 현황',
+  '/auto-trade/settings': '자동매매 설정',
+  '/auto-trade/suggestions': '매매 제안 관리',
+  '/auto-trade/history': '거래 내역',
+  '/auto-trade/performance': '성과 분석',
+  '/auto-trade/diagnosis': '보유종목 진단',
+  '/auto-trade/manual': '수동 매매',
+  '/auto-trade/pending-orders': '미체결 내역',
 };
 
 export default function Layout() {
@@ -51,8 +61,11 @@ export default function Layout() {
   // 현재 페이지 타이틀
   const pageTitle = pageTitles[location.pathname] || (isStockDetail ? '종목 상세' : '');
 
+  // 자동매매 권한에 따라 메뉴 동적 생성
   const navItems = [
     { to: '/', icon: Home, label: '홈' },
+    // 자동매매 권한이 있으면 홈과 앱소개 사이에 자동매매 메뉴 추가
+    ...(user?.auto_trade_enabled ? [{ to: '/auto-trade', icon: Bot, label: '자동매매' }] : []),
     { to: '/about', icon: Info, label: '앱 소개' },
     { to: '/contact', icon: MessageCircle, label: '문의' },
     { to: '/settings', icon: Settings, label: '설정' },

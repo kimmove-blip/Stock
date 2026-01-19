@@ -209,4 +209,48 @@ export const announcementsAPI = {
   adminDelete: (id) => api.delete(`/announcements/admin/${id}`),
 };
 
+// 자동매매 API
+export const autoTradeAPI = {
+  // 자동매매 현황 조회
+  status: () => api.get('/auto-trade/status'),
+  // 보유 종목 조회
+  holdings: () => api.get('/auto-trade/holdings'),
+  // 거래 내역 조회
+  trades: (days = 30) => api.get(`/auto-trade/trades?days=${days}`),
+  // 매수 제안 조회
+  suggestions: (status) => api.get(`/auto-trade/suggestions${status ? `?status=${status}` : ''}`),
+  // 성과 분석
+  performance: (days = 30) => api.get(`/auto-trade/performance?days=${days}`),
+  // API 키 설정 조회
+  getApiKey: () => api.get('/auto-trade/api-key'),
+  // API 키 저장
+  saveApiKey: (data) => api.post('/auto-trade/api-key', data),
+  // API 키 삭제
+  deleteApiKey: () => api.delete('/auto-trade/api-key'),
+  // 실제 계좌 현황 조회
+  getAccount: () => api.get('/auto-trade/account'),
+  // 자동매매 설정 조회
+  getSettings: () => api.get('/auto-trade/settings'),
+  // 자동매매 설정 저장
+  saveSettings: (data) => api.post('/auto-trade/settings', data),
+  // 매수 제안 승인
+  approveSuggestion: (id) => api.post(`/auto-trade/suggestions/${id}/approve`),
+  // 매수 제안 거부
+  rejectSuggestion: (id) => api.post(`/auto-trade/suggestions/${id}/reject`),
+  // 매도 제안 조회
+  sellSuggestions: (status) => api.get(`/auto-trade/sell-suggestions${status ? `?status=${status}` : ''}`),
+  // 매도 제안 승인
+  approveSellSuggestion: (id) => api.post(`/auto-trade/sell-suggestions/${id}/approve`),
+  // 매도 제안 거부
+  rejectSellSuggestion: (id) => api.post(`/auto-trade/sell-suggestions/${id}/reject`),
+  // 보유종목 진단
+  getDiagnosis: () => api.get('/auto-trade/diagnosis'),
+  // 수동 주문 실행
+  placeOrder: (data) => api.post('/auto-trade/order', data),
+  // 미체결 주문 조회
+  getPendingOrders: () => api.get('/auto-trade/pending-orders'),
+  // 주문 취소
+  cancelOrder: (orderId) => api.delete(`/auto-trade/order/${orderId}`),
+};
+
 export default api;

@@ -30,3 +30,5 @@ ta-lib/
 
 # 캐시
 .streamlit/secrets.toml
+.encryption_key
+database/.encryption_key

@@ -26,6 +26,16 @@ import AlertHistory from './pages/AlertHistory';
 import Privacy from './pages/Privacy';
 import DeleteAccount from './pages/DeleteAccount';
 import DeleteData from './pages/DeleteData';
+import AutoTrade from './pages/AutoTrade';
+import AutoTradeApiKey from './pages/AutoTradeApiKey';
+import AutoTradeAccount from './pages/AutoTradeAccount';
+import AutoTradeSettings from './pages/AutoTradeSettings';
+import AutoTradeSuggestions from './pages/AutoTradeSuggestions';
+import AutoTradeHistory from './pages/AutoTradeHistory';
+import AutoTradePerformance from './pages/AutoTradePerformance';
+import AutoTradeDiagnosis from './pages/AutoTradeDiagnosis';
+import AutoTradeManual from './pages/AutoTradeManual';
+import AutoTradePendingOrders from './pages/AutoTradePendingOrders';
 import Loading from './components/Loading';
 import Disclaimer from './components/Disclaimer';
 import PushPermissionPrompt from './components/PushPermissionPrompt';
@@ -96,6 +106,16 @@ function AppRoutes() {
         <Route path="/push" element={<PushSettings />} />
         <Route path="/alerts" element={<AlertHistory />} />
         <Route path="/admin" element={<Admin />} />
+        <Route path="/auto-trade" element={<AutoTrade />} />
+        <Route path="/auto-trade/api-key" element={<AutoTradeApiKey />} />
+        <Route path="/auto-trade/account" element={<AutoTradeAccount />} />
+        <Route path="/auto-trade/settings" element={<AutoTradeSettings />} />
+        <Route path="/auto-trade/suggestions" element={<AutoTradeSuggestions />} />
+        <Route path="/auto-trade/history" element={<AutoTradeHistory />} />
+        <Route path="/auto-trade/performance" element={<AutoTradePerformance />} />
+        <Route path="/auto-trade/diagnosis" element={<AutoTradeDiagnosis />} />
+        <Route path="/auto-trade/manual" element={<AutoTradeManual />} />
+        <Route path="/auto-trade/pending-orders" element={<AutoTradePendingOrders />} />
         <Route path="/delete-account" element={<DeleteAccount />} />
         <Route path="/delete-data" element={<DeleteData />} />
       </Route>
