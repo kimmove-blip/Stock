@@ -127,11 +127,11 @@ export default function AutoTradeHistory() {
             <p className="text-xs text-blue-500">{summary.sellAmount?.toLocaleString()}원</p>
           </div>
           <div className="bg-green-50 rounded-lg p-3">
-            <p className="text-xs text-green-600">익절</p>
+            <p className="text-xs text-green-600">수익</p>
             <p className="text-lg font-bold text-green-700">{summary.profitCount}건</p>
           </div>
           <div className="bg-gray-50 rounded-lg p-3">
-            <p className="text-xs text-gray-600">손절</p>
+            <p className="text-xs text-gray-600">손실</p>
             <p className="text-lg font-bold text-gray-700">{summary.lossCount}건</p>
           </div>
         </div>

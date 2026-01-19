@@ -51,7 +51,8 @@ export default function StockCard({ stock, onClick, showScore = true, inPortfoli
           <div className="mt-2">
             <span className={`badge ${
               stock.opinion === '매수' ? 'badge-success' :
-              stock.opinion === '매도' || stock.opinion === '손절' ? 'badge-error' :
+              stock.opinion === '과열 주의' || stock.opinion === '손절' ? 'badge-error' :
+              stock.opinion === '주의' ? 'badge-warning' :
               'badge-ghost'
             }`}>
               {stock.opinion}

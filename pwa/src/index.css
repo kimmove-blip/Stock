@@ -92,3 +92,12 @@ a, button, input, select, textarea {
   -webkit-backface-visibility: hidden;
   backface-visibility: hidden;
 }
+
+/* 안드로이드 헤더 패딩 조정 */
+html.android .pt-14 {
+  padding-top: 2rem !important; /* pt-8 */
+}
+
+html.android .pt-12 {
+  padding-top: 1.5rem !important; /* pt-6 */
+}

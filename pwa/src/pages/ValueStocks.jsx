@@ -1,7 +1,8 @@
 import { useState, useEffect } from 'react';
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { useNavigate } from 'react-router-dom';
+import { useQuery } from '@tanstack/react-query';
 import { valueStocksAPI, realtimeAPI, portfolioAPI, watchlistAPI } from '../api/client';
-import { TrendingUp, TrendingDown, Shield, Percent, Building2, Sparkles, Star, Plus } from 'lucide-react';
+import { TrendingUp, TrendingDown, Shield, Percent, Building2, Sparkles } from 'lucide-react';
 import Loading from '../components/Loading';
 
 // AI 분석 중 로딩 컴포넌트
@@ -47,15 +48,11 @@ function AnalyzingLoader() {
 }
 
 export default function ValueStocks() {
-  const queryClient = useQueryClient();
+  const navigate = useNavigate();
   const [showAnalyzing, setShowAnalyzing] = useState(true);
   const [realtimePrices, setRealtimePrices] = useState({});
-  const [showAddModal, setShowAddModal] = useState(false);
-  const [selectedStock, setSelectedStock] = useState(null);
-  const [buyPrice, setBuyPrice] = useState('');
-  const [quantity, setQuantity] = useState('1');
 
-  const { data, isLoading, refetch, isFetching } = useQuery({
+  const { data, isLoading } = useQuery({
     queryKey: ['valueStocks'],
     queryFn: () => valueStocksAPI.list(30).then((res) => res.data),
     staleTime: 1000 * 60 * 30, // 30분 캐시
@@ -79,55 +76,6 @@ export default function ValueStocks() {
     portfolio?.items?.some((item) => item.stock_code === code);
   const isInWatchlist = (code) =>
     watchlist?.items?.some((item) => item.stock_code === code);
-
-  // 관심종목 추가
-  const addToWatchlistMutation = useMutation({
-    mutationFn: (stock) => watchlistAPI.add({
-      stock_code: stock.code,
-      stock_name: stock.name,
-      category: '가치주',
-    }),
-    onSuccess: () => {
-      queryClient.invalidateQueries(['watchlist']);
-      alert('관심종목에 추가되었습니다');
-    },
-    onError: (error) => {
-      alert(error.response?.data?.detail || '추가에 실패했습니다');
-    },
-  });
-
-  // 보유종목 추가
-  const addToPortfolioMutation = useMutation({
-    mutationFn: (data) => portfolioAPI.add(data),
-    onSuccess: () => {
-      queryClient.invalidateQueries(['portfolio']);
-      setShowAddModal(false);
-      setSelectedStock(null);
-      setBuyPrice('');
-      setQuantity('1');
-      alert('보유종목에 추가되었습니다');
-    },
-    onError: (error) => {
-      alert(error.response?.data?.detail || '추가에 실패했습니다');
-    },
-  });
-
-  const handleOpenAddModal = (stock, currentPrice) => {
-    setSelectedStock(stock);
-    setBuyPrice(currentPrice?.toString() || '');
-    setQuantity('1');
-    setShowAddModal(true);
-  };
-
-  const handleAddToPortfolio = () => {
-    if (!selectedStock) return;
-    addToPortfolioMutation.mutate({
-      stock_code: selectedStock.code,
-      stock_name: selectedStock.name,
-      buy_price: parseInt(buyPrice) || 0,
-      quantity: parseInt(quantity) || 1,
-    });
-  };
 
   // 초기 로딩 시 2초간 분석 애니메이션
   useEffect(() => {
@@ -209,7 +157,18 @@ export default function ValueStocks() {
           return (
             <div
               key={stock.code}
-              className="bg-white rounded-xl p-4 shadow-sm"
+              className="bg-white rounded-xl p-4 shadow-sm active:bg-gray-50 cursor-pointer"
+              onClick={() => navigate(`/stock/${stock.code}`, {
+                state: {
+                  preloadedData: {
+                    code: stock.code,
+                    name: stock.name,
+                    current_price: stockData.current_price,
+                    change_rate: stockData.change_rate,
+                    score: stock.score,
+                  },
+                },
+              })}
             >
               <div className="flex justify-between items-start mb-2">
                 <div>
@@ -294,35 +253,6 @@ export default function ValueStocks() {
                   ))}
                 </div>
               )}
-
-              {/* 액션 버튼 */}
-              <div className="flex gap-2 mt-3 pt-3 border-t border-gray-100">
-                {isInPortfolio(stock.code) ? (
-                  <button disabled className="btn btn-sm btn-ghost flex-1 text-blue-500">
-                    <Plus size={14} /> 보유중
-                  </button>
-                ) : (
-                  <button
-                    onClick={() => handleOpenAddModal(stock, stockData.current_price)}
-                    className="btn btn-sm btn-primary flex-1"
-                  >
-                    <Plus size={14} /> 보유종목
-                  </button>
-                )}
-                {isInWatchlist(stock.code) ? (
-                  <button disabled className="btn btn-sm btn-ghost flex-1 text-yellow-500">
-                    <Star size={14} /> 관심중
-                  </button>
-                ) : (
-                  <button
-                    onClick={() => addToWatchlistMutation.mutate(stock)}
-                    disabled={addToWatchlistMutation.isPending}
-                    className="btn btn-sm btn-outline flex-1"
-                  >
-                    <Star size={14} /> 관심종목
-                  </button>
-                )}
-              </div>
             </div>
           );
         })}
@@ -331,69 +261,6 @@ export default function ValueStocks() {
       {items.length === 0 && (
         <div className="text-center py-10 text-gray-500">
           가치주 데이터가 없습니다
-        </div>
-      )}
-
-      {/* 보유종목 추가 모달 */}
-      {showAddModal && selectedStock && (
-        <div className="modal modal-open">
-          <div className="modal-box">
-            <h3 className="font-bold text-lg">보유종목 추가</h3>
-
-            <div className="mt-4 p-3 bg-base-200 rounded">
-              <p className="font-bold">{selectedStock.name}</p>
-              <p className="text-sm text-base-content/60">{selectedStock.code}</p>
-            </div>
-
-            <div className="form-control mt-4">
-              <label className="label">
-                <span className="label-text">매수가</span>
-              </label>
-              <input
-                type="number"
-                value={buyPrice}
-                onChange={(e) => setBuyPrice(e.target.value)}
-                className="input input-bordered"
-                placeholder="매수가 입력"
-              />
-            </div>
-
-            <div className="form-control mt-4">
-              <label className="label">
-                <span className="label-text">수량</span>
-              </label>
-              <input
-                type="number"
-                value={quantity}
-                onChange={(e) => setQuantity(e.target.value)}
-                className="input input-bordered"
-                min="1"
-              />
-            </div>
-
-            <div className="modal-action">
-              <button
-                onClick={() => {
-                  setShowAddModal(false);
-                  setSelectedStock(null);
-                }}
-                className="btn btn-ghost"
-              >
-                취소
-              </button>
-              <button
-                onClick={handleAddToPortfolio}
-                className="btn btn-primary"
-                disabled={addToPortfolioMutation.isPending}
-              >
-                {addToPortfolioMutation.isPending ? (
-                  <span className="loading loading-spinner"></span>
-                ) : (
-                  '추가'
-                )}
-              </button>
-            </div>
-          </div>
         </div>
       )}
     </div>

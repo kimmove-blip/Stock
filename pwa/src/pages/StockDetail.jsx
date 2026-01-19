@@ -1,7 +1,7 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useParams, useNavigate, useLocation } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { stockAPI, portfolioAPI, watchlistAPI } from '../api/client';
+import { stockAPI, portfolioAPI, watchlistAPI, realtimeAPI } from '../api/client';
 import Loading from '../components/Loading';
 import { ArrowLeft, Star, Plus, TrendingUp, TrendingDown, FileText, Check, RefreshCw, Share2 } from 'lucide-react';
 import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer } from 'recharts';
@@ -17,12 +17,17 @@ export default function StockDetail() {
   const [buyPrice, setBuyPrice] = useState('');
   const [quantity, setQuantity] = useState('1');
 
+  // 페이지 진입 시 스크롤 맨 위로
+  useEffect(() => {
+    window.scrollTo(0, 0);
+  }, [code]);
+
   // RealtimePicks에서 전달된 데이터 (있으면 사용)
   const top100Score = location.state?.top100Score;
   const preloadedData = location.state?.preloadedData;
 
-  // 상세 정보 조회 (2분 캐시)
-  const { data: detail, isLoading: detailLoading } = useQuery({
+  // 상세 정보 조회 (2분 캐시) - 기술적 지표용
+  const { data: detailBase, isLoading: detailLoading } = useQuery({
     queryKey: ['stock', code],
     queryFn: () => stockAPI.detail(code).then((res) => res.data),
     // preloadedData가 있으면 초기값으로 사용 (기본 정보만) - 즉시 stale 처리
@@ -38,6 +43,23 @@ export default function StockDetail() {
     staleTime: 1000 * 60 * 2,  // 2분 캐시 (API에서 받은 데이터)
     refetchOnWindowFocus: false,
   });
+
+  // 실시간 시세 조회 (30초 캐시) - 현재가용
+  const { data: realtimePrice } = useQuery({
+    queryKey: ['realtime-price', code],
+    queryFn: () => realtimeAPI.price(code).then((res) => res.data),
+    staleTime: 1000 * 30,  // 30초 캐시
+    refetchOnWindowFocus: false,
+  });
+
+  // 상세 정보 + 실시간 가격 병합
+  const detail = detailBase ? {
+    ...detailBase,
+    current_price: realtimePrice?.current_price ?? detailBase.current_price,
+    change: realtimePrice?.change ?? detailBase.change,
+    change_rate: realtimePrice?.change_rate ?? detailBase.change_rate,
+    volume: realtimePrice?.volume ?? detailBase.volume,
+  } : null;
 
   const { data: analysis, isLoading: analysisLoading } = useQuery({
     queryKey: ['stock-analysis', code],
@@ -247,17 +269,9 @@ export default function StockDetail() {
               <div className="text-right">
                 <div className="text-xs text-base-content/50">추천 매수가</div>
                 {detail.bb_mid ? (
-                  <>
-                    <div className="text-lg font-bold text-primary">
-                      {Math.round(detail.bb_mid).toLocaleString()}원
-                    </div>
-                    <div className={`text-xs ${
-                      detail.current_price <= detail.bb_mid * 1.05 ? 'text-success' : 'text-base-content/60'
-                    }`}>
-                      {detail.current_price <= detail.bb_mid * 1.05 ? '(매수 적정)' :
-                       `(+${((detail.current_price / detail.bb_mid - 1) * 100).toFixed(1)}% 고평가)`}
-                    </div>
-                  </>
+                  <div className="text-lg font-bold text-primary">
+                    {Math.round(detail.bb_mid).toLocaleString()}원
+                  </div>
                 ) : (
                   <div className="flex items-center justify-end gap-1 text-base-content/40 py-1">
                     <RefreshCw size={14} className="animate-spin" />
@@ -356,7 +370,7 @@ export default function StockDetail() {
               <h3 className="font-bold">AI 분석</h3>
               <span className={`badge ${
                 analysis.opinion === '매수' ? 'badge-success' :
-                analysis.opinion === '매도' || analysis.opinion === '하락 신호' ? 'badge-error' :
+                analysis.opinion === '과열 주의' ? 'badge-error' :
                 analysis.opinion === '주의' ? 'badge-warning' :
                 'badge-ghost'
               }`}>
