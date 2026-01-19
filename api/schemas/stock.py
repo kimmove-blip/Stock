@@ -35,6 +35,11 @@ class StockDetail(StockBase):
     macd: Optional[float] = Field(None, description="MACD")
     macd_signal: Optional[float] = Field(None, description="MACD 시그널")
 
+    # 볼린저밴드 (추천 매수가용)
+    bb_mid: Optional[float] = Field(None, description="볼린저밴드 중심선 (20일 이평)")
+    bb_upper: Optional[float] = Field(None, description="볼린저밴드 상단")
+    bb_lower: Optional[float] = Field(None, description="볼린저밴드 하단")
+
     updated_at: Optional[datetime] = None
 
 

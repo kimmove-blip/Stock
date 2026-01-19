@@ -442,8 +442,9 @@ async def get_stock_detail(code: str):
             # KIS에서 종목명이 있으면 사용, 없으면 로컬 데이터 사용
             name = kis_data.get('stock_name') or stock_name
 
-            # 이동평균/RSI/MACD는 FDR에서 계산
+            # 이동평균/RSI/MACD/볼린저밴드는 FDR에서 계산
             ma5, ma20, ma60, rsi, macd, macd_signal = None, None, None, None, None, None
+            bb_mid, bb_upper, bb_lower = None, None, None
             try:
                 libs = get_stock_libs()
                 if libs:
@@ -470,6 +471,12 @@ async def get_stock_detail(code: str):
                             signal_line = macd_line.ewm(span=9, adjust=False).mean()
                             macd = round(macd_line.iloc[-1], 2)
                             macd_signal = round(signal_line.iloc[-1], 2)
+                        # 볼린저밴드 계산 (추천 매수가용)
+                        if len(ohlcv) >= 20:
+                            bb_mid = round(close.tail(20).mean(), 0)
+                            std20 = close.tail(20).std()
+                            bb_upper = round(bb_mid + (std20 * 2), 0)
+                            bb_lower = round(bb_mid - (std20 * 2), 0)
             except Exception as ma_err:
                 print(f"이동평균 계산 오류: {ma_err}")
 
@@ -499,7 +506,10 @@ async def get_stock_detail(code: str):
                 ma60=ma60,
                 rsi=rsi,
                 macd=macd,
-                macd_signal=macd_signal
+                macd_signal=macd_signal,
+                bb_mid=bb_mid,
+                bb_upper=bb_upper,
+                bb_lower=bb_lower
             )
             set_stock_detail_cache(code, result)
             return result
@@ -553,6 +563,14 @@ async def get_stock_detail(code: str):
             macd = round(macd_line.iloc[-1], 2)
             macd_signal = round(signal_line.iloc[-1], 2)
 
+        # 볼린저밴드 계산 (추천 매수가용)
+        bb_mid, bb_upper, bb_lower = None, None, None
+        if len(ohlcv) >= 20:
+            bb_mid = round(close.tail(20).mean(), 0)
+            std20 = close.tail(20).std()
+            bb_upper = round(bb_mid + (std20 * 2), 0)
+            bb_lower = round(bb_mid - (std20 * 2), 0)
+
         # 시가총액 조회 (FDR StockListing에서)
         market_cap = None
         market_type = None
@@ -584,7 +602,10 @@ async def get_stock_detail(code: str):
             ma60=ma60,
             rsi=rsi,
             macd=macd,
-            macd_signal=macd_signal
+            macd_signal=macd_signal,
+            bb_mid=bb_mid,
+            bb_upper=bb_upper,
+            bb_lower=bb_lower
         )
         set_stock_detail_cache(code, result)
         return result

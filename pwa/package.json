@@ -8,9 +8,15 @@
     "build": "vite build",
     "lint": "eslint .",
     "preview": "vite preview",
-    "serve": "node serve.js"
+    "serve": "node serve.js",
+    "ios:sync": "npx cap sync ios",
+    "ios:open": "npx cap open ios",
+    "ios:build": "npm run build && npx cap sync ios"
   },
   "dependencies": {
+    "@capacitor/cli": "^8.0.1",
+    "@capacitor/core": "^8.0.1",
+    "@capacitor/ios": "^8.0.1",
     "@tanstack/react-query": "^5.90.16",
     "axios": "^1.13.2",
     "connect-history-api-fallback": "^2.0.0",

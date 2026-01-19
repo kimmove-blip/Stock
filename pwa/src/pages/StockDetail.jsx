@@ -3,7 +3,7 @@ import { useParams, useNavigate, useLocation } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { stockAPI, portfolioAPI, watchlistAPI } from '../api/client';
 import Loading from '../components/Loading';
-import { ArrowLeft, Star, Plus, TrendingUp, TrendingDown, FileText } from 'lucide-react';
+import { ArrowLeft, Star, Plus, TrendingUp, TrendingDown, FileText, Check, RefreshCw } from 'lucide-react';
 import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer } from 'recharts';
 
 export default function StockDetail() {
@@ -80,7 +80,8 @@ export default function StockDetail() {
   });
 
   // 보유/관심 여부 확인
-  const isInPortfolio = portfolio?.items?.some((item) => item.stock_code === code);
+  const portfolioItem = portfolio?.items?.find((item) => item.stock_code === code);
+  const isInPortfolio = !!portfolioItem;
   const isInWatchlist = watchlist?.items?.some((item) => item.stock_code === code);
 
   const addToPortfolioMutation = useMutation({
@@ -162,6 +163,18 @@ export default function StockDetail() {
           <h1 className="text-xl font-bold">{detail.name}</h1>
           <p className="text-sm text-base-content/60">{detail.code} | {detail.market}</p>
         </div>
+        {/* AI 점수 */}
+        {(analysis?.score || top100Score) && (
+          <div className="text-center">
+            <div className={`text-3xl font-bold ${
+              (analysis?.score || top100Score) >= 80 ? 'text-success' :
+              (analysis?.score || top100Score) >= 60 ? 'text-warning' : 'text-error'
+            }`}>
+              {analysis?.score || top100Score}
+            </div>
+            <div className="text-xs text-base-content/60">AI점수</div>
+          </div>
+        )}
       </div>
 
       {/* 가격 정보 */}
@@ -178,14 +191,45 @@ export default function StockDetail() {
                 </span>
               </p>
             </div>
+            {/* 추천 매수가 표시 */}
+            <div className="text-right">
+              <div className="text-xs text-base-content/50">추천 매수가</div>
+              {detail.bb_mid ? (
+                <>
+                  <div className="text-lg font-bold text-primary">
+                    {Math.round(detail.bb_mid).toLocaleString()}원
+                  </div>
+                  <div className={`text-xs ${
+                    detail.current_price <= detail.bb_mid * 1.05 ? 'text-success' : 'text-base-content/60'
+                  }`}>
+                    {detail.current_price <= detail.bb_mid * 1.05 ? '(매수 적정)' :
+                     `(+${((detail.current_price / detail.bb_mid - 1) * 100).toFixed(1)}% 고평가)`}
+                  </div>
+                </>
+              ) : (
+                <div className="flex items-center justify-end gap-1 text-base-content/40 py-1">
+                  <RefreshCw size={14} className="animate-spin" />
+                  <span className="text-xs">분석중</span>
+                </div>
+              )}
+            </div>
           </div>
 
           {/* 액션 버튼 */}
-          <div className="flex gap-2 mt-4">
+          <div className="flex flex-col gap-2 mt-4">
             {isInPortfolio ? (
-              <button disabled className="btn btn-ghost btn-sm flex-1 text-blue-500">
-                <Plus size={16} /> 보유중
-              </button>
+              <div className="bg-blue-50 rounded-lg p-3 border border-blue-200">
+                <div className="flex items-center gap-1 text-blue-600 font-medium text-sm mb-1">
+                  <Check size={14} /> 보유중
+                </div>
+                <div className="text-xs text-base-content/70">
+                  매수가 {portfolioItem.buy_price?.toLocaleString()}원 · {portfolioItem.quantity}주
+                </div>
+                <div className={`text-sm font-medium ${portfolioItem.profit_loss_rate >= 0 ? 'text-red-500' : 'text-blue-500'}`}>
+                  {portfolioItem.profit_loss >= 0 ? '+' : ''}{portfolioItem.profit_loss?.toLocaleString()}원
+                  ({portfolioItem.profit_loss_rate >= 0 ? '+' : ''}{portfolioItem.profit_loss_rate?.toFixed(2)}%)
+                </div>
+              </div>
             ) : (
               <button
                 onClick={handleOpenAddModal}

@@ -1,0 +1,25 @@
+{
+  "appId": "com.kimsai.stock",
+  "appName": "Kim's AI 주식분석",
+  "webDir": "dist",
+  "server": {
+    "url": "https://stock.kims-ai.com",
+    "cleartext": false
+  },
+  "ios": {
+    "contentInset": "automatic",
+    "allowsLinkPreview": true,
+    "scrollEnabled": true,
+    "backgroundColor": "#ffffff",
+    "preferredContentMode": "mobile"
+  },
+  "plugins": {
+    "SplashScreen": {
+      "launchShowDuration": 2000,
+      "backgroundColor": "#ffffff",
+      "showSpinner": false,
+      "splashFullScreen": true,
+      "splashImmersive": true
+    }
+  }
+}

@@ -1,0 +1,70 @@
+{
+  "google_play": {
+    "app_name": "Kim's AI 주식분석",
+    "short_description": "AI 기반 한국 주식 분석 - 매일 TOP 100 종목 추천, 기술적 분석, 포트폴리오 관리",
+    "full_description": "Kim's AI 주식분석은 AI와 25개 기술적 지표를 활용한 한국 주식시장 분석 앱입니다.\n\n주요 기능:\n• 실시간 AI 추천: 매일 업데이트되는 TOP 100 추천 종목\n• 가치주 발굴: 저평가 우량주 자동 스크리닝\n• 기술적 분석: RSI, MACD, 볼린저밴드 등 25개 지표 분석\n• 포트폴리오 관리: 보유 종목 수익률 추적 및 매도/보유 의견\n• 관심종목: 관심 종목 모니터링 및 알림\n• 시장 동향: 국내외 주요 지수 및 뉴스\n\n분석 지표:\n- 이동평균선 (5/20/60/120일)\n- RSI, MACD, 스토캐스틱\n- 볼린저밴드, ATR\n- 거래량 분석, 캔들 패턴\n- 슈퍼트렌드, PSAR 등\n\n투자에 참고가 되는 객관적인 기술적 분석 정보를 제공합니다.\n본 앱의 정보는 투자 권유가 아니며, 투자 판단은 본인의 책임입니다.",
+    "category": "금융",
+    "tags": [
+      "주식",
+      "주식분석",
+      "AI주식",
+      "기술적분석",
+      "포트폴리오",
+      "코스피",
+      "코스닥",
+      "한국주식",
+      "종목추천",
+      "투자"
+    ],
+    "content_rating": "PEGI 3 / 전체이용가",
+    "privacy_policy_url": "https://stock.kims-ai.com/privacy",
+    "country": "대한민국"
+  },
+  "apple_app_store": {
+    "app_name": "Kim's AI 주식분석",
+    "bundle_id": "com.kimsai.stock",
+    "sku": "kimsai-stock-001",
+    "primary_language": "한국어",
+    "category": "금융",
+    "age_rating": "4+",
+    "subtitle": "AI 기반 한국 주식 분석",
+    "promotional_text": "매일 업데이트되는 TOP 100 추천 종목과 25개 기술적 지표 분석",
+    "description": "Kim's AI 주식분석은 AI와 25개 기술적 지표를 활용한 한국 주식시장 분석 앱입니다.\n\n주요 기능:\n• 실시간 AI 추천: 매일 업데이트되는 TOP 100 추천 종목\n• 가치주 발굴: 저평가 우량주 자동 스크리닝\n• 기술적 분석: RSI, MACD, 볼린저밴드 등 25개 지표 분석\n• 포트폴리오 관리: 보유 종목 수익률 추적 및 매도/보유 의견\n• 관심종목: 관심 종목 모니터링 및 알림\n• 시장 동향: 국내외 주요 지수 및 뉴스\n\n분석 지표:\n- 이동평균선 (5/20/60/120일)\n- RSI, MACD, 스토캐스틱\n- 볼린저밴드, ATR\n- 거래량 분석, 캔들 패턴\n- 슈퍼트렌드, PSAR 등\n\n투자에 참고가 되는 객관적인 기술적 분석 정보를 제공합니다.\n본 앱의 정보는 투자 권유가 아니며, 투자 판단은 본인의 책임입니다.",
+    "keywords": "주식,주식분석,AI,기술적분석,포트폴리오,코스피,코스닥,한국주식,종목추천,투자",
+    "privacy_policy_url": "https://stock.kims-ai.com/privacy",
+    "screenshot_sizes": {
+      "iphone_6_7_inch": "1290x2796",
+      "iphone_6_5_inch": "1284x2778",
+      "iphone_5_5_inch": "1242x2208",
+      "ipad_12_9_inch": "2048x2732"
+    }
+  },
+  "screenshots": {
+    "location": "screenshot/스토어등록용/",
+    "files": [
+      { "file": "home (2).jpg", "description": "홈 화면" },
+      { "file": "recommand.jpg", "description": "AI 추천" },
+      { "file": "value.jpg", "description": "가치주" },
+      { "file": "item_detail.jpg", "description": "종목 상세" },
+      { "file": "have_item.jpg", "description": "보유 종목" },
+      { "file": "interest.jpg", "description": "관심 종목" },
+      { "file": "search.jpg", "description": "종목 검색" },
+      { "file": "popular.jpg", "description": "인기 종목" },
+      { "file": "korea.jpg", "description": "국내 시장" },
+      { "file": "world.jpg", "description": "해외 시장" },
+      { "file": "news.jpg", "description": "시장 뉴스" },
+      { "file": "function.jpg", "description": "기능 안내" },
+      { "file": "user.jpg", "description": "사용자 설정" },
+      { "file": "delete.jpg", "description": "데이터 삭제" }
+    ]
+  },
+  "urls": {
+    "service": "https://stock.kims-ai.com",
+    "privacy_policy": "https://stock.kims-ai.com/privacy",
+    "delete_account": "https://stock.kims-ai.com/delete-account"
+  },
+  "developer_info": {
+    "name": "김형철",
+    "email": "help@kims-ai.com"
+  }
+}

@@ -138,7 +138,7 @@ export default function Privacy() {
 
             <div className="pt-4 border-t text-center text-sm text-gray-500">
               <p>시행일: 2024년 1월 1일</p>
-              <p className="mt-1">최종 수정일: 2025년 1월 14일</p>
+              <p className="mt-1">최종 수정일: 2026년 1월 19일</p>
             </div>
           </div>
         </div>
