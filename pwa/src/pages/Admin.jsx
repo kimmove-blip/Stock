@@ -30,6 +30,8 @@ import {
   Edit3,
   ToggleLeft,
   ToggleRight,
+  Bot,
+  BotOff,
 } from 'lucide-react';
 
 // 상태 배지 컴포넌트
@@ -646,11 +648,16 @@ function UsersTab({ currentUser }) {
                     {(member.name || member.username)?.charAt(0)?.toUpperCase() || 'U'}
                   </div>
                   <div className="text-left">
-                    <div className="flex items-center gap-2">
+                    <div className="flex items-center gap-2 flex-wrap">
                       <span className="font-semibold text-gray-800">{member.name || member.username}</span>
                       {member.is_admin && (
                         <span className="bg-purple-100 text-purple-600 text-xs px-1.5 py-0.5 rounded">
                           관리자
+                        </span>
+                      )}
+                      {member.auto_trade_enabled && (
+                        <span className="bg-green-100 text-green-600 text-xs px-1.5 py-0.5 rounded">
+                          자동매매
                         </span>
                       )}
                     </div>
@@ -658,6 +665,9 @@ function UsersTab({ currentUser }) {
                   </div>
                 </div>
                 <div className="flex items-center gap-2">
+                  {member.auto_trade_enabled && (
+                    <Bot size={14} className="text-green-500" />
+                  )}
                   {member.telegram_enabled && (
                     <MessageCircle size={14} className="text-blue-400" />
                   )}
@@ -698,7 +708,7 @@ function UsersTab({ currentUser }) {
                     </div>
                   </div>
 
-                  {/* 관리자 권한 토글 */}
+                  {/* 권한 관리 버튼 */}
                   {member.id !== currentUser.id && (
                     <div className="flex gap-2">
                       <button
@@ -722,6 +732,30 @@ function UsersTab({ currentUser }) {
                           <>
                             <Shield size={14} />
                             관리자 지정
+                          </>
+                        )}
+                      </button>
+                      <button
+                        onClick={() => updateMutation.mutate({
+                          userId: member.id,
+                          data: { auto_trade_enabled: !member.auto_trade_enabled }
+                        })}
+                        disabled={updateMutation.isPending}
+                        className={`flex-1 btn btn-sm gap-2 ${
+                          member.auto_trade_enabled
+                            ? 'btn-outline btn-error'
+                            : 'btn-outline btn-success'
+                        }`}
+                      >
+                        {member.auto_trade_enabled ? (
+                          <>
+                            <BotOff size={14} />
+                            자동매매 해제
+                          </>
+                        ) : (
+                          <>
+                            <Bot size={14} />
+                            자동매매 지정
                           </>
                         )}
                       </button>

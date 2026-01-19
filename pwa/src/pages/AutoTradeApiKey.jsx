@@ -5,8 +5,6 @@ import { useAuth } from '../contexts/AuthContext';
 import Loading from '../components/Loading';
 import {
   Key,
-  Eye,
-  EyeOff,
   CheckCircle2,
   XCircle,
   AlertCircle,
@@ -18,7 +16,6 @@ import {
 export default function AutoTradeApiKey() {
   const { user } = useAuth();
   const queryClient = useQueryClient();
-  const [showSecret, setShowSecret] = useState(false);
   const [formData, setFormData] = useState({
     app_key: '',
     app_secret: '',
@@ -247,22 +244,13 @@ export default function AutoTradeApiKey() {
           <label className="block text-sm font-medium text-gray-700 mb-1">
             APP Secret <span className="text-red-500">*</span>
           </label>
-          <div className="relative">
-            <input
-              type={showSecret ? 'text' : 'password'}
-              value={formData.app_secret}
-              onChange={(e) => setFormData({ ...formData, app_secret: e.target.value })}
-              placeholder={isConnected ? '변경 시에만 입력' : '발급받은 APP Secret 입력'}
-              className="w-full px-3 py-2 pr-10 border border-gray-300 rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-transparent"
-            />
-            <button
-              type="button"
-              onClick={() => setShowSecret(!showSecret)}
-              className="absolute right-2 top-1/2 -translate-y-1/2 p-1 text-gray-400 hover:text-gray-600"
-            >
-              {showSecret ? <EyeOff size={20} /> : <Eye size={20} />}
-            </button>
-          </div>
+          <textarea
+            value={formData.app_secret}
+            onChange={(e) => setFormData({ ...formData, app_secret: e.target.value })}
+            placeholder={isConnected ? '변경 시에만 입력' : '발급받은 APP Secret 입력'}
+            rows={3}
+            className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-transparent resize-none font-mono text-sm"
+          />
           {isConnected && (
             <p className="text-xs text-gray-500 mt-1">기존 Secret은 보안상 표시되지 않습니다</p>
           )}

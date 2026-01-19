@@ -117,6 +117,20 @@ async def get_auto_trade_status(
 
     logger = get_trade_logger()
 
+    # API 키가 없으면 빈 데이터 반환 (다른 사용자 데이터 노출 방지)
+    api_key_data = logger.get_api_key_settings(current_user.get('id'))
+    if not api_key_data:
+        return AutoTradeStatusResponse(
+            holdings=[],
+            recent_trades=[],
+            pending_suggestions=[],
+            virtual_balance=None,
+            performance=PerformanceSummary(
+                total_trades=0, win_count=0, loss_count=0,
+                win_rate=0, total_profit=0, avg_profit_rate=0
+            )
+        )
+
     # 보유 종목
     holdings_raw = logger.get_holdings()
     holdings = [HoldingResponse(
@@ -201,6 +215,12 @@ async def get_holdings(
     check_auto_trade_permission(current_user)
 
     logger = get_trade_logger()
+
+    # API 키가 없으면 빈 데이터 반환 (다른 사용자 데이터 노출 방지)
+    api_key_data = logger.get_api_key_settings(current_user.get('id'))
+    if not api_key_data:
+        return []
+
     holdings_raw = logger.get_holdings()
 
     return [HoldingResponse(
@@ -222,6 +242,12 @@ async def get_trade_history(
     check_auto_trade_permission(current_user)
 
     logger = get_trade_logger()
+
+    # API 키가 없으면 빈 데이터 반환 (다른 사용자 데이터 노출 방지)
+    api_key_data = logger.get_api_key_settings(current_user.get('id'))
+    if not api_key_data:
+        return []
+
     start_date = (datetime.now() - timedelta(days=days)).strftime("%Y-%m-%d")
     trades_raw = logger.get_trade_history(start_date=start_date)
 
@@ -251,6 +277,11 @@ async def get_suggestions(
     check_auto_trade_permission(current_user)
 
     logger = get_trade_logger()
+
+    # API 키가 없으면 빈 데이터 반환 (다른 사용자 데이터 노출 방지)
+    api_key_data = logger.get_api_key_settings(current_user.get('id'))
+    if not api_key_data:
+        return []
 
     if status == 'pending':
         suggestions_raw = logger.get_pending_suggestions()
@@ -282,6 +313,25 @@ async def get_performance(
     check_auto_trade_permission(current_user)
 
     logger = get_trade_logger()
+
+    # API 키가 없으면 빈 데이터 반환 (다른 사용자 데이터 노출 방지)
+    api_key_data = logger.get_api_key_settings(current_user.get('id'))
+    if not api_key_data:
+        return {
+            "period_days": days,
+            "total_trades": 0,
+            "buy_count": 0,
+            "sell_count": 0,
+            "win_count": 0,
+            "loss_count": 0,
+            "win_rate": 0,
+            "total_profit": 0,
+            "avg_profit_rate": 0,
+            "max_profit": 0,
+            "max_loss": 0,
+            "daily_summary": []
+        }
+
     return logger.get_performance_summary(days=days)
 
 
@@ -401,6 +451,8 @@ async def get_account(
     # 계좌 조회 (KIS API 호출) - 모의/실전 구분
     try:
         is_mock = bool(api_key_data.get('is_mock', True))
+        print(f"[계좌조회] API 키 조회 - is_mock: {is_mock}, account: {api_key_data.get('account_number')}")
+
         account_data = logger.get_real_account_balance(
             app_key=api_key_data.get('app_key'),
             app_secret=api_key_data.get('app_secret'),
@@ -408,8 +460,76 @@ async def get_account(
             account_product_code=api_key_data.get('account_product_code', '01'),
             is_mock=is_mock
         )
-        account_data['is_mock'] = is_mock
-        return account_data
+
+        print(f"[계좌조회] KIS 응답 - holdings: {len(account_data.get('holdings', [])) if account_data else 0}개, summary: {account_data.get('summary') if account_data else None}")
+
+        # account_data가 None이면 빈 응답
+        if not account_data:
+            return {
+                'holdings': [],
+                'balance': {'cash': 0},
+                'summary': {
+                    'total_asset': 0,
+                    'total_purchase': 0,
+                    'total_evaluation': 0,
+                    'total_profit': 0,
+                    'profit_rate': 0,
+                },
+                'total_purchase': 0,
+                'total_evaluation': 0,
+                'total_profit_loss': 0,
+                'profit_rate': 0,
+                'cash_balance': 0,
+                'is_mock': is_mock,
+                'timestamp': None
+            }
+
+        # 프론트엔드가 기대하는 형식으로 변환
+        holdings = account_data.get('holdings', [])
+        summary = account_data.get('summary', {})
+
+        # 총 매입금액 계산 (평균단가 * 수량의 합)
+        total_purchase = sum(h.get('avg_price', 0) * h.get('quantity', 0) for h in holdings)
+
+        # output2(summary)가 비어있으면 holdings에서 직접 계산
+        if summary and summary.get('total_eval_amount', 0) > 0:
+            # summary 데이터 사용
+            total_evaluation = summary.get('total_eval_amount', 0)
+            total_profit_loss = summary.get('total_profit_loss', 0)
+            profit_rate = summary.get('profit_rate', 0)
+            cash_balance = summary.get('cash_balance', 0)
+        else:
+            # holdings 데이터에서 직접 계산
+            total_evaluation = sum(h.get('eval_amount', 0) for h in holdings)
+            total_profit_loss = sum(h.get('profit_loss', 0) for h in holdings)
+            # 수익률: (평가금액 - 매입금액) / 매입금액 * 100
+            profit_rate = ((total_evaluation - total_purchase) / total_purchase * 100) if total_purchase > 0 else 0
+            cash_balance = summary.get('cash_balance', 0)  # 예수금은 summary에서만
+
+        # 총 자산 = 평가금액 + 예수금
+        total_asset = total_evaluation + cash_balance
+
+        return {
+            'holdings': holdings,
+            'balance': {
+                'cash': cash_balance,
+            },
+            'summary': {
+                'total_asset': total_asset,
+                'total_purchase': total_purchase,
+                'total_evaluation': total_evaluation,
+                'total_profit': total_profit_loss,
+                'profit_rate': profit_rate,
+            },
+            # 하위 호환성을 위해 flat 필드도 유지
+            'total_purchase': total_purchase,
+            'total_evaluation': total_evaluation,
+            'total_profit_loss': total_profit_loss,
+            'profit_rate': profit_rate,
+            'cash_balance': cash_balance,
+            'is_mock': is_mock,
+            'timestamp': account_data.get('timestamp')
+        }
     except Exception as e:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -491,6 +611,15 @@ async def approve_suggestion(
     check_auto_trade_permission(current_user)
 
     logger = get_trade_logger()
+
+    # API 키가 없으면 거부 (다른 사용자 데이터 수정 방지)
+    api_key_data = logger.get_api_key_settings(current_user.get('id'))
+    if not api_key_data:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="API 키가 설정되지 않았습니다."
+        )
+
     success = logger.approve_suggestion(suggestion_id)
 
     if not success:
@@ -511,6 +640,15 @@ async def reject_suggestion(
     check_auto_trade_permission(current_user)
 
     logger = get_trade_logger()
+
+    # API 키가 없으면 거부 (다른 사용자 데이터 수정 방지)
+    api_key_data = logger.get_api_key_settings(current_user.get('id'))
+    if not api_key_data:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="API 키가 설정되지 않았습니다."
+        )
+
     success = logger.reject_suggestion(suggestion_id)
 
     if not success:
@@ -533,6 +671,11 @@ async def get_sell_suggestions(
     check_auto_trade_permission(current_user)
 
     logger = get_trade_logger()
+
+    # API 키가 없으면 빈 데이터 반환 (다른 사용자 데이터 노출 방지)
+    api_key_data = logger.get_api_key_settings(current_user.get('id'))
+    if not api_key_data:
+        return []
 
     if status == 'pending':
         suggestions_raw = logger.get_pending_sell_suggestions()
@@ -563,6 +706,15 @@ async def approve_sell_suggestion(
     check_auto_trade_permission(current_user)
 
     logger = get_trade_logger()
+
+    # API 키가 없으면 거부 (다른 사용자 데이터 수정 방지)
+    api_key_data = logger.get_api_key_settings(current_user.get('id'))
+    if not api_key_data:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="API 키가 설정되지 않았습니다."
+        )
+
     success = logger.approve_sell_suggestion(suggestion_id)
 
     if not success:
@@ -583,6 +735,15 @@ async def reject_sell_suggestion(
     check_auto_trade_permission(current_user)
 
     logger = get_trade_logger()
+
+    # API 키가 없으면 거부 (다른 사용자 데이터 수정 방지)
+    api_key_data = logger.get_api_key_settings(current_user.get('id'))
+    if not api_key_data:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="API 키가 설정되지 않았습니다."
+        )
+
     success = logger.reject_sell_suggestion(suggestion_id)
 
     if not success:

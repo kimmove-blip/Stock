@@ -956,7 +956,7 @@ class TradeLogger:
             )
 
             # 계좌 잔고 조회
-            balance_data = client.get_balance()
+            balance_data = client.get_account_balance()
 
             if not balance_data:
                 return {
@@ -975,6 +975,44 @@ class TradeLogger:
 
         except Exception as e:
             raise Exception(f"계좌 조회 실패: {str(e)}")
+
+    def get_pending_orders(
+        self,
+        app_key: str,
+        app_secret: str,
+        account_number: str,
+        account_product_code: str = "01",
+        is_mock: bool = True
+    ) -> Dict:
+        """
+        미체결 주문 조회 (KIS API)
+
+        Returns:
+            {'orders': [...]}
+        """
+        try:
+            import sys
+            import os
+            sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+            from api.services.kis_client import KISClient
+
+            client = KISClient(
+                app_key=app_key,
+                app_secret=app_secret,
+                account_number=account_number,
+                account_product_code=account_product_code,
+                is_mock=is_mock
+            )
+
+            orders = client.get_pending_orders()
+
+            if not orders:
+                return {'orders': []}
+
+            return {'orders': orders}
+
+        except Exception as e:
+            raise Exception(f"미체결 조회 실패: {str(e)}")
 
     # ========== 자동매매 설정 관리 ==========
 
@@ -1447,3 +1485,21 @@ class BuySuggestionManager:
             """, (cutoff,))
 
             return cursor.rowcount
+
+    # ========== 매도 제안 관리 (스텁 메서드) ==========
+
+    def get_pending_sell_suggestions(self) -> List[Dict]:
+        """대기 중인 매도 제안 목록 조회 (현재 미구현 - 빈 리스트 반환)"""
+        return []
+
+    def get_approved_sell_suggestions(self) -> List[Dict]:
+        """승인된 매도 제안 목록 조회 (현재 미구현 - 빈 리스트 반환)"""
+        return []
+
+    def approve_sell_suggestion(self, suggestion_id: int) -> bool:
+        """매도 제안 승인 (현재 미구현)"""
+        return False
+
+    def reject_sell_suggestion(self, suggestion_id: int) -> bool:
+        """매도 제안 거부 (현재 미구현)"""
+        return False
