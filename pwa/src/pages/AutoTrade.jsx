@@ -7,7 +7,6 @@ import {
   Wallet,
   Settings,
   FileText,
-  BarChart3,
   TrendingUp,
   AlertCircle,
   CheckCircle2,
@@ -17,6 +16,8 @@ import {
   Stethoscope,
   Clock,
   History,
+  Bot,
+  Bell,
 } from 'lucide-react';
 
 export default function AutoTrade() {
@@ -36,12 +37,13 @@ export default function AutoTrade() {
     );
   }
 
-  // 자동매매 현황 조회 (연동 상태 확인용)
-  const { data: statusData } = useQuery({
-    queryKey: ['autoTradeStatus'],
-    queryFn: () => autoTradeAPI.status().then((res) => res.data),
+  // 계좌 현황 조회
+  const { data: accountData } = useQuery({
+    queryKey: ['autoTradeAccount'],
+    queryFn: () => autoTradeAPI.getAccount().then((res) => res.data),
     staleTime: 1000 * 60,
     refetchOnWindowFocus: true,
+    retry: false,
   });
 
   // API 키 설정 조회
@@ -51,26 +53,41 @@ export default function AutoTrade() {
     staleTime: 1000 * 60 * 5,
   });
 
+  // 자동매매 현황 조회
+  const { data: statusData } = useQuery({
+    queryKey: ['autoTradeStatus'],
+    queryFn: () => autoTradeAPI.status().then((res) => res.data),
+    staleTime: 1000 * 60,
+    refetchOnWindowFocus: true,
+  });
+
   const isConnected = apiKeyData?.is_connected;
   const pendingCount = statusData?.pending_suggestions?.length || 0;
+
+  // 계좌 요약 정보
+  const totalInvestment = accountData?.total_purchase || 0;
+  const totalValue = accountData?.total_evaluation || 0;
+  const totalProfitLoss = accountData?.total_profit_loss || 0;
+  const profitRate = accountData?.profit_rate || 0;
+  const isPositive = totalProfitLoss >= 0;
 
   const menuItems = [
     // 1행: API 키, 계좌, 설정
     {
       id: 'api-key',
       icon: Key,
-      label: 'API 키 설정',
-      description: '한국투자증권 API 연동',
+      label: 'API 키\n설정',
+      bgColor: 'bg-blue-100',
+      iconColor: 'text-blue-500',
       path: '/auto-trade/api-key',
-      color: 'bg-blue-500',
       badge: isConnected ? (
-        <span className="flex items-center text-xs text-green-600">
-          <CheckCircle2 size={12} className="mr-1" />
+        <span className="flex items-center justify-center text-[10px] text-green-600">
+          <CheckCircle2 size={10} className="mr-0.5" />
           연동됨
         </span>
       ) : (
-        <span className="flex items-center text-xs text-gray-400">
-          <XCircle size={12} className="mr-1" />
+        <span className="flex items-center justify-center text-[10px] text-gray-400">
+          <XCircle size={10} className="mr-0.5" />
           미연동
         </span>
       ),
@@ -79,38 +96,38 @@ export default function AutoTrade() {
       id: 'account',
       icon: Wallet,
       label: '계좌 현황',
-      description: '실제 증권 계좌 잔고',
+      bgColor: 'bg-green-100',
+      iconColor: 'text-green-500',
       path: '/auto-trade/account',
-      color: 'bg-green-500',
       disabled: !isConnected,
     },
     {
       id: 'settings',
       icon: Settings,
-      label: '자동매매 설정',
-      description: '매매 모드, 한도 설정',
+      label: '자동매매\n설정',
+      bgColor: 'bg-purple-100',
+      iconColor: 'text-purple-500',
       path: '/auto-trade/settings',
-      color: 'bg-purple-500',
     },
     // 2행: 보유종목 진단, 매매 제안, 수동 매매
     {
       id: 'diagnosis',
       icon: Stethoscope,
-      label: '보유종목 진단',
-      description: 'AI 보유종목 분석',
+      label: '보유종목\n진단',
+      bgColor: 'bg-cyan-100',
+      iconColor: 'text-cyan-500',
       path: '/auto-trade/diagnosis',
-      color: 'bg-cyan-500',
       disabled: !isConnected,
     },
     {
       id: 'suggestions',
       icon: FileText,
       label: '매매 제안',
-      description: '매수/매도 제안 관리',
+      bgColor: 'bg-orange-100',
+      iconColor: 'text-orange-500',
       path: '/auto-trade/suggestions',
-      color: 'bg-orange-500',
       badge: pendingCount > 0 ? (
-        <span className="bg-orange-100 text-orange-600 text-xs px-2 py-0.5 rounded-full">
+        <span className="bg-orange-500 text-white text-[10px] px-1.5 py-0.5 rounded-full">
           {pendingCount}
         </span>
       ) : null,
@@ -119,129 +136,146 @@ export default function AutoTrade() {
       id: 'manual',
       icon: HandCoins,
       label: '수동 매매',
-      description: '직접 매수/매도 주문',
+      bgColor: 'bg-teal-100',
+      iconColor: 'text-teal-500',
       path: '/auto-trade/manual',
-      color: 'bg-teal-500',
       disabled: !isConnected,
     },
     // 3행: 미체결, 거래 내역, 성과 분석
     {
       id: 'pending-orders',
       icon: Clock,
-      label: '미체결 내역',
-      description: '대기 중인 주문',
+      label: '미체결\n내역',
+      bgColor: 'bg-amber-100',
+      iconColor: 'text-amber-500',
       path: '/auto-trade/pending-orders',
-      color: 'bg-amber-500',
       disabled: !isConnected,
     },
     {
       id: 'history',
       icon: History,
       label: '거래 내역',
-      description: '체결된 거래 기록',
+      bgColor: 'bg-indigo-100',
+      iconColor: 'text-indigo-500',
       path: '/auto-trade/history',
-      color: 'bg-indigo-500',
     },
     {
       id: 'performance',
       icon: TrendingUp,
       label: '성과 분석',
-      description: '수익률, 승률 통계',
+      bgColor: 'bg-pink-100',
+      iconColor: 'text-pink-500',
       path: '/auto-trade/performance',
-      color: 'bg-pink-500',
     },
   ];
 
   return (
-    <div className="max-w-md mx-auto space-y-4">
-      {/* 미연동 시 안내 배너 */}
-      {!isConnected && (
-        <div
-          className="bg-gradient-to-r from-blue-500 to-indigo-600 rounded-xl p-4 text-white cursor-pointer"
-          onClick={() => navigate('/auto-trade/api-key')}
-        >
-          <div className="flex items-center justify-between">
-            <div>
-              <h3 className="font-bold mb-1">API 연동이 필요합니다</h3>
-              <p className="text-sm text-blue-100">
-                한국투자증권 API를 연동하여 자동매매를 시작하세요
-              </p>
+    <div className="h-screen bg-gray-50 flex flex-col">
+      {/* 헤더 */}
+      <div className="bg-gradient-to-r from-purple-600 to-indigo-600 px-4 pt-14 pb-16 flex-shrink-0 sticky top-0 z-10">
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-3">
+            <div className="w-10 h-10 bg-white/20 rounded-full flex items-center justify-center text-white font-bold">
+              {(user?.name || user?.username)?.charAt(0)?.toUpperCase() || 'U'}
             </div>
-            <ChevronRight size={24} className="text-white/70" />
+            <div className="text-white">
+              <p className="text-xs opacity-80">안녕하세요</p>
+              <p className="font-bold">{user?.name || user?.username || '사용자'}님</p>
+            </div>
+          </div>
+          <div className="flex items-center gap-2">
+            <Bot size={22} className="text-white/70" />
           </div>
         </div>
-      )}
-
-      {/* 6개 메뉴 아이콘 그리드 */}
-      <div className="grid grid-cols-3 gap-3">
-        {menuItems.map((item) => (
-          <button
-            key={item.id}
-            onClick={() => !item.disabled && navigate(item.path)}
-            disabled={item.disabled}
-            className={`bg-white rounded-xl p-4 shadow-sm text-center transition-all ${
-              item.disabled
-                ? 'opacity-50 cursor-not-allowed'
-                : 'hover:shadow-md active:scale-95'
-            }`}
-          >
-            <div
-              className={`w-12 h-12 ${item.color} rounded-full flex items-center justify-center mx-auto mb-2`}
-            >
-              <item.icon size={24} className="text-white" />
-            </div>
-            <p className="font-medium text-sm text-gray-800">{item.label}</p>
-            <p className="text-xs text-gray-500 mt-1 line-clamp-1">{item.description}</p>
-            {item.badge && <div className="mt-2">{item.badge}</div>}
-          </button>
-        ))}
       </div>
 
-      {/* 빠른 현황 요약 (연동된 경우) */}
-      {isConnected && statusData?.virtual_balance && (
-        <div className="bg-white rounded-xl p-4 shadow-sm">
-          <h3 className="font-bold text-gray-800 mb-3">빠른 현황</h3>
-          <div className="grid grid-cols-2 gap-3">
-            <div className="bg-gray-50 rounded-lg p-3">
-              <p className="text-xs text-gray-500">총 자산</p>
-              <p className="text-lg font-bold text-gray-800">
-                {statusData.virtual_balance.total_balance?.toLocaleString()}원
-              </p>
+      {/* 메인 컨텐츠 영역 */}
+      <div className="px-4 -mt-8 flex-1 flex flex-col pb-20 overflow-hidden">
+        {/* 자동매매 계좌 카드 */}
+        {isConnected ? (
+          <div
+            className="bg-gradient-to-br from-purple-500 via-purple-600 to-indigo-600 rounded-2xl p-4 text-white shadow-lg flex-shrink-0 cursor-pointer z-10"
+            onClick={() => navigate('/auto-trade/account')}
+          >
+            {/* 상단: 제목 + 계좌 유형 */}
+            <div className="flex items-center justify-between mb-2">
+              <div className="flex items-center gap-2">
+                <Wallet size={18} className="opacity-90" />
+                <span className="text-sm font-medium opacity-90">자동매매 계좌</span>
+              </div>
+              <span className={`text-xs px-2 py-0.5 rounded-full ${apiKeyData?.is_mock ? 'bg-blue-400/30' : 'bg-red-400/30'}`}>
+                {apiKeyData?.is_mock ? '모의투자' : '실제투자'}
+              </span>
             </div>
-            <div className="bg-gray-50 rounded-lg p-3">
-              <p className="text-xs text-gray-500">총 수익</p>
-              <p
-                className={`text-lg font-bold ${
-                  statusData.virtual_balance.total_profit >= 0
-                    ? 'text-red-500'
-                    : 'text-blue-500'
-                }`}
-              >
-                {statusData.virtual_balance.total_profit >= 0 ? '+' : ''}
-                {statusData.virtual_balance.total_profit?.toLocaleString()}원
-              </p>
-            </div>
-            <div className="bg-gray-50 rounded-lg p-3">
-              <p className="text-xs text-gray-500">보유 종목</p>
-              <p className="text-lg font-bold text-gray-800">
-                {statusData.holdings?.length || 0}종목
-              </p>
-            </div>
-            <div className="bg-gray-50 rounded-lg p-3">
-              <p className="text-xs text-gray-500">승률</p>
-              <p
-                className={`text-lg font-bold ${
-                  (statusData.performance?.win_rate || 0) >= 50
-                    ? 'text-green-600'
-                    : 'text-red-600'
-                }`}
-              >
-                {statusData.performance?.win_rate?.toFixed(1) || 0}%
-              </p>
+            {/* 총 평가금액 */}
+            <p className="text-2xl font-bold mb-3">
+              {totalValue.toLocaleString()}원
+            </p>
+            {/* 하단: 투자금액 / 수익률 */}
+            <div className="flex justify-between text-sm">
+              <div>
+                <p className="text-white/60 text-xs">투자금액</p>
+                <p className="font-semibold">{totalInvestment.toLocaleString()}원</p>
+              </div>
+              <div className="text-right">
+                <p className="text-white/60 text-xs">수익률</p>
+                <p className={`font-semibold ${isPositive ? 'text-green-300' : 'text-red-300'}`}>
+                  {isPositive ? '+' : ''}{profitRate.toFixed(2)}%
+                </p>
+              </div>
             </div>
           </div>
+        ) : (
+          <div
+            className="bg-gradient-to-br from-blue-500 via-blue-600 to-indigo-600 rounded-2xl p-4 text-white shadow-lg flex-shrink-0 cursor-pointer z-10"
+            onClick={() => navigate('/auto-trade/api-key')}
+          >
+            <div className="flex items-center justify-between">
+              <div>
+                <div className="flex items-center gap-2 mb-2">
+                  <Key size={18} className="opacity-90" />
+                  <span className="text-sm font-medium opacity-90">API 연동 필요</span>
+                </div>
+                <p className="text-lg font-bold mb-1">한국투자증권 API를 연동하세요</p>
+                <p className="text-sm text-blue-100">
+                  자동매매를 시작하려면 API 키가 필요합니다
+                </p>
+              </div>
+              <ChevronRight size={24} className="text-white/70" />
+            </div>
+          </div>
+        )}
+
+        {/* 퀵 액션 그리드 */}
+        <div className="mt-6 flex-1 overflow-y-auto min-h-0">
+          <div className="grid grid-cols-3 gap-3">
+            {menuItems.map(({ id, icon: Icon, label, bgColor, iconColor, path, badge, disabled }) => (
+              <button
+                key={id}
+                onClick={() => !disabled && navigate(path)}
+                disabled={disabled}
+                className={`bg-white rounded-2xl p-4 shadow-sm transition-all flex flex-col items-center border border-gray-100 ${
+                  disabled
+                    ? 'opacity-50 cursor-not-allowed'
+                    : 'hover:shadow-md active:scale-95'
+                }`}
+              >
+                <div className={`w-12 h-12 ${bgColor} rounded-xl flex items-center justify-center mb-2`}>
+                  <Icon size={26} className={iconColor} />
+                </div>
+                <span className="text-xs font-medium text-gray-700 text-center whitespace-pre-line leading-tight">
+                  {label}
+                </span>
+                {badge && <div className="mt-1">{badge}</div>}
+              </button>
+            ))}
+          </div>
+          {/* 안내 문구 */}
+          <p className="text-center text-xs text-gray-400 mt-3">
+            자동매매는 투자 손실의 위험이 있으며, 모든 책임은 본인에게 있습니다.
+          </p>
         </div>
-      )}
+      </div>
     </div>
   );
 }

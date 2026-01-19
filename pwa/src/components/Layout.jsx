@@ -40,6 +40,7 @@ export default function Layout() {
   const navigate = useNavigate();
   const { user } = useAuth();
   const isHome = location.pathname === '/';
+  const isAutoTradeMain = location.pathname === '/auto-trade';
   const isStockDetail = location.pathname.startsWith('/stock/');
 
   // 알림 기록 조회
@@ -73,8 +74,8 @@ export default function Layout() {
 
   return (
     <div className="h-screen bg-gray-50 flex flex-col overflow-hidden">
-      {/* 공통 헤더 - 홈이 아닌 페이지에서만 표시 */}
-      {!isHome && (
+      {/* 공통 헤더 - 홈과 자동매매 메인이 아닌 페이지에서만 표시 */}
+      {!isHome && !isAutoTradeMain && (
         <header className="bg-gradient-to-r from-purple-600 to-indigo-600 px-4 pt-12 pb-4 sticky top-0 z-40 flex-shrink-0">
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-3">
@@ -112,7 +113,7 @@ export default function Layout() {
       )}
 
       {/* 메인 컨텐츠 */}
-      <main className={`flex-1 pb-20 ${isHome ? 'overflow-hidden' : 'overflow-y-auto p-4'}`}>
+      <main className={`flex-1 pb-20 ${isHome || isAutoTradeMain ? 'overflow-hidden' : 'overflow-y-auto p-4'}`}>
         <Outlet />
       </main>
 
