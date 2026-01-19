@@ -3,6 +3,67 @@ import pandas_ta as ta
 import pandas as pd
 from datetime import datetime, timedelta
 
+
+def apply_signal_reliability_weights(signals: list, base_score: int) -> tuple:
+    """
+    신호별 신뢰도 가중치 적용 (방안 D)
+
+    Args:
+        signals: 탐지된 신호 리스트
+        base_score: 기본 점수
+
+    Returns:
+        (adjusted_score, reliability_details) 튜플
+    """
+    try:
+        from config import SignalReliability
+    except ImportError:
+        return base_score, {}
+
+    if not signals:
+        return base_score, {}
+
+    reliability_dict = vars(SignalReliability)
+    total_weight = 0
+    signal_details = []
+
+    for signal in signals:
+        # 신뢰도 가져오기 (기본 100%)
+        reliability = reliability_dict.get(signal, 100)
+        if not isinstance(reliability, (int, float)):
+            reliability = 100
+
+        # 신뢰도를 비율로 변환 (100% = 1.0)
+        weight = reliability / 100.0
+        total_weight += weight
+
+        signal_details.append({
+            'signal': signal,
+            'reliability': reliability,
+            'weight': weight
+        })
+
+    # 평균 신뢰도 계산
+    if signal_details:
+        avg_reliability = total_weight / len(signal_details)
+    else:
+        avg_reliability = 1.0
+
+    # 점수 조정 (신뢰도가 낮으면 점수 감소)
+    adjusted_score = int(base_score * avg_reliability)
+    adjusted_score = max(0, min(100, adjusted_score))
+
+    reliability_info = {
+        'avg_reliability': round(avg_reliability * 100, 1),
+        'signal_count': len(signal_details),
+        'high_reliability': sum(1 for s in signal_details if s['reliability'] >= 90),
+        'low_reliability': sum(1 for s in signal_details if s['reliability'] < 70),
+        'details': signal_details
+    }
+
+    return adjusted_score, reliability_info
+
+
 class TechnicalAnalyst:
     """
     확장된 기술적 분석기
@@ -646,6 +707,101 @@ class TechnicalAnalyst:
             'bullish_signals': positive_count,
             'bearish_signals': negative_count
         }
+
+    def calculate_recommended_buy_price(
+        self,
+        df,
+        target_profit_pct: float = 0.20,
+        stop_loss_pct: float = -0.10,
+        buy_band_pct: float = 0.03
+    ) -> dict:
+        """
+        추천 매수가 계산 (지지선 기반)
+
+        Args:
+            df: 주가 데이터프레임
+            target_profit_pct: 목표 수익률 (기본 +20%)
+            stop_loss_pct: 손절률 (기본 -10%)
+            buy_band_pct: 매수 밴드 (기본 ±3%)
+
+        Returns:
+            dict: {
+                'current_price': 현재가,
+                'recommended_price': 추천 매수가,
+                'target_price': 목표가,
+                'stop_loss_price': 손절가,
+                'buy_band_low': 매수 밴드 하단,
+                'buy_band_high': 매수 밴드 상단,
+                'support_levels': 지지선 리스트,
+                'resistance_levels': 저항선 리스트
+            }
+        """
+        if df is None or len(df) < 20:
+            return None
+
+        try:
+            curr = df.iloc[-1]
+            current_price = int(curr['Close'])
+
+            # 1. 지지선/저항선 계산 (Pivot Point + 최근 고저점)
+            support_resistance = self.calculate_support_resistance(df)
+            if not support_resistance:
+                # 기본값 사용
+                support_resistance = {
+                    'support_1': current_price * 0.95,
+                    'support_2': current_price * 0.90,
+                    'recent_low': current_price * 0.93,
+                }
+
+            # 2. 추천 매수가 계산 (피보나치 61.8% 되돌림)
+            # 60일 고점/저점 기준 피보나치 61.8% 지지선
+            if len(df) >= 60:
+                high60 = df['High'].tail(60).max()
+                low60 = df['Low'].tail(60).min()
+                fib_618 = high60 - (high60 - low60) * 0.618
+                recommended_price = int(fib_618)
+            else:
+                # 데이터 부족시 현재가의 97%
+                recommended_price = int(current_price * 0.97)
+
+            # 지지선 목록
+            support_levels = [
+                support_resistance.get('support_1', current_price * 0.95),
+                support_resistance.get('support_2', current_price * 0.90),
+                support_resistance.get('recent_low', current_price * 0.93),
+            ]
+            support_levels = [int(s) for s in support_levels if s and s < current_price]
+
+            # 저항선 목록
+            resistance_levels = [
+                support_resistance.get('resistance_1', current_price * 1.05),
+                support_resistance.get('resistance_2', current_price * 1.10),
+                support_resistance.get('recent_high', current_price * 1.07),
+            ]
+            resistance_levels = [int(r) for r in resistance_levels if r and r > current_price]
+
+            # 3. 목표가/손절가 계산
+            target_price = int(recommended_price * (1 + target_profit_pct))
+            stop_loss_price = int(recommended_price * (1 + stop_loss_pct))
+
+            # 4. 매수 밴드 계산 (추천가 ±3%)
+            buy_band_low = int(recommended_price * (1 - buy_band_pct))
+            buy_band_high = int(recommended_price * (1 + buy_band_pct))
+
+            return {
+                'current_price': current_price,
+                'recommended_price': recommended_price,
+                'target_price': target_price,
+                'stop_loss_price': stop_loss_price,
+                'buy_band_low': buy_band_low,
+                'buy_band_high': buy_band_high,
+                'support_levels': sorted(support_levels, reverse=True)[:3],
+                'resistance_levels': sorted(resistance_levels)[:3],
+            }
+
+        except Exception as e:
+            print(f"추천 매수가 계산 오류: {e}")
+            return None
 
     def get_quick_score(self, df):
         """빠른 스크리닝용 간소화된 점수 (속도 우선)

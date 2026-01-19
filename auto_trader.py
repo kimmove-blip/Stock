@@ -26,7 +26,8 @@ sys.path.insert(0, str(Path(__file__).parent))
 from api.services.kis_client import KISClient
 from trading.order_executor import OrderExecutor
 from trading.risk_manager import RiskManager, TradingLimits
-from trading.trade_logger import TradeLogger
+from trading.trade_logger import TradeLogger, BuySuggestionManager
+from technical_analyst import TechnicalAnalyst
 from config import AutoTraderConfig, TelegramConfig, OUTPUT_DIR, SIGNAL_NAMES_KR
 
 
@@ -75,7 +76,10 @@ class TelegramNotifier:
         self.send(msg)
 
     def notify_summary(self, buy_count: int, sell_count: int, total_profit: int):
-        """일일 요약 알림"""
+        """일일 요약 알림 (체결 없으면 생략)"""
+        if buy_count == 0 and sell_count == 0:
+            return  # 체결 없으면 알림 안 보냄
+
         msg = (
             f"<b>[자동매매 완료]</b>\n"
             f"매수: {buy_count}건\n"
@@ -87,6 +91,51 @@ class TelegramNotifier:
     def notify_error(self, error_msg: str):
         """오류 알림"""
         msg = f"<b>[오류]</b>\n{error_msg}"
+        self.send(msg)
+
+    def notify_buy_suggestion(
+        self,
+        stock_name: str,
+        stock_code: str,
+        score: int,
+        probability: float,
+        confidence: float,
+        current_price: int,
+        recommended_price: int,
+        target_price: int,
+        stop_loss_price: int,
+        signals: List[str],
+        expire_hours: int = 24
+    ):
+        """매수 제안 알림 (semi-auto 모드)"""
+        signals_kr = [SIGNAL_NAMES_KR.get(s, s) for s in signals[:4]]
+
+        msg = f"""📊 <b>[매수 제안]</b> {stock_name} ({stock_code})
+
+<b>분석 결과</b>
+• 점수: {score}점
+• 상승확률: {probability:.0f}%
+• 신뢰도: {confidence:.0f}%
+
+<b>가격 정보</b>
+• 현재가: {current_price:,}원
+• 추천 매수가: {recommended_price:,}원
+• 목표가: {target_price:,}원 (+{((target_price/recommended_price)-1)*100:.0f}%)
+• 손절가: {stop_loss_price:,}원 ({((stop_loss_price/recommended_price)-1)*100:.0f}%)
+
+<b>주요 신호</b>
+{chr(10).join(['  • ' + s for s in signals_kr])}
+
+<b>승인 방법</b>
+대시보드에서 승인/거부하세요.
+
+⏰ {expire_hours}시간 후 자동 만료"""
+
+        self.send(msg)
+
+    def notify_suggestion_executed(self, stock_name: str, price: int, quantity: int):
+        """제안 매수 실행 알림"""
+        msg = f"<b>✅ [제안 매수 완료]</b>\n{stock_name}\n{price:,}원 x {quantity}주\n\n추천 매수가 도달로 자동 매수"
         self.send(msg)
 
 
@@ -114,14 +163,22 @@ class AutoTrader:
             max_holdings=self.config.MAX_HOLDINGS,
             max_hold_days=self.config.MAX_HOLD_DAYS,
             min_buy_score=self.config.MIN_BUY_SCORE,
+            min_hold_score=self.config.MIN_HOLD_SCORE,
             min_volume_ratio=self.config.MIN_VOLUME_RATIO,
         ))
         self.logger = TradeLogger()
+        self.suggestion_manager = BuySuggestionManager()
+        self.analyst = TechnicalAnalyst()
         self.notifier = TelegramNotifier(
             bot_token=TelegramConfig.BOT_TOKEN,
             chat_id=TelegramConfig.CHAT_ID,
             enabled=self.config.TELEGRAM_NOTIFY and not dry_run
         )
+
+        # 모의투자 가상 잔고 초기화
+        if self.config.IS_VIRTUAL:
+            initial_cash = getattr(self.config, 'VIRTUAL_INITIAL_CASH', 100_000_000)
+            self.logger.init_virtual_balance(initial_cash)
 
         # 실행 통계
         self.stats = {
@@ -186,20 +243,35 @@ class AutoTrader:
             if not has_strong_signal:
                 continue
 
-            # 주의 신호 체크 (있으면 제외)
-            caution_signals = ["RSI_OVERBOUGHT", "MFI_OVERBOUGHT", "BB_UPPER_BREAK"]
-            has_caution = any(s in signals for s in caution_signals)
-            if has_caution:
-                continue
+            # 추천 매수가 계산 (피보나치 61.8% 기반)
+            current_price = int(stock.get("close", 0))
+            stock_code = stock.get("code")
+            indicators = stock.get("indicators", {})
+
+            # bb_mid = 피보나치 61.8% 되돌림 (60일 고점 기준)
+            fib_618 = indicators.get("bb_mid", current_price * 0.97)
+
+            # 추천 매수가 = 피보나치 61.8% 지지선
+            # 매수 밴드 상한 = 추천가 +5% (현재가가 추천가의 105% 이내면 매수)
+            recommended_price = int(min(fib_618, current_price * 0.97))
+            buy_band_high = int(recommended_price * 1.05)
+
+            # 목표가 +20%, 손절가 -10%
+            target_price = stock.get("target_price") or int(recommended_price * 1.20)
+            stop_loss_price = int(recommended_price * 0.90)
 
             candidates.append({
-                "stock_code": stock.get("code"),
+                "stock_code": stock_code,
                 "stock_name": stock.get("name"),
+                "market": stock.get("market", "KOSDAQ"),
                 "score": score,
                 "signals": signals,
                 "volume_ratio": volume_ratio,
-                "current_price": int(stock.get("close", 0)),
-                "target_price": stock.get("target_price"),
+                "current_price": current_price,
+                "recommended_price": recommended_price,
+                "buy_band_high": buy_band_high,
+                "target_price": target_price,
+                "stop_loss_price": stop_loss_price,
                 "expected_return": stock.get("expected_return"),
             })
 
@@ -273,20 +345,48 @@ class AutoTrader:
                 )
 
             if result.get("success"):
+                # 손익 계산 (수수료/세금 포함)
+                sell_price = item.get("current_price", 0)
+                avg_price = item.get("avg_price", sell_price)
+                market = item.get("market", "KOSDAQ")
+
+                # 수수료/세금 계산
+                buy_amount = avg_price * quantity
+                sell_amount = sell_price * quantity
+                buy_commission = int(buy_amount * self.config.COMMISSION_RATE)
+                sell_commission = int(sell_amount * self.config.COMMISSION_RATE)
+                if market == "KOSPI":
+                    sell_tax = int(sell_amount * self.config.TAX_RATE_KOSPI)
+                else:
+                    sell_tax = int(sell_amount * self.config.TAX_RATE_KOSDAQ)
+                total_fees = buy_commission + sell_commission + sell_tax
+
+                # 실현손익 = 매도금액 - 매수금액 - 수수료/세금
+                realized_profit = sell_amount - buy_amount - total_fees
+                realized_rate = realized_profit / buy_amount if buy_amount > 0 else 0
+
                 # 거래 기록
                 self.logger.log_order(
                     stock_code=stock_code,
                     stock_name=stock_name,
                     side="sell",
                     quantity=quantity,
-                    price=item.get("current_price", 0),
+                    price=sell_price,
                     order_no=result.get("order_no"),
                     trade_reason=", ".join(sell_reasons),
-                    status="executed" if not self.dry_run else "dry_run"
+                    status="executed" if not self.dry_run else "dry_run",
+                    profit_loss=realized_profit,
+                    profit_rate=realized_rate
                 )
 
                 # 보유 종목에서 제거
                 if not self.dry_run:
+                    # 모의투자 가상 잔고 업데이트 (매도)
+                    if self.config.IS_VIRTUAL:
+                        # 매도 후 현금 = 매도금액 - 매도수수료 - 세금
+                        net_sell_amount = sell_amount - sell_commission - sell_tax
+                        self.logger.update_virtual_balance_on_sell(net_sell_amount, buy_amount, realized_profit)
+
                     self.logger.remove_holding(stock_code)
 
                 # 알림
@@ -324,13 +424,20 @@ class AutoTrader:
         for item in buy_list:
             stock_code = item["stock_code"]
             stock_name = item.get("stock_name", stock_code)
-            current_price = item.get("current_price", 0)
-
-            if current_price <= 0:
-                current_price = self.executor.get_current_price(stock_code) or 0
+            # 현재가 조회 (실시간)
+            current_price = self.executor.get_current_price(stock_code)
+            if not current_price or current_price <= 0:
+                current_price = item.get("current_price", 0)
 
             if current_price <= 0:
                 print(f"  {stock_name}: 가격 조회 실패")
+                continue
+
+            # 추천 매수가 체크 - 현재가가 매수밴드 이하일 때만 매수
+            buy_band_high = item.get("buy_band_high", current_price)
+            recommended_price = item.get("recommended_price", current_price)
+            if current_price > buy_band_high:
+                print(f"  {stock_name}: 현재가 {current_price:,}원 > 매수밴드 {buy_band_high:,}원 (추천가 {recommended_price:,}원) - 대기")
                 continue
 
             quantity = investment_per_stock // current_price
@@ -340,6 +447,7 @@ class AutoTrader:
                 continue
 
             print(f"\n매수: {stock_name} ({stock_code})")
+            print(f"  현재가: {current_price:,}원 (추천가 {recommended_price:,}원 이하)")
             print(f"  가격: {current_price:,}원 x {quantity}주 = {current_price * quantity:,}원")
             print(f"  점수: {item.get('score')}, 신호: {len(item.get('signals', []))}개")
 
@@ -372,8 +480,15 @@ class AutoTrader:
                         stock_name=stock_name,
                         quantity=quantity,
                         avg_price=current_price,
-                        buy_reason=f"점수 {item.get('score')}점"
+                        buy_reason=f"점수 {item.get('score')}점",
+                        market=item.get("market", "KOSDAQ")
                     )
+
+                    # 모의투자 가상 잔고 업데이트 (매수 수수료 차감)
+                    if self.config.IS_VIRTUAL:
+                        buy_amount = current_price * quantity
+                        buy_commission = int(buy_amount * self.config.COMMISSION_RATE)
+                        self.logger.update_virtual_balance_on_buy(buy_amount + buy_commission)
 
                 # 알림
                 self.notifier.notify_buy(stock_name, current_price, quantity)
@@ -385,15 +500,343 @@ class AutoTrader:
 
         return results
 
-    def run(self) -> Dict:
+    def create_buy_suggestion(self, candidate: Dict) -> Optional[int]:
         """
-        자동매매 실행
+        매수 제안 생성 및 텔레그램 알림
+
+        Args:
+            candidate: 매수 후보 종목 정보
+
+        Returns:
+            생성된 제안 ID 또는 None
+        """
+        stock_code = candidate.get("stock_code")
+        stock_name = candidate.get("stock_name", stock_code)
+        score = candidate.get("score", 0)
+        signals = candidate.get("signals", [])
+
+        # 이미 대기 중인 제안이 있으면 스킵
+        if self.suggestion_manager.has_pending_for_stock(stock_code):
+            print(f"  {stock_name}: 이미 대기 중인 제안 존재")
+            return None
+
+        # 주가 데이터 가져와서 추천 매수가 계산
+        try:
+            df = self.analyst.get_ohlcv(stock_code, days=120)
+            price_info = self.analyst.calculate_recommended_buy_price(
+                df,
+                target_profit_pct=self.config.TARGET_PROFIT_PCT,
+                stop_loss_pct=self.config.SUGGESTED_STOP_LOSS_PCT,
+                buy_band_pct=self.config.BUY_BAND_PCT
+            )
+
+            if not price_info:
+                print(f"  {stock_name}: 추천 매수가 계산 실패")
+                return None
+
+            # 상승확률/신뢰도 계산
+            prob_conf = self.analyst.calculate_probability_confidence(score, signals)
+
+            # 매수 제안 생성
+            suggestion_id = self.suggestion_manager.create_suggestion(
+                stock_code=stock_code,
+                stock_name=stock_name,
+                score=score,
+                probability=prob_conf.get('probability', 50),
+                confidence=prob_conf.get('confidence', 50),
+                current_price=price_info['current_price'],
+                recommended_price=price_info['recommended_price'],
+                target_price=price_info['target_price'],
+                stop_loss_price=price_info['stop_loss_price'],
+                buy_band_low=price_info['buy_band_low'],
+                buy_band_high=price_info['buy_band_high'],
+                signals=signals,
+                expire_hours=self.config.SUGGESTION_EXPIRE_HOURS
+            )
+
+            # 텔레그램 알림
+            self.notifier.notify_buy_suggestion(
+                stock_name=stock_name,
+                stock_code=stock_code,
+                score=score,
+                probability=prob_conf.get('probability', 50),
+                confidence=prob_conf.get('confidence', 50),
+                current_price=price_info['current_price'],
+                recommended_price=price_info['recommended_price'],
+                target_price=price_info['target_price'],
+                stop_loss_price=price_info['stop_loss_price'],
+                signals=signals,
+                expire_hours=self.config.SUGGESTION_EXPIRE_HOURS
+            )
+
+            print(f"  {stock_name}: 매수 제안 생성 (ID: {suggestion_id})")
+            print(f"    현재가: {price_info['current_price']:,}원")
+            print(f"    추천가: {price_info['recommended_price']:,}원")
+            print(f"    목표가: {price_info['target_price']:,}원")
+
+            return suggestion_id
+
+        except Exception as e:
+            print(f"  {stock_name}: 매수 제안 생성 오류 - {e}")
+            return None
+
+    def execute_approved_suggestions(self, investment_per_stock: int) -> List[Dict]:
+        """
+        승인된 매수 제안 실행 (추천 매수가 이하일 때만)
+
+        Args:
+            investment_per_stock: 종목당 투자금액
+
+        Returns:
+            주문 결과 리스트
+        """
+        results = []
+        approved = self.suggestion_manager.get_approved_suggestions()
+
+        if not approved:
+            return results
+
+        print(f"\n승인된 제안 {len(approved)}개 확인 중...")
+
+        for suggestion in approved:
+            stock_code = suggestion['stock_code']
+            stock_name = suggestion.get('stock_name', stock_code)
+            recommended_price = suggestion.get('recommended_price', 0)
+            buy_band_high = suggestion.get('buy_band_high', recommended_price)
+
+            # 현재가 조회
+            current_price = self.executor.get_current_price(stock_code)
+            if not current_price:
+                print(f"  {stock_name}: 현재가 조회 실패")
+                continue
+
+            # 추천 매수가(또는 매수 밴드 상단) 이하인지 확인
+            if current_price > buy_band_high:
+                print(f"  {stock_name}: 현재가({current_price:,}) > 매수밴드상단({buy_band_high:,}) - 대기")
+                continue
+
+            # 매수 수량 계산
+            quantity = investment_per_stock // current_price
+            if quantity <= 0:
+                print(f"  {stock_name}: 매수 가능 수량 없음")
+                continue
+
+            print(f"\n[승인 제안 매수] {stock_name}")
+            print(f"  추천가: {recommended_price:,}원 / 현재가: {current_price:,}원")
+            print(f"  수량: {quantity}주")
+
+            if self.dry_run:
+                print("  [DRY-RUN] 실제 주문 실행 안함")
+                result = {"success": True, "stock_code": stock_code, "dry_run": True}
+            else:
+                result = self.executor.place_buy_order(
+                    stock_code=stock_code,
+                    quantity=quantity
+                )
+
+            if result.get("success"):
+                # 거래 기록
+                self.logger.log_order(
+                    stock_code=stock_code,
+                    stock_name=stock_name,
+                    side="buy",
+                    quantity=quantity,
+                    price=current_price,
+                    order_no=result.get("order_no"),
+                    trade_reason=f"제안승인 (점수 {suggestion.get('score')}점)",
+                    status="executed" if not self.dry_run else "dry_run"
+                )
+
+                # 보유 종목 추가
+                if not self.dry_run:
+                    self.logger.add_holding(
+                        stock_code=stock_code,
+                        stock_name=stock_name,
+                        quantity=quantity,
+                        avg_price=current_price,
+                        buy_reason=f"제안승인 (점수 {suggestion.get('score')}점)",
+                        market=suggestion.get("market", "KOSDAQ")
+                    )
+
+                    # 모의투자 가상 잔고 업데이트 (매수 수수료 차감)
+                    if self.config.IS_VIRTUAL:
+                        buy_amount = current_price * quantity
+                        buy_commission = int(buy_amount * self.config.COMMISSION_RATE)
+                        self.logger.update_virtual_balance_on_buy(buy_amount + buy_commission)
+
+                # 제안 실행 완료 처리
+                self.suggestion_manager.mark_executed(suggestion['id'])
+
+                # 알림
+                self.notifier.notify_suggestion_executed(stock_name, current_price, quantity)
+
+                self.stats["buy_orders"].append(result)
+                self.risk_manager.increment_trade_count()
+
+            results.append(result)
+
+        return results
+
+    def run_semi_auto(self) -> Dict:
+        """
+        반자동 모드 실행 (매수 제안 생성)
 
         Returns:
             실행 결과 요약
         """
         print("\n" + "=" * 60)
-        print("  자동매매 시스템 시작")
+        print("  반자동 매매 시스템 (Semi-Auto Mode)")
+        print(f"  실행 시각: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+        print(f"  모드: {'모의투자' if self.config.IS_VIRTUAL else '실전투자'}")
+        print("=" * 60)
+
+        # 긴급 정지 체크
+        if self.config.EMERGENCY_STOP:
+            print("\n긴급 정지 상태입니다.")
+            return {"status": "emergency_stop"}
+
+        # 장 시간 체크 (dry_run이 아닐 때만)
+        if not self.dry_run and not self.check_market_hours():
+            return {"status": "market_closed"}
+
+        # 1. 만료된 제안 정리
+        print("\n[1] 만료 제안 정리 중...")
+        expired_count = self.suggestion_manager.expire_old_suggestions()
+        if expired_count > 0:
+            print(f"  {expired_count}개 제안 만료 처리")
+
+        # 2. 분석 결과 로드
+        print("\n[2] 분석 결과 로드 중...")
+        analysis_stocks = self.load_analysis_results()
+        if not analysis_stocks:
+            self.notifier.notify_error("분석 결과 파일을 찾을 수 없습니다.")
+            return {"status": "no_data"}
+
+        # 3. 계좌 잔고 조회
+        print("\n[3] 계좌 잔고 조회 중...")
+        balance = self.executor.get_account_balance()
+        if not balance:
+            self.notifier.notify_error("계좌 잔고 조회 실패")
+            return {"status": "balance_error"}
+
+        holdings = balance.get("holdings", [])
+        cash = balance.get("summary", {}).get("cash_balance", 0)
+        total_assets = balance.get("summary", {}).get("total_eval_amount", 0) + cash
+
+        print(f"  현금: {cash:,}원")
+        print(f"  보유 종목: {len(holdings)}개")
+
+        # 4. 보유 종목 매도 체크 (기존 로직과 동일)
+        print("\n[4] 보유 종목 평가 중...")
+        if holdings:
+            current_prices = {}
+            current_signals = {}
+            current_scores = {}
+            buy_dates = {}
+
+            for h in holdings:
+                stock_code = h["stock_code"]
+                current_prices[stock_code] = h.get("current_price", 0)
+                current_signals[stock_code] = self.get_current_signals(stock_code, analysis_stocks)
+                current_scores[stock_code] = self.get_current_score(stock_code, analysis_stocks)
+                buy_date = self.logger.get_buy_date(stock_code)
+                if buy_date:
+                    buy_dates[stock_code] = buy_date
+
+            sell_list = self.risk_manager.evaluate_holdings(
+                holdings=holdings,
+                current_prices=current_prices,
+                current_signals=current_signals,
+                buy_dates=buy_dates,
+                current_scores=current_scores
+            )
+
+            if sell_list:
+                print(f"  매도 대상: {len(sell_list)}개")
+                self.execute_sell_orders(sell_list)
+            else:
+                print("  매도 대상 없음")
+
+        # 5. 승인된 매수 제안 실행 (추천 매수가 이하일 때)
+        print("\n[5] 승인된 제안 매수 실행 중...")
+        investment_per_stock = self.risk_manager.calculate_investment_amount(total_assets)
+        self.execute_approved_suggestions(investment_per_stock)
+
+        # 6. 새 매수 후보 → 제안 생성
+        print("\n[6] 새 매수 제안 생성 중...")
+        candidates = self.filter_buy_candidates(analysis_stocks)
+        print(f"  매수 조건 충족 종목: {len(candidates)}개")
+
+        # 현재 보유 종목과 리스크 관리 반영
+        current_holdings = self.executor.get_holdings()
+        filtered_candidates = self.risk_manager.filter_buy_candidates(
+            candidates, current_holdings
+        )
+
+        # 최대 대기 제안 수 체크
+        pending = self.suggestion_manager.get_pending_suggestions()
+        remaining_slots = self.config.MAX_PENDING_SUGGESTIONS - len(pending)
+
+        new_suggestions = 0
+        for candidate in filtered_candidates[:remaining_slots]:
+            if self.create_buy_suggestion(candidate):
+                new_suggestions += 1
+
+        print(f"  새 매수 제안: {new_suggestions}개 생성")
+
+        # 7. 일일 성과 저장
+        print("\n[7] 성과 저장 중...")
+        final_balance = self.executor.get_account_balance()
+        if final_balance:
+            final_holdings = final_balance.get("holdings", [])
+            total_invested = sum(h.get("avg_price", 0) * h.get("quantity", 0) for h in final_holdings)
+            total_profit = final_balance.get("summary", {}).get("total_profit_loss", 0)
+
+            self.logger.save_daily_performance(
+                total_assets=final_balance.get("summary", {}).get("total_eval_amount", 0),
+                total_invested=total_invested,
+                total_profit=total_profit,
+                holdings_count=len(final_holdings)
+            )
+
+        # 8. 완료
+        print("\n[8] 완료")
+        stats = self.suggestion_manager.get_statistics()
+        buy_count = len(self.stats["buy_orders"])
+        sell_count = len(self.stats["sell_orders"])
+
+        result = {
+            "status": "completed",
+            "mode": "semi-auto",
+            "buy_count": buy_count,
+            "sell_count": sell_count,
+            "new_suggestions": new_suggestions,
+            "pending_suggestions": stats.get('pending', 0),
+            "approved_suggestions": stats.get('approved', 0),
+            "timestamp": datetime.now().isoformat()
+        }
+
+        print(f"\n매수: {buy_count}건, 매도: {sell_count}건")
+        print(f"대기 제안: {stats.get('pending', 0)}개, 승인 대기: {stats.get('approved', 0)}개")
+        print("=" * 60)
+
+        return result
+
+    def run(self) -> Dict:
+        """
+        자동매매 실행 (모드에 따라 auto/semi-auto 분기)
+
+        Returns:
+            실행 결과 요약
+        """
+        # TRADE_MODE에 따라 분기
+        trade_mode = getattr(self.config, 'TRADE_MODE', 'auto')
+        if trade_mode == 'semi-auto':
+            return self.run_semi_auto()
+
+        # 기존 auto 모드
+        print("\n" + "=" * 60)
+        print("  자동매매 시스템 시작 (Auto Mode)")
         print(f"  실행 시각: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
         print(f"  모드: {'모의투자' if self.config.IS_VIRTUAL else '실전투자'}")
         print(f"  DRY-RUN: {self.dry_run}")
