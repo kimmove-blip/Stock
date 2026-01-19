@@ -3,7 +3,7 @@ import { useParams, useNavigate, useLocation } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { stockAPI, portfolioAPI, watchlistAPI } from '../api/client';
 import Loading from '../components/Loading';
-import { ArrowLeft, Star, Plus, TrendingUp, TrendingDown, FileText, Check, RefreshCw } from 'lucide-react';
+import { ArrowLeft, Star, Plus, TrendingUp, TrendingDown, FileText, Check, RefreshCw, Share2 } from 'lucide-react';
 import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer } from 'recharts';
 
 export default function StockDetail() {
@@ -140,6 +140,50 @@ export default function StockDetail() {
     },
   });
 
+  // 공유 기능
+  const handleShare = async () => {
+    const stockName = detail?.name || '';
+    const stockCode = detail?.code || code;
+    const currentPrice = detail?.current_price?.toLocaleString() || '-';
+    const changeRate = detail?.change_rate || 0;
+    const changeSign = changeRate >= 0 ? '+' : '';
+    const score = analysis?.score || top100Score || 0;
+    const opinion = analysis?.opinion || (score >= 70 ? '매수' : score >= 50 ? '관망' : '');
+
+    // 공유 내용 생성
+    let shareText = `📊 ${stockName} (${stockCode})\n💰 현재가: ${currentPrice}원 (${changeSign}${changeRate}%)`;
+    if (score > 0) {
+      shareText += `\n🎯 AI 점수: ${score}점${opinion ? ` (${opinion})` : ''}`;
+    }
+    shareText += `\n\n📱 앱 다운로드:\n▶ Android: https://play.google.com/store/apps/details?id=com.kimsai.stock\n▶ iOS: 앱스토어 출시 준비중\n\nKim's AI 주식분석`;
+
+    const shareTitle = `[${stockName}] AI 점수 ${score > 0 ? score + '점' : '-'}`;
+
+    // Web Share API 지원 확인
+    if (navigator.share) {
+      try {
+        await navigator.share({
+          title: shareTitle,
+          text: shareText,
+        });
+      } catch (err) {
+        // 사용자가 공유 취소한 경우 무시
+        if (err.name !== 'AbortError') {
+          console.error('공유 실패:', err);
+        }
+      }
+    } else {
+      // 폴백: 클립보드 복사
+      try {
+        await navigator.clipboard.writeText(shareText);
+        alert('클립보드에 복사되었습니다!');
+      } catch (err) {
+        console.error('클립보드 복사 실패:', err);
+        alert('공유 기능을 사용할 수 없습니다.');
+      }
+    }
+  };
+
   if (detailLoading) return <Loading text="종목 정보 불러오는 중..." />;
 
   if (!detail) {
@@ -151,6 +195,9 @@ export default function StockDetail() {
   }
 
   const isPositive = (detail.change_rate || 0) >= 0;
+
+  // AI 점수 (analysis 또는 top100Score에서)
+  const aiScore = analysis?.score || top100Score || 0;
 
   return (
     <div>
@@ -164,17 +211,21 @@ export default function StockDetail() {
           <p className="text-sm text-base-content/60">{detail.code} | {detail.market}</p>
         </div>
         {/* AI 점수 */}
-        {(analysis?.score || top100Score) && (
+        {aiScore > 0 && (
           <div className="text-center">
             <div className={`text-3xl font-bold ${
-              (analysis?.score || top100Score) >= 80 ? 'text-success' :
-              (analysis?.score || top100Score) >= 60 ? 'text-warning' : 'text-error'
+              aiScore >= 80 ? 'text-success' :
+              aiScore >= 60 ? 'text-warning' : 'text-error'
             }`}>
-              {analysis?.score || top100Score}
+              {aiScore}
             </div>
             <div className="text-xs text-base-content/60">AI점수</div>
           </div>
         )}
+        {/* 공유 버튼 */}
+        <button onClick={handleShare} className="btn btn-ghost btn-sm">
+          <Share2 size={20} />
+        </button>
       </div>
 
       {/* 가격 정보 */}
@@ -191,28 +242,30 @@ export default function StockDetail() {
                 </span>
               </p>
             </div>
-            {/* 추천 매수가 표시 */}
-            <div className="text-right">
-              <div className="text-xs text-base-content/50">추천 매수가</div>
-              {detail.bb_mid ? (
-                <>
-                  <div className="text-lg font-bold text-primary">
-                    {Math.round(detail.bb_mid).toLocaleString()}원
+            {/* 추천 매수가 표시 (점수 50 초과시만) */}
+            {aiScore > 50 && (
+              <div className="text-right">
+                <div className="text-xs text-base-content/50">추천 매수가</div>
+                {detail.bb_mid ? (
+                  <>
+                    <div className="text-lg font-bold text-primary">
+                      {Math.round(detail.bb_mid).toLocaleString()}원
+                    </div>
+                    <div className={`text-xs ${
+                      detail.current_price <= detail.bb_mid * 1.05 ? 'text-success' : 'text-base-content/60'
+                    }`}>
+                      {detail.current_price <= detail.bb_mid * 1.05 ? '(매수 적정)' :
+                       `(+${((detail.current_price / detail.bb_mid - 1) * 100).toFixed(1)}% 고평가)`}
+                    </div>
+                  </>
+                ) : (
+                  <div className="flex items-center justify-end gap-1 text-base-content/40 py-1">
+                    <RefreshCw size={14} className="animate-spin" />
+                    <span className="text-xs">분석중</span>
                   </div>
-                  <div className={`text-xs ${
-                    detail.current_price <= detail.bb_mid * 1.05 ? 'text-success' : 'text-base-content/60'
-                  }`}>
-                    {detail.current_price <= detail.bb_mid * 1.05 ? '(매수 적정)' :
-                     `(+${((detail.current_price / detail.bb_mid - 1) * 100).toFixed(1)}% 고평가)`}
-                  </div>
-                </>
-              ) : (
-                <div className="flex items-center justify-end gap-1 text-base-content/40 py-1">
-                  <RefreshCw size={14} className="animate-spin" />
-                  <span className="text-xs">분석중</span>
-                </div>
-              )}
-            </div>
+                )}
+              </div>
+            )}
           </div>
 
           {/* 액션 버튼 */}

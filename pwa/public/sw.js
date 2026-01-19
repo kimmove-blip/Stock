@@ -1,7 +1,5 @@
-const CACHE_NAME = 'ai-stock-v4';
+const CACHE_NAME = 'ai-stock-v5';
 const STATIC_ASSETS = [
-  '/',
-  '/index.html',
   '/manifest.json',
 ];
 
@@ -33,34 +31,40 @@ self.addEventListener('activate', (event) => {
 
 // 네트워크 요청 가로채기
 self.addEventListener('fetch', (event) => {
+  const url = new URL(event.request.url);
+
+  // HTML 요청은 항상 네트워크 우선 (중요!)
+  if (event.request.mode === 'navigate' || url.pathname === '/' || url.pathname.endsWith('.html')) {
+    event.respondWith(
+      fetch(event.request)
+        .catch(() => caches.match(event.request))
+    );
+    return;
+  }
+
   // API 요청은 네트워크 우선
   if (event.request.url.includes('/api/')) {
     event.respondWith(
       fetch(event.request)
         .then((response) => {
-          // 성공 시 캐시에 저장
           const responseClone = response.clone();
           caches.open(CACHE_NAME).then((cache) => {
             cache.put(event.request, responseClone);
           });
           return response;
         })
-        .catch(() => {
-          // 오프라인 시 캐시에서 반환
-          return caches.match(event.request);
-        })
+        .catch(() => caches.match(event.request))
     );
     return;
   }
 
-  // 정적 자산은 캐시 우선
+  // 정적 자산(JS, CSS, 이미지)은 캐시 우선
   event.respondWith(
     caches.match(event.request).then((response) => {
       if (response) {
         return response;
       }
       return fetch(event.request).then((response) => {
-        // 성공 시 캐시에 저장
         if (response.status === 200) {
           const responseClone = response.clone();
           caches.open(CACHE_NAME).then((cache) => {

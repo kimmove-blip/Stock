@@ -15,7 +15,22 @@
     <title>AI 주식분석</title>
   </head>
   <body>
-    <div id="root"></div>
+    <div id="root">
+      <!-- 초기 로딩 표시 (React 로드 전) -->
+      <div id="initial-loading" style="display:flex;flex-direction:column;align-items:center;justify-content:center;height:100vh;background:linear-gradient(135deg,#667eea 0%,#764ba2 100%);">
+        <div style="width:60px;height:60px;border:4px solid rgba(255,255,255,0.3);border-top-color:#fff;border-radius:50%;animation:spin 1s linear infinite;"></div>
+        <p style="color:#fff;margin-top:16px;font-size:14px;">로딩 중...</p>
+      </div>
+      <style>@keyframes spin{to{transform:rotate(360deg)}}</style>
+    </div>
+    <script>
+      // 전역 에러 핸들링 (디버깅용)
+      window.onerror = function(msg, url, line, col, error) {
+        var root = document.getElementById('root');
+        root.innerHTML = '<div style="padding:20px;text-align:center;"><h2 style="color:red;">앱 로드 오류</h2><p>앱을 종료 후 다시 실행해주세요.</p><details style="margin-top:20px;text-align:left;"><summary>오류 상세</summary><pre style="font-size:12px;overflow:auto;">' + msg + '\n' + url + ':' + line + '</pre></details></div>';
+        return false;
+      };
+    </script>
     <script type="module" src="/src/main.jsx"></script>
   </body>
 </html>
