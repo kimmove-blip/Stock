@@ -59,6 +59,7 @@ export const portfolioAPI = {
   update: (id, data) => api.put(`/portfolio/${id}`, data),
   delete: (id) => api.delete(`/portfolio/${id}`),
   analysis: () => api.get('/portfolio/analysis'),
+  diagnosis: (sortBy = 'holding_value') => api.get(`/portfolio/diagnosis?sort_by=${sortBy}`),
 };
 
 // 관심종목 API
@@ -244,7 +245,7 @@ export const autoTradeAPI = {
   // 매도 제안 거부
   rejectSellSuggestion: (id) => api.post(`/auto-trade/sell-suggestions/${id}/reject`),
   // 보유종목 진단
-  getDiagnosis: () => api.get('/auto-trade/diagnosis'),
+  getDiagnosis: (sortBy = 'holding_value') => api.get(`/auto-trade/diagnosis?sort_by=${sortBy}`),
   // 수동 주문 실행
   placeOrder: (data) => api.post('/auto-trade/order', data),
   // 미체결 주문 조회

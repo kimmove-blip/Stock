@@ -283,7 +283,7 @@ def analyze_stock_technical(code: str) -> dict:
         elif score >= 30:
             opinion = '주의'
         else:
-            opinion = '하락 신호'
+            opinion = '주의'
 
         return {
             'current_price': current_price,
@@ -411,3 +411,132 @@ async def analyze_portfolio(
         risk_stocks=risk_stocks,
         recommendations=recommendations
     )
+
+
+@router.get("/diagnosis")
+async def get_portfolio_diagnosis(
+    sort_by: str = "holding_value",  # holding_value, buy_date, profit_amount, profit_rate
+    current_user: dict = Depends(get_current_user_required),
+    db: DatabaseManager = Depends(get_db)
+):
+    """보유종목 AI 진단 (자동매매 진단과 동일한 형식)
+
+    정렬 옵션:
+    - holding_value: 보유금액순 (내림차순)
+    - buy_date: 매입일순 (최신순)
+    - profit_amount: 수익액순 (내림차순)
+    - profit_rate: 수익률순 (내림차순)
+    """
+    items = db.get_portfolio(current_user['id'])
+
+    if not items:
+        return {
+            "holdings": [],
+            "summary": {
+                "health_score": 0,
+                "total_profit_rate": 0,
+                "warning_count": 0
+            }
+        }
+
+    # 기술적 분석 병렬 실행
+    analysis_map = {}
+    stock_codes = [item['stock_code'] for item in items]
+
+    with ThreadPoolExecutor(max_workers=min(len(stock_codes), 5)) as executor:
+        future_to_code = {executor.submit(analyze_stock_technical, code): code for code in stock_codes}
+        for future in as_completed(future_to_code):
+            code = future_to_code[future]
+            try:
+                analysis_map[code] = future.result()
+            except Exception:
+                analysis_map[code] = None
+
+    diagnosed_holdings = []
+    total_health = 0
+    warning_count = 0
+    total_profit_rate = 0
+
+    for item in items:
+        code = item['stock_code']
+        analysis = analysis_map.get(code) or {}
+
+        avg_price = item.get('buy_price', 0) or 0
+        current_price = analysis.get('current_price') or avg_price
+        quantity = item.get('quantity', 0)
+
+        # 수익률 계산
+        profit_rate = ((current_price - avg_price) / avg_price * 100) if avg_price > 0 else 0
+
+        # AI 기술분석 점수 사용
+        health_score = int(analysis.get('score', 50))
+        ai_opinion = analysis.get('opinion', '관망')
+
+        # 시그널 결정: AI 점수 + 수익률 고려
+        signal = 'hold'
+        ai_comment = ''
+
+        if profit_rate >= 20:
+            signal = 'take_profit'
+            ai_comment = "목표 수익률 달성. 일부 익절을 고려해보세요."
+        elif profit_rate <= -10:
+            signal = 'strong_sell'
+            warning_count += 1
+            ai_comment = "손절을 고려해야 할 시점입니다."
+        elif profit_rate <= -5:
+            signal = 'sell'
+            warning_count += 1
+            ai_comment = "주의가 필요합니다. 손절 라인을 확인하세요."
+        elif health_score >= 70:
+            signal = 'buy'
+            ai_comment = f"AI 분석 긍정적 ({ai_opinion})"
+        elif health_score <= 40:
+            signal = 'sell'
+            if profit_rate < 0:
+                warning_count += 1
+            ai_comment = f"AI 분석 부정적 ({ai_opinion})"
+        else:
+            ai_comment = f"AI 분석: {ai_opinion}"
+
+        # 보유금액, 수익액 계산
+        holding_value = int(current_price * quantity) if current_price else 0
+        profit_amount = int((current_price - avg_price) * quantity) if current_price and avg_price else 0
+
+        diagnosed_holdings.append({
+            "stock_code": code,
+            "stock_name": item.get('stock_name', ''),
+            "quantity": quantity,
+            "avg_price": int(avg_price),
+            "current_price": int(current_price) if current_price else None,
+            "profit_rate": round(profit_rate, 2),
+            "health_score": health_score,
+            "signal": signal,
+            "holding_value": holding_value,
+            "profit_amount": profit_amount,
+            "buy_date": item.get('buy_date')
+        })
+
+        total_health += health_score
+        total_profit_rate += profit_rate
+
+    avg_health = int(total_health / len(items)) if items else 0
+    avg_profit_rate = round(total_profit_rate / len(items), 2) if items else 0
+
+    # 정렬
+    if sort_by == "holding_value":
+        diagnosed_holdings.sort(key=lambda x: x['holding_value'], reverse=True)
+    elif sort_by == "buy_date":
+        diagnosed_holdings.sort(key=lambda x: x.get('buy_date') or '', reverse=True)
+    elif sort_by == "profit_amount":
+        diagnosed_holdings.sort(key=lambda x: x['profit_amount'], reverse=True)
+    elif sort_by == "profit_rate":
+        diagnosed_holdings.sort(key=lambda x: x['profit_rate'], reverse=True)
+
+    return {
+        "holdings": diagnosed_holdings,
+        "summary": {
+            "health_score": avg_health,
+            "total_profit_rate": avg_profit_rate,
+            "warning_count": warning_count
+        }
+    }

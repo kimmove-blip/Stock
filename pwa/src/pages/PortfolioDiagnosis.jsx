@@ -1,8 +1,7 @@
 import { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { useNavigate } from 'react-router-dom';
-import { autoTradeAPI } from '../api/client';
-import { useAuth } from '../contexts/AuthContext';
+import { portfolioAPI } from '../api/client';
 import Loading from '../components/Loading';
 import {
   Stethoscope,
@@ -23,28 +22,14 @@ const SORT_OPTIONS = [
   { value: 'buy_date', label: '매입일순' },
 ];
 
-export default function AutoTradeDiagnosis() {
+export default function PortfolioDiagnosis() {
   const navigate = useNavigate();
-  const { user } = useAuth();
   const [sortBy, setSortBy] = useState('holding_value');
-
-  // 자동매매 권한 체크
-  if (!user?.auto_trade_enabled) {
-    return (
-      <div className="min-h-[60vh] flex items-center justify-center">
-        <div className="text-center">
-          <AlertCircle size={48} className="mx-auto text-gray-400 mb-4" />
-          <h2 className="text-lg font-bold text-gray-700 mb-2">접근 권한 없음</h2>
-          <p className="text-gray-500 text-sm">자동매매 권한이 필요합니다.</p>
-        </div>
-      </div>
-    );
-  }
 
   // 보유종목 진단 조회
   const { data, isLoading, error, refetch, isFetching } = useQuery({
-    queryKey: ['autoTradeDiagnosis', sortBy],
-    queryFn: () => autoTradeAPI.getDiagnosis(sortBy).then((res) => res.data),
+    queryKey: ['portfolioDiagnosis', sortBy],
+    queryFn: () => portfolioAPI.diagnosis(sortBy).then((res) => res.data),
     staleTime: 1000 * 60 * 5, // 5분 캐시
     refetchOnWindowFocus: true,
   });
@@ -270,7 +255,7 @@ export default function AutoTradeDiagnosis() {
           <Stethoscope size={48} className="mx-auto text-gray-300 mb-3" />
           <p className="text-gray-500">보유 종목이 없습니다</p>
           <p className="text-xs text-gray-400 mt-2">
-            종목을 매수하면 AI가 자동으로 진단해드립니다
+            포트폴리오에 종목을 추가하면 AI가 자동으로 진단해드립니다
           </p>
         </div>
       )}

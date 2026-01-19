@@ -1122,9 +1122,9 @@ class DiagnosisHolding(BaseModel):
     profit_rate: Optional[float]
     health_score: Optional[int]  # 건강 점수 (0-100)
     signal: Optional[str]  # strong_buy, buy, hold, sell, strong_sell
-    target_price: Optional[int]  # 목표가
-    stop_loss_price: Optional[int]  # 손절가
-    ai_comment: Optional[str]  # AI 코멘트
+    holding_value: Optional[int]  # 보유금액
+    profit_amount: Optional[int]  # 수익액
+    buy_date: Optional[str]  # 매입일
 
 
 class DiagnosisSummary(BaseModel):
@@ -1142,9 +1142,17 @@ class DiagnosisResponse(BaseModel):
 
 @router.get("/diagnosis", response_model=DiagnosisResponse)
 async def get_diagnosis(
+    sort_by: str = "holding_value",  # holding_value, buy_date, profit_amount, profit_rate
     current_user: dict = Depends(get_current_user_required)
 ):
-    """보유종목 AI 진단"""
+    """보유종목 AI 진단
+
+    정렬 옵션:
+    - holding_value: 보유금액순 (내림차순)
+    - buy_date: 매입일순 (최신순)
+    - profit_amount: 수익액순 (내림차순)
+    - profit_rate: 수익률순 (내림차순)
+    """
     check_auto_trade_permission(current_user)
 
     logger = get_trade_logger()
@@ -1221,22 +1229,23 @@ async def get_diagnosis(
             if profit_rate < 0:
                 warning_count += 1
 
-        # 목표가/손절가 계산
-        target_price = int(avg_price * 1.15) if avg_price else None  # 15% 수익
-        stop_loss_price = int(avg_price * 0.93) if avg_price else None  # 7% 손실
+        # 보유금액, 수익액 계산
+        quantity = h.get('quantity', 0)
+        holding_value = int(current_price * quantity) if current_price else 0
+        profit_amount = int((current_price - avg_price) * quantity) if current_price and avg_price else 0
 
         diagnosed_holdings.append(DiagnosisHolding(
             stock_code=h.get('stock_code', ''),
             stock_name=h.get('stock_name', ''),
-            quantity=h.get('quantity', 0),
+            quantity=quantity,
             avg_price=avg_price,
             current_price=current_price,
             profit_rate=profit_rate,
             health_score=health_score,
             signal=signal,
-            target_price=target_price,
-            stop_loss_price=stop_loss_price,
-            ai_comment=ai_comment
+            holding_value=holding_value,
+            profit_amount=profit_amount,
+            buy_date=h.get('buy_date')
         ))
 
         total_health += health_score
@@ -1244,6 +1253,16 @@ async def get_diagnosis(
 
     avg_health = int(total_health / len(holdings)) if holdings else 0
     avg_profit_rate = total_profit_rate / len(holdings) if holdings else 0
+
+    # 정렬
+    if sort_by == "holding_value":
+        diagnosed_holdings.sort(key=lambda x: x.holding_value or 0, reverse=True)
+    elif sort_by == "buy_date":
+        diagnosed_holdings.sort(key=lambda x: x.buy_date or '', reverse=True)
+    elif sort_by == "profit_amount":
+        diagnosed_holdings.sort(key=lambda x: x.profit_amount or 0, reverse=True)
+    elif sort_by == "profit_rate":
+        diagnosed_holdings.sort(key=lambda x: x.profit_rate or 0, reverse=True)
 
     return DiagnosisResponse(
         holdings=diagnosed_holdings,

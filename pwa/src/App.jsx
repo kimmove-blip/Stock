@@ -36,6 +36,7 @@ import AutoTradePerformance from './pages/AutoTradePerformance';
 import AutoTradeDiagnosis from './pages/AutoTradeDiagnosis';
 import AutoTradeManual from './pages/AutoTradeManual';
 import AutoTradePendingOrders from './pages/AutoTradePendingOrders';
+import PortfolioDiagnosis from './pages/PortfolioDiagnosis';
 import Loading from './components/Loading';
 import Disclaimer from './components/Disclaimer';
 import PushPermissionPrompt from './components/PushPermissionPrompt';
@@ -91,6 +92,7 @@ function AppRoutes() {
         <Route path="/" element={<Home />} />
         <Route path="/search" element={<Search />} />
         <Route path="/portfolio" element={<Portfolio />} />
+        <Route path="/portfolio/diagnosis" element={<PortfolioDiagnosis />} />
         <Route path="/popular" element={<PopularStocks />} />
         <Route path="/watchlist" element={<Watchlist />} />
         <Route path="/stock/:code" element={<StockDetail />} />

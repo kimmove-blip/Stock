@@ -11,8 +11,8 @@ import {
   Flame,
   Newspaper,
   BarChart3,
-  Globe,
   Bell,
+  Stethoscope,
 } from 'lucide-react';
 
 export default function Home() {
@@ -51,10 +51,10 @@ export default function Home() {
     { icon: Search, label: '종목/테마\n검색', bgColor: 'bg-purple-100', iconColor: 'text-purple-500', path: '/search' },
     { icon: Star, label: '관심종목', bgColor: 'bg-yellow-100', iconColor: 'text-yellow-500', path: '/watchlist' },
     { icon: Briefcase, label: '보유종목', bgColor: 'bg-green-100', iconColor: 'text-green-500', path: '/portfolio' },
+    { icon: Stethoscope, label: '보유종목\n진단', bgColor: 'bg-cyan-100', iconColor: 'text-cyan-500', path: '/portfolio/diagnosis' },
     { icon: Flame, label: '인기 종목', bgColor: 'bg-orange-100', iconColor: 'text-orange-500', path: '/popular' },
-    { icon: Newspaper, label: '시장 뉴스', bgColor: 'bg-cyan-100', iconColor: 'text-cyan-500', path: '/news' },
-    { icon: BarChart3, label: '코스피\n코스닥', bgColor: 'bg-indigo-100', iconColor: 'text-indigo-500', path: '/market' },
-    { icon: Globe, label: '해외주식\n현황', bgColor: 'bg-pink-100', iconColor: 'text-pink-500', path: '/global' },
+    { icon: Newspaper, label: '시장 뉴스', bgColor: 'bg-pink-100', iconColor: 'text-pink-500', path: '/news' },
+    { icon: BarChart3, label: '국내외증시', bgColor: 'bg-indigo-100', iconColor: 'text-indigo-500', path: '/market' },
   ];
 
   const summary = portfolio?.summary || {

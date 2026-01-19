@@ -7,14 +7,14 @@ import { alertsAPI } from '../api/client';
 // 페이지별 타이틀 매핑
 const pageTitles = {
   '/portfolio': '보유종목',
+  '/portfolio/diagnosis': '보유종목 진단',
   '/watchlist': '관심종목',
   '/realtime': 'AI 실시간 추천',
   '/value-stocks': 'AI 가치주 발굴',
   '/search': '종목/테마 검색',
   '/popular': '인기 종목',
   '/news': '시장 뉴스',
-  '/market': '코스피/코스닥',
-  '/global': '해외주식 현황',
+  '/market': '국내외증시',
   '/about': '앱 소개',
   '/contact': '문의하기',
   '/settings': '설정',
