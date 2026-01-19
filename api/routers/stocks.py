@@ -471,12 +471,13 @@ async def get_stock_detail(code: str):
                             signal_line = macd_line.ewm(span=9, adjust=False).mean()
                             macd = round(macd_line.iloc[-1], 2)
                             macd_signal = round(signal_line.iloc[-1], 2)
-                        # 볼린저밴드 계산 (추천 매수가용)
-                        if len(ohlcv) >= 20:
-                            bb_mid = round(close.tail(20).mean(), 0)
-                            std20 = close.tail(20).std()
-                            bb_upper = round(bb_mid + (std20 * 2), 0)
-                            bb_lower = round(bb_mid - (std20 * 2), 0)
+                        # 피보나치 61.8% 되돌림 (추천 매수가용)
+                        if len(ohlcv) >= 60:
+                            high60 = ohlcv['고가'].tail(60).max()
+                            low60 = ohlcv['저가'].tail(60).min()
+                            bb_mid = round(high60 - (high60 - low60) * 0.618, 0)  # 피보나치 61.8%
+                            bb_upper = round(high60, 0)  # 60일 고점
+                            bb_lower = round(low60, 0)   # 60일 저점
             except Exception as ma_err:
                 print(f"이동평균 계산 오류: {ma_err}")
 
@@ -563,13 +564,14 @@ async def get_stock_detail(code: str):
             macd = round(macd_line.iloc[-1], 2)
             macd_signal = round(signal_line.iloc[-1], 2)
 
-        # 볼린저밴드 계산 (추천 매수가용)
+        # 피보나치 61.8% 되돌림 (추천 매수가용)
         bb_mid, bb_upper, bb_lower = None, None, None
-        if len(ohlcv) >= 20:
-            bb_mid = round(close.tail(20).mean(), 0)
-            std20 = close.tail(20).std()
-            bb_upper = round(bb_mid + (std20 * 2), 0)
-            bb_lower = round(bb_mid - (std20 * 2), 0)
+        if len(ohlcv) >= 60:
+            high60 = ohlcv['고가'].tail(60).max()
+            low60 = ohlcv['저가'].tail(60).min()
+            bb_mid = round(high60 - (high60 - low60) * 0.618, 0)  # 피보나치 61.8%
+            bb_upper = round(high60, 0)  # 60일 고점
+            bb_lower = round(low60, 0)   # 60일 저점
 
         # 시가총액 조회 (FDR StockListing에서)
         market_cap = None
