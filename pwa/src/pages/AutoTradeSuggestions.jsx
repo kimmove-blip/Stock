@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useNavigate } from 'react-router-dom';
 import { autoTradeAPI } from '../api/client';
@@ -18,111 +18,122 @@ import {
   RefreshCw,
   ShoppingCart,
   Banknote,
+  Zap,
 } from 'lucide-react';
 
-export default function AutoTradeSuggestions() {
-  const navigate = useNavigate();
-  const { user } = useAuth();
-  const queryClient = useQueryClient();
-  const [activeTab, setActiveTab] = useState('buy'); // buy, sell
-  const [filter, setFilter] = useState('pending');
+// 토스트 컴포넌트
+function Toast({ message, type, onClose }) {
+  const [isVisible, setIsVisible] = useState(false);
 
-  // 자동매매 권한 체크
-  if (!user?.auto_trade_enabled) {
-    return (
-      <div className="min-h-[60vh] flex items-center justify-center">
-        <div className="text-center">
-          <AlertCircle size={48} className="mx-auto text-gray-400 mb-4" />
-          <h2 className="text-lg font-bold text-gray-700 mb-2">접근 권한 없음</h2>
-          <p className="text-gray-500 text-sm">자동매매 권한이 필요합니다.</p>
-        </div>
-      </div>
-    );
+  useEffect(() => {
+    // 마운트 후 바로 visible로 설정 (애니메이션 시작)
+    requestAnimationFrame(() => setIsVisible(true));
+    const timer = setTimeout(() => {
+      setIsVisible(false);
+      setTimeout(onClose, 300); // 애니메이션 완료 후 제거
+    }, 2700);
+    return () => clearTimeout(timer);
+  }, [onClose]);
+
+  const bgColor = type === 'success' ? 'bg-green-500' : type === 'error' ? 'bg-red-500' : 'bg-gray-700';
+  const icon = type === 'success' ? <CheckCircle2 size={18} /> : type === 'error' ? <XCircle size={18} /> : null;
+
+  return (
+    <div
+      className={`fixed top-4 left-1/2 -translate-x-1/2 z-50 ${bgColor} text-white px-4 py-3 rounded-lg shadow-lg flex items-center gap-2 transition-all duration-300 ${
+        isVisible ? 'opacity-100 translate-y-0' : 'opacity-0 -translate-y-4'
+      }`}
+    >
+      {icon}
+      <span className="text-sm font-medium">{message}</span>
+    </div>
+  );
+}
+
+// 호가 단위 계산 함수
+const getTickSize = (price) => {
+  if (price < 1000) return 1;
+  if (price < 5000) return 5;
+  if (price < 10000) return 10;
+  if (price < 50000) return 50;
+  if (price < 100000) return 100;
+  if (price < 500000) return 500;
+  return 1000;
+};
+
+// 호가 단위로 반올림/내림
+const roundToTick = (price, roundDown = true) => {
+  const tick = getTickSize(price);
+  if (roundDown) {
+    return Math.floor(price / tick) * tick;
   }
+  return Math.ceil(price / tick) * tick;
+};
 
-  // 매수 제안 목록 조회
-  const { data: buySuggestions, isLoading: buyLoading, refetch: refetchBuy, isFetching: buyFetching } = useQuery({
-    queryKey: ['autoTradeSuggestions', 'buy', filter],
-    queryFn: () => autoTradeAPI.suggestions(filter).then((res) => res.data),
-    staleTime: 1000 * 30,
-    refetchOnWindowFocus: true,
-  });
+// 개별 제안 카드 컴포넌트
+function SuggestionCard({ suggestion, activeTab, onApprove, onReject, isApproving, isRejecting, isRemoving }) {
+  const navigate = useNavigate();
+  const isBuy = activeTab === 'buy';
+  const isPending = suggestion.status === 'pending';
 
-  // 매도 제안 목록 조회
-  const { data: sellSuggestions, isLoading: sellLoading, refetch: refetchSell, isFetching: sellFetching } = useQuery({
-    queryKey: ['autoTradeSuggestions', 'sell', filter],
-    queryFn: () => autoTradeAPI.sellSuggestions(filter).then((res) => res.data),
-    staleTime: 1000 * 30,
-    refetchOnWindowFocus: true,
-  });
+  // 가격 관련 상태
+  const suggestedPrice = suggestion.suggested_price || 0;
+  const currentPrice = suggestion.current_price || suggestedPrice;
 
-  // 매수 승인
-  const approveBuyMutation = useMutation({
-    mutationFn: (id) => autoTradeAPI.approveSuggestion(id),
-    onSuccess: () => {
-      queryClient.invalidateQueries(['autoTradeSuggestions']);
-      queryClient.invalidateQueries(['autoTradeStatus']);
-    },
-    onError: (error) => {
-      alert(error.response?.data?.detail || '승인 처리에 실패했습니다.');
-    },
-  });
+  // 매수: 제안가 ~ 현재가, 매도: 현재가 ~ 현재가+10%
+  const minPrice = isBuy ? suggestedPrice : currentPrice;
+  const maxPrice = isBuy ? currentPrice : Math.round(currentPrice * 1.1);
 
-  // 매수 거부
-  const rejectBuyMutation = useMutation({
-    mutationFn: (id) => autoTradeAPI.rejectSuggestion(id),
-    onSuccess: () => {
-      queryClient.invalidateQueries(['autoTradeSuggestions']);
-      queryClient.invalidateQueries(['autoTradeStatus']);
-    },
-    onError: (error) => {
-      alert(error.response?.data?.detail || '거부 처리에 실패했습니다.');
-    },
-  });
+  const [selectedPrice, setSelectedPrice] = useState(
+    isBuy ? suggestedPrice : currentPrice
+  );
+  const [isMarketOrder, setIsMarketOrder] = useState(false);
 
-  // 매도 승인
-  const approveSellMutation = useMutation({
-    mutationFn: (id) => autoTradeAPI.approveSellSuggestion(id),
-    onSuccess: () => {
-      queryClient.invalidateQueries(['autoTradeSuggestions']);
-      queryClient.invalidateQueries(['autoTradeStatus']);
-    },
-    onError: (error) => {
-      alert(error.response?.data?.detail || '승인 처리에 실패했습니다.');
-    },
-  });
+  // 가격 범위가 동일한 경우 (슬라이더 비활성화)
+  const priceRangeEqual = minPrice === maxPrice || minPrice <= 0 || maxPrice <= 0;
 
-  // 매도 거부
-  const rejectSellMutation = useMutation({
-    mutationFn: (id) => autoTradeAPI.rejectSellSuggestion(id),
-    onSuccess: () => {
-      queryClient.invalidateQueries(['autoTradeSuggestions']);
-      queryClient.invalidateQueries(['autoTradeStatus']);
-    },
-    onError: (error) => {
-      alert(error.response?.data?.detail || '거부 처리에 실패했습니다.');
-    },
-  });
+  // 슬라이더 값 변경 핸들러
+  const handleSliderChange = (e) => {
+    const value = parseInt(e.target.value);
+    setSelectedPrice(roundToTick(value, isBuy)); // 매수는 내림, 매도는 올림
+  };
 
-  const handleApprove = (id, stockName, isSell) => {
-    const action = isSell ? '매도' : '매수';
-    if (confirm(`${stockName} ${action}를 승인하시겠습니까?`)) {
-      if (isSell) {
-        approveSellMutation.mutate(id);
-      } else {
-        approveBuyMutation.mutate(id);
-      }
+  // 시장가 토글
+  const handleMarketOrderToggle = () => {
+    setIsMarketOrder(!isMarketOrder);
+  };
+
+  // 승인 핸들러
+  const handleApproveClick = () => {
+    const action = isBuy ? '매수' : '매도';
+    const priceText = isMarketOrder
+      ? '시장가'
+      : `${selectedPrice.toLocaleString()}원`;
+    const quantity = suggestion.quantity;
+    const totalAmount = isMarketOrder
+      ? currentPrice * quantity
+      : selectedPrice * quantity;
+
+    if (
+      confirm(
+        `${suggestion.stock_name} ${action}를 승인하시겠습니까?\n\n` +
+          `주문 유형: ${priceText}\n` +
+          `수량: ${quantity}주\n` +
+          `예상 금액: ${totalAmount.toLocaleString()}원`
+      )
+    ) {
+      onApprove(suggestion.id, {
+        custom_price: isMarketOrder ? null : selectedPrice,
+        is_market_order: isMarketOrder,
+      }, suggestion.stock_name);
     }
   };
 
-  const handleReject = (id, stockName, isSell) => {
-    const action = isSell ? '매도' : '매수';
-    if (confirm(`${stockName} ${action}를 거부하시겠습니까?`)) {
-      if (isSell) {
-        rejectSellMutation.mutate(id);
-      } else {
-        rejectBuyMutation.mutate(id);
-      }
+  // 거부 핸들러
+  const handleRejectClick = () => {
+    const action = isBuy ? '매수' : '매도';
+    if (confirm(`${suggestion.stock_name} ${action}를 거부하시겠습니까?`)) {
+      onReject(suggestion.id, suggestion.stock_name);
     }
   };
 
@@ -168,6 +179,405 @@ export default function AutoTradeSuggestions() {
     }
   };
 
+  // 가격 차이 퍼센트
+  const priceDiff = currentPrice > 0 ? ((currentPrice - suggestedPrice) / suggestedPrice * 100).toFixed(1) : 0;
+  const priceDiffPositive = parseFloat(priceDiff) >= 0;
+
+  return (
+    <div
+      className={`bg-white rounded-xl p-4 shadow-sm transition-all duration-300 ${
+        isRemoving ? 'opacity-0 scale-95 -translate-x-full' : 'opacity-100 scale-100'
+      }`}
+    >
+      {/* 헤더 */}
+      <div className="flex items-start justify-between mb-3">
+        <div
+          className="flex-1 cursor-pointer"
+          onClick={() => navigate(`/stock/${suggestion.stock_code}`)}
+        >
+          <div className="flex items-center gap-2">
+            <span
+              className={`text-xs px-2 py-0.5 rounded font-medium ${
+                isBuy ? 'bg-red-100 text-red-600' : 'bg-blue-100 text-blue-600'
+              }`}
+            >
+              {isBuy ? '매수' : '매도'}
+            </span>
+            <p className="font-bold text-gray-800">
+              {suggestion.stock_name || suggestion.stock_code}
+            </p>
+            {suggestion.score && suggestion.score >= 80 && (
+              <Star size={14} className="text-yellow-500 fill-yellow-500" />
+            )}
+          </div>
+          <p className="text-xs text-gray-500">{suggestion.stock_code}</p>
+        </div>
+        {getStatusBadge(suggestion.status)}
+      </div>
+
+      {/* 가격 정보 (제안가 / 현재가) */}
+      <div className="grid grid-cols-2 gap-2 mb-3 bg-gray-50 rounded-lg p-3">
+        <div>
+          <p className="text-xs text-gray-500">제안 가격</p>
+          <p className="font-bold text-gray-800">
+            {suggestedPrice.toLocaleString()}원
+          </p>
+        </div>
+        <div>
+          <p className="text-xs text-gray-500">현재가</p>
+          <p className={`font-bold ${
+            suggestion.change_rate > 0 ? 'text-red-600' : suggestion.change_rate < 0 ? 'text-blue-600' : 'text-gray-800'
+          }`}>
+            {currentPrice.toLocaleString()}원
+          </p>
+          {suggestion.change_rate !== null && suggestion.change_rate !== undefined && (
+            <p className={`text-xs ${
+              suggestion.change_rate > 0 ? 'text-red-500' : suggestion.change_rate < 0 ? 'text-blue-500' : 'text-gray-400'
+            }`}>
+              {suggestion.change_rate > 0 ? '+' : ''}{suggestion.change_rate.toFixed(1)}%
+            </p>
+          )}
+        </div>
+      </div>
+
+      {/* 수량 / AI점수(매수) 또는 수익률(매도) */}
+      <div className="grid grid-cols-2 gap-2 mb-3 bg-gray-50 rounded-lg p-3">
+        <div>
+          <p className="text-xs text-gray-500">수량</p>
+          <p className="font-bold text-gray-800">{suggestion.quantity}주</p>
+        </div>
+        <div>
+          <p className="text-xs text-gray-500">
+            {isBuy ? 'AI 점수' : '수익률'}
+          </p>
+          {isBuy ? (
+            <p
+              className={`font-bold ${
+                (suggestion.score || 0) >= 80
+                  ? 'text-green-600'
+                  : (suggestion.score || 0) >= 60
+                  ? 'text-yellow-600'
+                  : 'text-gray-600'
+              }`}
+            >
+              {suggestion.score || '-'}점
+            </p>
+          ) : (
+            <p
+              className={`font-bold ${
+                (suggestion.profit_rate || 0) >= 0 ? 'text-red-600' : 'text-blue-600'
+              }`}
+            >
+              {(suggestion.profit_rate || 0) >= 0 ? '+' : ''}
+              {suggestion.profit_rate?.toFixed(2) || 0}%
+            </p>
+          )}
+        </div>
+      </div>
+
+      {/* 제안 사유 */}
+      {suggestion.reason && (
+        <div className="mb-3">
+          <p className="text-xs text-gray-500 mb-1">제안 사유</p>
+          <p
+            className={`text-sm p-2 rounded-lg ${
+              isBuy ? 'text-gray-700 bg-blue-50' : 'text-gray-700 bg-orange-50'
+            }`}
+          >
+            {suggestion.reason}
+          </p>
+        </div>
+      )}
+
+      {/* 주문 가격 설정 (대기중일 때만) */}
+      {isPending && (
+        <div className="mb-3 p-3 bg-purple-50 rounded-lg border border-purple-200">
+          <div className="flex items-center justify-between mb-2">
+            <p className="text-sm font-medium text-purple-700">주문 가격 설정</p>
+            <label className="flex items-center gap-2 cursor-pointer">
+              <span className="text-xs text-purple-600">시장가</span>
+              <div
+                onClick={handleMarketOrderToggle}
+                className={`relative w-10 h-5 rounded-full transition-colors ${
+                  isMarketOrder ? 'bg-purple-600' : 'bg-gray-300'
+                }`}
+              >
+                <div
+                  className={`absolute top-0.5 w-4 h-4 rounded-full bg-white transition-transform ${
+                    isMarketOrder ? 'translate-x-5' : 'translate-x-0.5'
+                  }`}
+                />
+              </div>
+            </label>
+          </div>
+
+          {!isMarketOrder && (
+            <>
+              {/* 가격 슬라이더 */}
+              <div className="mb-2">
+                <input
+                  type="range"
+                  min={minPrice}
+                  max={maxPrice}
+                  value={selectedPrice}
+                  onChange={handleSliderChange}
+                  disabled={priceRangeEqual}
+                  className="w-full h-2 bg-purple-200 rounded-lg appearance-none cursor-pointer accent-purple-600 disabled:opacity-50"
+                />
+                <div className="flex justify-between text-xs text-gray-500 mt-1">
+                  <span>{minPrice.toLocaleString()}원</span>
+                  <span>{maxPrice.toLocaleString()}원</span>
+                </div>
+              </div>
+
+              {/* 선택된 가격 표시 */}
+              <div className="flex items-center justify-between">
+                <span className="text-sm text-purple-700">주문 가격:</span>
+                <span className="text-lg font-bold text-purple-800">
+                  {selectedPrice.toLocaleString()}원
+                </span>
+              </div>
+            </>
+          )}
+
+          {isMarketOrder && (
+            <div className="flex items-center gap-2 text-sm text-purple-700">
+              <Zap size={16} className="text-yellow-500" />
+              <span>시장가로 즉시 체결됩니다</span>
+            </div>
+          )}
+
+          {/* 예상 금액 */}
+          <div className="mt-2 pt-2 border-t border-purple-200 flex items-center justify-between">
+            <span className="text-xs text-purple-600">예상 체결금액:</span>
+            <span className="text-sm font-medium text-purple-800">
+              {(
+                (isMarketOrder ? currentPrice : selectedPrice) * suggestion.quantity
+              ).toLocaleString()}
+              원
+            </span>
+          </div>
+        </div>
+      )}
+
+      {/* 제안 시간 */}
+      <div className="flex items-center justify-between text-xs text-gray-500 mb-3">
+        <span>제안 시간: {suggestion.created_at}</span>
+      </div>
+
+      {/* 승인/거부 버튼 (대기중일 때만) */}
+      {isPending && (
+        <div className="flex gap-2">
+          <button
+            onClick={handleApproveClick}
+            disabled={isApproving}
+            className={`flex-1 flex items-center justify-center gap-2 text-white py-2 rounded-lg font-medium hover:opacity-90 disabled:opacity-50 transition-colors ${
+              isBuy ? 'bg-red-500' : 'bg-blue-500'
+            }`}
+          >
+            <Check size={18} />
+            {isBuy ? '매수 승인' : '매도 승인'}
+          </button>
+          <button
+            onClick={handleRejectClick}
+            disabled={isRejecting}
+            className="flex-1 flex items-center justify-center gap-2 bg-gray-500 text-white py-2 rounded-lg font-medium hover:bg-gray-600 disabled:opacity-50 transition-colors"
+          >
+            <X size={18} />
+            거부
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+export default function AutoTradeSuggestions() {
+  const navigate = useNavigate();
+  const { user } = useAuth();
+  const queryClient = useQueryClient();
+  const [activeTab, setActiveTab] = useState('buy'); // buy, sell
+  const [filter, setFilter] = useState('pending');
+  const [toast, setToast] = useState(null);
+  const [removingIds, setRemovingIds] = useState(new Set());
+
+  const showToast = useCallback((message, type = 'success') => {
+    setToast({ message, type });
+  }, []);
+
+  const hideToast = useCallback(() => {
+    setToast(null);
+  }, []);
+
+  // 자동매매 권한 체크
+  if (!user?.auto_trade_enabled) {
+    return (
+      <div className="min-h-[60vh] flex items-center justify-center">
+        <div className="text-center">
+          <AlertCircle size={48} className="mx-auto text-gray-400 mb-4" />
+          <h2 className="text-lg font-bold text-gray-700 mb-2">접근 권한 없음</h2>
+          <p className="text-gray-500 text-sm">자동매매 권한이 필요합니다.</p>
+        </div>
+      </div>
+    );
+  }
+
+  // 매수 제안 목록 조회
+  const {
+    data: buySuggestions,
+    isLoading: buyLoading,
+    refetch: refetchBuy,
+    isFetching: buyFetching,
+  } = useQuery({
+    queryKey: ['autoTradeSuggestions', 'buy', filter],
+    queryFn: () => autoTradeAPI.suggestions(filter).then((res) => res.data),
+    staleTime: 1000 * 30,
+    refetchOnWindowFocus: true,
+  });
+
+  // 매도 제안 목록 조회
+  const {
+    data: sellSuggestions,
+    isLoading: sellLoading,
+    refetch: refetchSell,
+    isFetching: sellFetching,
+  } = useQuery({
+    queryKey: ['autoTradeSuggestions', 'sell', filter],
+    queryFn: () => autoTradeAPI.sellSuggestions(filter).then((res) => res.data),
+    staleTime: 1000 * 30,
+    refetchOnWindowFocus: true,
+  });
+
+  // 매수 승인
+  const approveBuyMutation = useMutation({
+    mutationFn: ({ id, data, stockName }) => autoTradeAPI.approveSuggestion(id, data).then(res => ({ ...res, id, stockName })),
+    onMutate: ({ id }) => {
+      setRemovingIds(prev => new Set(prev).add(id));
+    },
+    onSuccess: (result) => {
+      showToast(`${result.stockName} 매수 주문이 접수되었습니다`, 'success');
+      setTimeout(() => {
+        refetchBuy();
+        queryClient.invalidateQueries(['autoTradeStatus']);
+        queryClient.invalidateQueries(['pendingOrders']);
+        setRemovingIds(prev => {
+          const next = new Set(prev);
+          next.delete(result.id);
+          return next;
+        });
+      }, 300);
+    },
+    onError: (error, variables) => {
+      setRemovingIds(prev => {
+        const next = new Set(prev);
+        next.delete(variables.id);
+        return next;
+      });
+      showToast(error.response?.data?.detail || '승인 처리에 실패했습니다.', 'error');
+    },
+  });
+
+  // 매수 거부
+  const rejectBuyMutation = useMutation({
+    mutationFn: ({ id, stockName }) => autoTradeAPI.rejectSuggestion(id).then(res => ({ ...res, id, stockName })),
+    onMutate: ({ id }) => {
+      setRemovingIds(prev => new Set(prev).add(id));
+    },
+    onSuccess: (result) => {
+      showToast(`${result.stockName} 제안을 거부했습니다`, 'success');
+      setTimeout(() => {
+        refetchBuy();
+        queryClient.invalidateQueries(['autoTradeStatus']);
+        setRemovingIds(prev => {
+          const next = new Set(prev);
+          next.delete(result.id);
+          return next;
+        });
+      }, 300);
+    },
+    onError: (error, variables) => {
+      setRemovingIds(prev => {
+        const next = new Set(prev);
+        next.delete(variables.id);
+        return next;
+      });
+      showToast(error.response?.data?.detail || '거부 처리에 실패했습니다.', 'error');
+    },
+  });
+
+  // 매도 승인
+  const approveSellMutation = useMutation({
+    mutationFn: ({ id, data, stockName }) => autoTradeAPI.approveSellSuggestion(id, data).then(res => ({ ...res, id, stockName })),
+    onMutate: ({ id }) => {
+      setRemovingIds(prev => new Set(prev).add(id));
+    },
+    onSuccess: (result) => {
+      showToast(`${result.stockName} 매도 주문이 접수되었습니다`, 'success');
+      setTimeout(() => {
+        refetchSell();
+        queryClient.invalidateQueries(['autoTradeStatus']);
+        queryClient.invalidateQueries(['pendingOrders']);
+        setRemovingIds(prev => {
+          const next = new Set(prev);
+          next.delete(result.id);
+          return next;
+        });
+      }, 300);
+    },
+    onError: (error, variables) => {
+      setRemovingIds(prev => {
+        const next = new Set(prev);
+        next.delete(variables.id);
+        return next;
+      });
+      showToast(error.response?.data?.detail || '승인 처리에 실패했습니다.', 'error');
+    },
+  });
+
+  // 매도 거부
+  const rejectSellMutation = useMutation({
+    mutationFn: ({ id, stockName }) => autoTradeAPI.rejectSellSuggestion(id).then(res => ({ ...res, id, stockName })),
+    onMutate: ({ id }) => {
+      setRemovingIds(prev => new Set(prev).add(id));
+    },
+    onSuccess: (result) => {
+      showToast(`${result.stockName} 제안을 거부했습니다`, 'success');
+      setTimeout(() => {
+        refetchSell();
+        queryClient.invalidateQueries(['autoTradeStatus']);
+        setRemovingIds(prev => {
+          const next = new Set(prev);
+          next.delete(result.id);
+          return next;
+        });
+      }, 300);
+    },
+    onError: (error, variables) => {
+      setRemovingIds(prev => {
+        const next = new Set(prev);
+        next.delete(variables.id);
+        return next;
+      });
+      showToast(error.response?.data?.detail || '거부 처리에 실패했습니다.', 'error');
+    },
+  });
+
+  const handleApprove = (id, data, isSell, stockName) => {
+    if (isSell) {
+      approveSellMutation.mutate({ id, data, stockName });
+    } else {
+      approveBuyMutation.mutate({ id, data, stockName });
+    }
+  };
+
+  const handleReject = (id, isSell, stockName) => {
+    if (isSell) {
+      rejectSellMutation.mutate({ id, stockName });
+    } else {
+      rejectBuyMutation.mutate({ id, stockName });
+    }
+  };
+
   const isLoading = activeTab === 'buy' ? buyLoading : sellLoading;
   const isFetching = activeTab === 'buy' ? buyFetching : sellFetching;
   const suggestions = activeTab === 'buy' ? buySuggestions : sellSuggestions;
@@ -177,15 +587,20 @@ export default function AutoTradeSuggestions() {
 
   const filters = [
     { value: 'pending', label: '대기중' },
-    { value: 'approved', label: '승인됨' },
+    { value: 'executed', label: '체결됨' },
     { value: 'all', label: '전체' },
   ];
 
-  const buyPendingCount = buySuggestions?.filter(s => s.status === 'pending')?.length || 0;
-  const sellPendingCount = sellSuggestions?.filter(s => s.status === 'pending')?.length || 0;
+  const buyPendingCount =
+    buySuggestions?.filter((s) => s.status === 'pending')?.length || 0;
+  const sellPendingCount =
+    sellSuggestions?.filter((s) => s.status === 'pending')?.length || 0;
 
   return (
     <div className="max-w-md mx-auto space-y-4">
+      {/* 토스트 알림 */}
+      {toast && <Toast message={toast.message} type={toast.type} onClose={hideToast} />}
+
       {/* 매수/매도 탭 */}
       <div className="flex gap-2 bg-white rounded-xl p-2 shadow-sm">
         <button
@@ -199,9 +614,11 @@ export default function AutoTradeSuggestions() {
           <ShoppingCart size={18} />
           매수 제안
           {buyPendingCount > 0 && (
-            <span className={`text-xs px-1.5 py-0.5 rounded-full ${
-              activeTab === 'buy' ? 'bg-white/20' : 'bg-red-100 text-red-600'
-            }`}>
+            <span
+              className={`text-xs px-1.5 py-0.5 rounded-full ${
+                activeTab === 'buy' ? 'bg-white/20' : 'bg-red-100 text-red-600'
+              }`}
+            >
               {buyPendingCount}
             </span>
           )}
@@ -217,9 +634,11 @@ export default function AutoTradeSuggestions() {
           <Banknote size={18} />
           매도 제안
           {sellPendingCount > 0 && (
-            <span className={`text-xs px-1.5 py-0.5 rounded-full ${
-              activeTab === 'sell' ? 'bg-white/20' : 'bg-blue-100 text-blue-600'
-            }`}>
+            <span
+              className={`text-xs px-1.5 py-0.5 rounded-full ${
+                activeTab === 'sell' ? 'bg-white/20' : 'bg-blue-100 text-blue-600'
+              }`}
+            >
               {sellPendingCount}
             </span>
           )}
@@ -254,120 +673,24 @@ export default function AutoTradeSuggestions() {
       {suggestions?.length > 0 ? (
         <div className="space-y-3">
           {suggestions.map((suggestion) => (
-            <div
+            <SuggestionCard
               key={suggestion.id}
-              className="bg-white rounded-xl p-4 shadow-sm"
-            >
-              {/* 헤더 */}
-              <div className="flex items-start justify-between mb-3">
-                <div
-                  className="flex-1 cursor-pointer"
-                  onClick={() => navigate(`/stock/${suggestion.stock_code}`)}
-                >
-                  <div className="flex items-center gap-2">
-                    <span className={`text-xs px-2 py-0.5 rounded font-medium ${
-                      activeTab === 'buy' ? 'bg-red-100 text-red-600' : 'bg-blue-100 text-blue-600'
-                    }`}>
-                      {activeTab === 'buy' ? '매수' : '매도'}
-                    </span>
-                    <p className="font-bold text-gray-800">
-                      {suggestion.stock_name || suggestion.stock_code}
-                    </p>
-                    {suggestion.score && suggestion.score >= 80 && (
-                      <Star size={14} className="text-yellow-500 fill-yellow-500" />
-                    )}
-                  </div>
-                  <p className="text-xs text-gray-500">{suggestion.stock_code}</p>
-                </div>
-                {getStatusBadge(suggestion.status)}
-              </div>
-
-              {/* 정보 */}
-              <div className="grid grid-cols-3 gap-2 mb-3 bg-gray-50 rounded-lg p-3">
-                <div>
-                  <p className="text-xs text-gray-500">제안 가격</p>
-                  <p className="font-bold text-gray-800">
-                    {suggestion.suggested_price?.toLocaleString()}원
-                  </p>
-                </div>
-                <div>
-                  <p className="text-xs text-gray-500">수량</p>
-                  <p className="font-bold text-gray-800">{suggestion.quantity}주</p>
-                </div>
-                <div>
-                  <p className="text-xs text-gray-500">
-                    {activeTab === 'buy' ? 'AI 점수' : '수익률'}
-                  </p>
-                  {activeTab === 'buy' ? (
-                    <p
-                      className={`font-bold ${
-                        (suggestion.score || 0) >= 80
-                          ? 'text-green-600'
-                          : (suggestion.score || 0) >= 60
-                          ? 'text-yellow-600'
-                          : 'text-gray-600'
-                      }`}
-                    >
-                      {suggestion.score || '-'}점
-                    </p>
-                  ) : (
-                    <p
-                      className={`font-bold ${
-                        (suggestion.profit_rate || 0) >= 0 ? 'text-red-600' : 'text-blue-600'
-                      }`}
-                    >
-                      {(suggestion.profit_rate || 0) >= 0 ? '+' : ''}
-                      {suggestion.profit_rate?.toFixed(2) || 0}%
-                    </p>
-                  )}
-                </div>
-              </div>
-
-              {/* 제안 사유 */}
-              {suggestion.reason && (
-                <div className="mb-3">
-                  <p className="text-xs text-gray-500 mb-1">제안 사유</p>
-                  <p className={`text-sm p-2 rounded-lg ${
-                    activeTab === 'buy' ? 'text-gray-700 bg-blue-50' : 'text-gray-700 bg-orange-50'
-                  }`}>
-                    {suggestion.reason}
-                  </p>
-                </div>
-              )}
-
-              {/* 제안 시간 */}
-              <div className="flex items-center justify-between text-xs text-gray-500 mb-3">
-                <span>제안 시간: {suggestion.created_at}</span>
-                <span>
-                  예상 금액:{' '}
-                  {(suggestion.suggested_price * suggestion.quantity)?.toLocaleString()}원
-                </span>
-              </div>
-
-              {/* 승인/거부 버튼 (대기중일 때만) */}
-              {suggestion.status === 'pending' && (
-                <div className="flex gap-2">
-                  <button
-                    onClick={() => handleApprove(suggestion.id, suggestion.stock_name, activeTab === 'sell')}
-                    disabled={approveBuyMutation.isLoading || approveSellMutation.isLoading}
-                    className={`flex-1 flex items-center justify-center gap-2 text-white py-2 rounded-lg font-medium hover:opacity-90 disabled:opacity-50 transition-colors ${
-                      activeTab === 'buy' ? 'bg-red-500' : 'bg-blue-500'
-                    }`}
-                  >
-                    <Check size={18} />
-                    {activeTab === 'buy' ? '매수 승인' : '매도 승인'}
-                  </button>
-                  <button
-                    onClick={() => handleReject(suggestion.id, suggestion.stock_name, activeTab === 'sell')}
-                    disabled={rejectBuyMutation.isLoading || rejectSellMutation.isLoading}
-                    className="flex-1 flex items-center justify-center gap-2 bg-gray-500 text-white py-2 rounded-lg font-medium hover:bg-gray-600 disabled:opacity-50 transition-colors"
-                  >
-                    <X size={18} />
-                    거부
-                  </button>
-                </div>
-              )}
-            </div>
+              suggestion={suggestion}
+              activeTab={activeTab}
+              onApprove={(id, data, stockName) => handleApprove(id, data, activeTab === 'sell', stockName)}
+              onReject={(id, stockName) => handleReject(id, activeTab === 'sell', stockName)}
+              isApproving={
+                activeTab === 'buy'
+                  ? approveBuyMutation.isPending
+                  : approveSellMutation.isPending
+              }
+              isRejecting={
+                activeTab === 'buy'
+                  ? rejectBuyMutation.isPending
+                  : rejectSellMutation.isPending
+              }
+              isRemoving={removingIds.has(suggestion.id)}
+            />
           ))}
         </div>
       ) : (
@@ -393,31 +716,43 @@ export default function AutoTradeSuggestions() {
       )}
 
       {/* 안내 */}
-      <div className={`rounded-xl p-4 border ${
-        activeTab === 'buy' ? 'bg-blue-50 border-blue-200' : 'bg-orange-50 border-orange-200'
-      }`}>
+      <div
+        className={`rounded-xl p-4 border ${
+          activeTab === 'buy'
+            ? 'bg-blue-50 border-blue-200'
+            : 'bg-orange-50 border-orange-200'
+        }`}
+      >
         <div className="flex items-start gap-2">
           {activeTab === 'buy' ? (
             <TrendingUp size={18} className="text-blue-600 mt-0.5" />
           ) : (
             <TrendingDown size={18} className="text-orange-600 mt-0.5" />
           )}
-          <div className={`text-sm ${activeTab === 'buy' ? 'text-blue-700' : 'text-orange-700'}`}>
+          <div
+            className={`text-sm ${
+              activeTab === 'buy' ? 'text-blue-700' : 'text-orange-700'
+            }`}
+          >
             <p className="font-medium mb-1">
               {activeTab === 'buy' ? '매수 제안 안내' : '매도 제안 안내'}
             </p>
-            <ul className={`space-y-1 ${activeTab === 'buy' ? 'text-blue-600' : 'text-orange-600'}`}>
+            <ul
+              className={`space-y-1 ${
+                activeTab === 'buy' ? 'text-blue-600' : 'text-orange-600'
+              }`}
+            >
               {activeTab === 'buy' ? (
                 <>
-                  <li>• AI 점수가 높을수록 좋은 매수 기회입니다</li>
-                  <li>• 승인 시 지정 가격으로 매수 주문이 실행됩니다</li>
-                  <li>• 제안은 당일 장 종료 시 자동 만료됩니다</li>
+                  <li>슬라이더로 주문 가격을 조정할 수 있습니다</li>
+                  <li>시장가 옵션을 켜면 즉시 체결됩니다</li>
+                  <li>제안은 당일 장 종료 시 자동 만료됩니다</li>
                 </>
               ) : (
                 <>
-                  <li>• 익절/손절 조건 충족 시 매도 제안이 생성됩니다</li>
-                  <li>• 승인 시 시장가로 매도 주문이 실행됩니다</li>
-                  <li>• 보유 종목의 수익률을 확인 후 결정하세요</li>
+                  <li>현재가 이상으로 지정가 주문이 가능합니다</li>
+                  <li>시장가 옵션을 켜면 즉시 체결됩니다</li>
+                  <li>수익률을 확인 후 신중하게 결정하세요</li>
                 </>
               )}
             </ul>
