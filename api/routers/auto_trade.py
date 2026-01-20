@@ -703,10 +703,10 @@ async def get_performance(
                 else:
                     total_evaluation = sum(h.get('eval_amount', 0) for h in holdings)
 
-                # 최대매수가능금액 (가용자금)
-                max_buy_amt = summary.get('max_buy_amt', 0)
+                # D+2 예수금 (계좌현황과 동일하게 사용)
+                d2_cash_balance = summary.get('d2_cash_balance', 0) or summary.get('cash_balance', 0)
 
-                current_total_asset = total_evaluation + max_buy_amt
+                current_total_asset = total_evaluation + d2_cash_balance
 
                 # 초기투자금 기준 총수익 계산
                 if initial_investment > 0:
@@ -1098,6 +1098,7 @@ class ApproveRequest(BaseModel):
     """승인 요청 (선택적 매개변수)"""
     custom_price: Optional[int] = None  # 사용자 지정 가격 (지정가 주문 시)
     is_market_order: bool = False  # True: 시장가, False: 지정가
+    force_adjusted: bool = False  # True: 조정된 수량으로 강제 주문
 
 
 @router.post("/suggestions/{suggestion_id}/approve")
@@ -1173,6 +1174,30 @@ async def approve_suggestion(
         quantity = investment_per_stock // price_for_calc if price_for_calc > 0 else 1
         quantity = max(1, quantity)
 
+        # 주문 금액이 주문가능금액 초과 시 조정된 수량 제안
+        order_amount = quantity * price_for_calc
+        if order_amount > max_buy_amt and max_buy_amt > 0:
+            adjusted_quantity = max_buy_amt // price_for_calc
+            if adjusted_quantity <= 0:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=f"주문가능금액({max_buy_amt:,}원)이 1주 가격({price_for_calc:,}원)보다 적습니다."
+                )
+            # 조정된 수량으로 주문할지 확인 요청
+            if not (request and request.force_adjusted):
+                return {
+                    "status": "need_adjustment",
+                    "message": f"주문가능금액 초과",
+                    "original_quantity": quantity,
+                    "adjusted_quantity": adjusted_quantity,
+                    "price": price_for_calc,
+                    "original_amount": order_amount,
+                    "adjusted_amount": adjusted_quantity * price_for_calc,
+                    "max_buy_amt": max_buy_amt
+                }
+            # force_adjusted=True면 조정된 수량으로 진행
+            quantity = adjusted_quantity
+
         # 주문 실행
         stock_code = suggestion.get('stock_code')
         result = client.place_order(
@@ -1210,9 +1235,10 @@ async def approve_suggestion(
                 "price": order_price
             }
         else:
+            error_msg = result.get('message', '알 수 없는 오류') if result else '주문 응답 없음'
             raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail=f"주문 실행 실패: {result.get('message', '알 수 없는 오류')}"
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"주문 실패: {error_msg}"
             )
 
     except HTTPException:
@@ -1220,8 +1246,15 @@ async def approve_suggestion(
     except Exception as e:
         import traceback
         traceback.print_exc()
+        error_str = str(e)
+        # KIS API 에러 메시지 추출
+        if '주문가능금액' in error_str or '잔액' in error_str or '부족' in error_str:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"잔액 부족: {error_str}"
+            )
         raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            status_code=status.HTTP_400_BAD_REQUEST,
             detail=f"주문 실행 중 오류: {str(e)}"
         )
 
@@ -1272,12 +1305,13 @@ async def get_sell_suggestions(
     if not api_key_data:
         return []
 
+    user_id = current_user.get('id')
     if status == 'pending':
-        suggestions_raw = logger.get_pending_sell_suggestions()
+        suggestions_raw = logger.get_pending_sell_suggestions(user_id)
     elif status == 'approved':
-        suggestions_raw = logger.get_approved_sell_suggestions()
+        suggestions_raw = logger.get_approved_sell_suggestions(user_id)
     else:
-        suggestions_raw = logger.get_pending_sell_suggestions() + logger.get_approved_sell_suggestions()
+        suggestions_raw = logger.get_pending_sell_suggestions(user_id) + logger.get_approved_sell_suggestions(user_id)
 
     # 현재가/등락률 조회
     import asyncio

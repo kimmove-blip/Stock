@@ -59,67 +59,61 @@ def round_to_tick(price: int, round_down: bool = True) -> int:
 
 
 class TelegramNotifier:
-    """텔레그램 + 푸시 알림 발송"""
+    """푸시 알림 발송 (텔레그램 제거됨)"""
 
-    def __init__(self, bot_token: str, chat_id: str, enabled: bool = True, user_id: int = None):
-        self.bot_token = bot_token
-        self.chat_id = chat_id
+    def __init__(self, enabled: bool = True, user_id: int = None, **kwargs):
+        # kwargs로 이전 호환성 유지 (bot_token, chat_id는 무시)
         self.enabled = enabled
         self.user_id = user_id  # 푸시 알림용
 
-    def send(self, message: str):
-        """메시지 발송"""
-        if not self.enabled:
+    def _save_to_db(self, stock_code: str, stock_name: str, alert_type: str, message: str):
+        """알림 기록을 DB에 저장"""
+        if not self.user_id:
             return
-
         try:
-            import requests
-            url = f"https://api.telegram.org/bot{self.bot_token}/sendMessage"
-            data = {"chat_id": self.chat_id, "text": message, "parse_mode": "HTML"}
-            requests.post(url, data=data, timeout=10)
+            from database.db_manager import DatabaseManager
+            db = DatabaseManager()
+            with db.get_connection() as conn:
+                conn.execute("""
+                    INSERT INTO alert_history (user_id, stock_code, stock_name, alert_type, message)
+                    VALUES (?, ?, ?, ?, ?)
+                """, (self.user_id, stock_code, stock_name, alert_type, message))
+                conn.commit()
         except Exception as e:
-            print(f"텔레그램 발송 실패: {e}")
+            print(f"알림 기록 저장 실패: {e}")
 
-    def notify_buy(self, stock_name: str, price: int, quantity: int):
+    def notify_buy(self, stock_name: str, price: int, quantity: int, stock_code: str = None):
         """매수 체결 알림"""
-        msg = f"<b>[매수 체결]</b>\n{stock_name}\n{price:,}원 x {quantity}주"
-        self.send(msg)
+        self._save_to_db(stock_code or "", stock_name, "매수 체결", f"{price:,}원 x {quantity}주")
+        self.send_push("매수 체결", f"{stock_name} {price:,}원 x {quantity}주", f"/stock/{stock_code}" if stock_code else None)
 
-    def notify_sell(self, stock_name: str, price: int, quantity: int, profit_rate: float, reason: str):
+    def notify_sell(self, stock_name: str, price: int, quantity: int, profit_rate: float, reason: str, stock_code: str = None):
         """매도 체결 알림"""
-        emoji = "" if profit_rate >= 0 else ""
         rate_str = f"+{profit_rate*100:.1f}%" if profit_rate >= 0 else f"{profit_rate*100:.1f}%"
-        msg = f"<b>{emoji} [매도 체결]</b>\n{stock_name}\n{price:,}원 ({rate_str})\n사유: {reason}"
-        self.send(msg)
+        self._save_to_db(stock_code or "", stock_name, "매도 체결", f"{price:,}원 ({rate_str}) - {reason}")
+        self.send_push("매도 체결", f"{stock_name} {price:,}원 ({rate_str})", f"/stock/{stock_code}" if stock_code else None)
 
-    def notify_stop_loss(self, stock_name: str, price: int, profit_rate: float):
+    def notify_stop_loss(self, stock_name: str, price: int, profit_rate: float, stock_code: str = None):
         """손절 알림"""
-        msg = f"<b>[손절]</b>\n{stock_name}\n{price:,}원 ({profit_rate*100:.1f}%)"
-        self.send(msg)
+        self._save_to_db(stock_code or "", stock_name, "손절", f"{price:,}원 ({profit_rate*100:.1f}%)")
+        self.send_push("손절", f"{stock_name} {price:,}원 ({profit_rate*100:.1f}%)", f"/stock/{stock_code}" if stock_code else None)
 
-    def notify_signal(self, stock_name: str, signals: List[str]):
+    def notify_signal(self, stock_name: str, signals: List[str], stock_code: str = None):
         """매도 신호 알림"""
         signals_kr = [SIGNAL_NAMES_KR.get(s, s) for s in signals]
-        msg = f"<b>[매도 신호]</b>\n{stock_name}\n{', '.join(signals_kr)}"
-        self.send(msg)
+        self._save_to_db(stock_code or "", stock_name, "매도 신호", ', '.join(signals_kr))
+        self.send_push("매도 신호", f"{stock_name}: {', '.join(signals_kr[:2])}", f"/stock/{stock_code}" if stock_code else None)
 
     def notify_summary(self, buy_count: int, sell_count: int, total_profit: int):
         """일일 요약 알림 (체결 없으면 생략)"""
         if buy_count == 0 and sell_count == 0:
             return  # 체결 없으면 알림 안 보냄
-
-        msg = (
-            f"<b>[자동매매 완료]</b>\n"
-            f"매수: {buy_count}건\n"
-            f"매도: {sell_count}건\n"
-            f"일일 손익: {total_profit:+,}원"
-        )
-        self.send(msg)
+        self._save_to_db("", "자동매매", "일일 요약", f"매수 {buy_count}건, 매도 {sell_count}건, 손익 {total_profit:+,}원")
+        self.send_push("자동매매 완료", f"매수 {buy_count}건, 매도 {sell_count}건, 손익 {total_profit:+,}원")
 
     def notify_error(self, error_msg: str):
-        """오류 알림"""
-        msg = f"<b>[오류]</b>\n{error_msg}"
-        self.send(msg)
+        """오류 알림 (DB 저장 안 함)"""
+        pass  # 오류 알림은 제거
 
     def send_push(self, title: str, body: str, url: str = None):
         """앱 푸시 알림 전송"""
@@ -147,32 +141,12 @@ class TelegramNotifier:
         expire_hours: int = 24
     ):
         """매수 제안 알림 (semi-auto 모드)"""
-        signals_kr = [SIGNAL_NAMES_KR.get(s, s) for s in signals[:4]]
+        signals_kr = [SIGNAL_NAMES_KR.get(s, s) for s in signals[:2]]
 
-        msg = f"""📊 <b>[매수 제안]</b> {stock_name} ({stock_code})
+        # DB 저장
+        self._save_to_db(stock_code, stock_name, "매수 제안", f"{score}점 | 추천가 {recommended_price:,}원")
 
-<b>분석 결과</b>
-• 점수: {score}점
-• 상승확률: {probability:.0f}%
-• 신뢰도: {confidence:.0f}%
-
-<b>가격 정보</b>
-• 현재가: {current_price:,}원
-• 추천 매수가: {recommended_price:,}원
-• 목표가: {target_price:,}원 (+{((target_price/recommended_price)-1)*100:.0f}%)
-• 손절가: {stop_loss_price:,}원 ({((stop_loss_price/recommended_price)-1)*100:.0f}%)
-
-<b>주요 신호</b>
-{chr(10).join(['  • ' + s for s in signals_kr])}
-
-<b>승인 방법</b>
-대시보드에서 승인/거부하세요.
-
-⏰ {expire_hours}시간 후 자동 만료"""
-
-        self.send(msg)
-
-        # 앱 푸시 알림도 전송
+        # 푸시 알림
         push_body = f"{stock_name} {score}점 | 추천가 {recommended_price:,}원"
         self.send_push(
             title="📊 매수 제안",
@@ -180,10 +154,10 @@ class TelegramNotifier:
             url=f"/stock/{stock_code}"
         )
 
-    def notify_suggestion_executed(self, stock_name: str, price: int, quantity: int):
+    def notify_suggestion_executed(self, stock_name: str, price: int, quantity: int, stock_code: str = None):
         """제안 매수 실행 알림"""
-        msg = f"<b>✅ [제안 매수 완료]</b>\n{stock_name}\n{price:,}원 x {quantity}주\n\n추천 매수가 도달로 자동 매수"
-        self.send(msg)
+        self._save_to_db(stock_code or "", stock_name, "제안 매수 완료", f"{price:,}원 x {quantity}주")
+        self.send_push("제안 매수 완료", f"{stock_name} {price:,}원 x {quantity}주", f"/stock/{stock_code}" if stock_code else None)
 
 
 class AutoTrader:
@@ -194,7 +168,7 @@ class AutoTrader:
         Args:
             dry_run: True면 주문을 실제로 실행하지 않음
             user_id: 사용자 ID (다중 사용자 지원)
-            user_config: 사용자별 설정 (API 키, 텔레그램 등)
+            user_config: 사용자별 설정 (API 키 등)
         """
         self.dry_run = dry_run
         self.user_id = user_id
@@ -267,13 +241,10 @@ class AutoTrader:
         self.suggestion_manager = BuySuggestionManager(user_id=user_id)
         self.analyst = TechnicalAnalyst()
 
-        # 사용자별 텔레그램 + 푸시 설정
-        telegram_chat_id = self.user_config.get('telegram_chat_id') or TelegramConfig.CHAT_ID
+        # 푸시 알림 설정 (텔레그램 제거됨)
         self.notifier = TelegramNotifier(
-            bot_token=TelegramConfig.BOT_TOKEN,
-            user_id=user_id,  # 푸시 알림용
-            chat_id=telegram_chat_id,
-            enabled=self.config.TELEGRAM_NOTIFY and not dry_run
+            user_id=user_id,
+            enabled=not dry_run
         )
 
         # 모의투자 가상 잔고 초기화

@@ -8,7 +8,6 @@ import {
   LogOut,
   ChevronRight,
   Shield,
-  MessageCircle,
   Bell,
   BellRing,
   FileText,
@@ -72,7 +71,7 @@ export default function Settings() {
     }
   };
 
-  // 개인정보 설정 메뉴 (관리자, 개인정보처리방침, 데이터삭제, 회원탈퇴)
+  // 개인정보 설정 메뉴 (관리자, 개인정보처리방침, 데이터삭제)
   const privacyItems = [
     // 관리자만 보이도록
     ...(user?.is_admin ? [{
@@ -89,12 +88,6 @@ export default function Settings() {
       icon: Trash2,
       label: '데이터 삭제',
       action: () => navigate('/delete-data'),
-    },
-    {
-      icon: UserX,
-      label: '회원 탈퇴',
-      action: () => navigate('/delete-account'),
-      danger: true,
     },
   ];
 
@@ -144,21 +137,6 @@ export default function Settings() {
             <div className="text-left">
               <span className="text-gray-700 block">알림 기록</span>
               <span className="text-xs text-gray-400">받은 알림 확인하기</span>
-            </div>
-          </div>
-          <ChevronRight size={20} className="text-gray-400" />
-        </button>
-
-        {/* 텔레그램 알림 */}
-        <button
-          onClick={() => navigate('/telegram')}
-          className="w-full flex items-center justify-between p-4 hover:bg-gray-50 transition-colors border-b border-gray-100"
-        >
-          <div className="flex items-center gap-3">
-            <MessageCircle size={20} className="text-blue-500" />
-            <div className="text-left">
-              <span className="text-gray-700 block">텔레그램 알림</span>
-              <span className="text-xs text-gray-400">텔레그램으로 알림 받기</span>
             </div>
           </div>
           <ChevronRight size={20} className="text-gray-400" />
@@ -249,10 +227,19 @@ export default function Settings() {
       {/* 로그아웃 */}
       <button
         onClick={handleLogout}
-        className="w-full bg-white rounded-xl p-4 shadow-sm flex items-center gap-3 text-red-500 hover:bg-red-50 transition-colors"
+        className="w-full bg-white rounded-xl p-4 shadow-sm flex items-center gap-3 text-red-500 hover:bg-red-50 transition-colors mb-4"
       >
         <LogOut size={20} />
         <span>로그아웃</span>
+      </button>
+
+      {/* 회원 탈퇴 */}
+      <button
+        onClick={() => navigate('/delete-account')}
+        className="w-full bg-white rounded-xl p-4 shadow-sm flex items-center gap-3 text-gray-400 hover:bg-gray-50 transition-colors"
+      >
+        <UserX size={20} />
+        <span>회원 탈퇴</span>
       </button>
 
       {/* 버전 정보 */}

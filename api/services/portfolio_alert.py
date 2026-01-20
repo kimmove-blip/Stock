@@ -1,7 +1,6 @@
 """
 포트폴리오 알림 서비스
 - 사용자 포트폴리오 상태 모니터링
-- 텔레그램 알림 발송
 - 푸시 알림 발송
 """
 
@@ -23,28 +22,6 @@ VAPID_EMAIL = os.getenv("VAPID_EMAIL", "mailto:admin@example.com")
 # 마지막 알림 상태 저장 (메모리)
 # {user_id: {stock_code: {'opinion': str, 'profit_loss_rate': float, 'last_alert': datetime}}}
 _last_status = {}
-
-
-def send_telegram_message(chat_id: str, message: str) -> bool:
-    """텔레그램 메시지 전송"""
-    import requests
-    from config import TelegramConfig
-
-    try:
-        api_url = f"https://api.telegram.org/bot{TelegramConfig.BOT_TOKEN}/sendMessage"
-        response = requests.post(
-            api_url,
-            data={
-                "chat_id": chat_id,
-                "text": message,
-                "parse_mode": "HTML"
-            },
-            timeout=10
-        )
-        return response.json().get("ok", False)
-    except Exception as e:
-        print(f"[텔레그램] 메시지 전송 실패: {e}")
-        return False
 
 
 def send_push_notification(subscription: dict, title: str, body: str, url: str = None) -> bool:
@@ -160,13 +137,12 @@ def check_portfolio_alerts():
     try:
         db = DatabaseManager()
 
-        # 알림 활성화된 사용자 조회 (텔레그램 또는 푸시)
+        # 푸시 알림 활성화된 사용자 조회
         with db.get_connection() as conn:
             users = conn.execute("""
-                SELECT id, username, telegram_chat_id, telegram_alerts_enabled, push_alerts_enabled
+                SELECT id, username, push_alerts_enabled
                 FROM users
-                WHERE (telegram_alerts_enabled = 1 AND telegram_chat_id IS NOT NULL)
-                   OR push_alerts_enabled = 1
+                WHERE push_alerts_enabled = 1
                 AND is_active = 1
             """).fetchall()
 
@@ -179,8 +155,6 @@ def check_portfolio_alerts():
         for user in users:
             user_id = user['id']
             username = user['username']
-            chat_id = user['telegram_chat_id']
-            telegram_enabled = user['telegram_alerts_enabled']
             push_enabled = user['push_alerts_enabled']
 
             # 사용자 포트폴리오 조회
@@ -275,32 +249,11 @@ def check_portfolio_alerts():
             # 알림 발송
             if alerts_to_send:
                 for alert in alerts_to_send:
-                    # 텔레그램 메시지 (HTML 형식)
-                    telegram_message = f"""<b>📊 포트폴리오 알림</b>
-
-<b>{alert['name']}</b> ({alert['code']})
-
-⚠️ <b>{alert['reason']}</b>
-
-• 현재가: {alert['current_price']:,}원
-• 수익률: {alert['profit_loss_rate']:+.2f}%
-• AI 점수: {alert['score']}점
-• 상태: {alert['opinion']}
-
-<i>※ 본 알림은 참고용이며, 투자 판단은 본인의 책임입니다.</i>"""
-
-                    # 푸시 알림용 간단 메시지
-                    push_title = f"📊 {alert['name']} - {alert['reason']}"
+                    # 푸시 알림용 메시지
+                    push_title = f"{alert['name']} - {alert['reason']}"
                     push_body = f"현재가: {alert['current_price']:,}원 | 수익률: {alert['profit_loss_rate']:+.2f}% | {alert['opinion']}"
 
-                    telegram_success = False
                     push_success = False
-
-                    # 텔레그램 알림 발송
-                    if telegram_enabled and chat_id:
-                        telegram_success = send_telegram_message(chat_id, telegram_message)
-                        if telegram_success:
-                            print(f"[텔레그램] 전송 성공: {username} - {alert['name']}")
 
                     # 푸시 알림 발송
                     if push_enabled:
@@ -312,13 +265,13 @@ def check_portfolio_alerts():
                             push_success = True
                             print(f"[푸시] 전송 성공: {username} - {alert['name']} ({push_count}개 기기)")
 
-                    # 알림 기록 저장 (하나라도 성공하면)
-                    if telegram_success or push_success:
+                    # 알림 기록 저장
+                    if push_success:
                         with db.get_connection() as conn:
                             conn.execute("""
-                                INSERT INTO alert_history (user_id, stock_code, alert_type, message)
-                                VALUES (?, ?, ?, ?)
-                            """, (user_id, alert['code'], alert['reason'], telegram_message))
+                                INSERT INTO alert_history (user_id, stock_code, stock_name, alert_type, message)
+                                VALUES (?, ?, ?, ?, ?)
+                            """, (user_id, alert['code'], alert['name'], alert['reason'], push_body))
                             conn.commit()
                     else:
                         print(f"[알림] 전송 실패: {username} - {alert['name']}")

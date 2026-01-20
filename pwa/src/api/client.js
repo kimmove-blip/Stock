@@ -144,22 +144,6 @@ export const marketAPI = {
   global: () => api.get('/market/global'),
 };
 
-// 텔레그램 알림 API
-export const telegramAPI = {
-  // 설정 조회
-  getSettings: () => api.get('/telegram'),
-  // 설정 업데이트
-  updateSettings: (data) => api.post('/telegram', data),
-  // 인증 코드 생성
-  generateCode: () => api.post('/telegram/generate-code'),
-  // 인증 상태 확인
-  checkVerification: () => api.post('/telegram/check-verification'),
-  // 연동 해제
-  disconnect: () => api.post('/telegram/disconnect'),
-  // 테스트 메시지 전송
-  test: () => api.post('/telegram/test'),
-};
-
 // 관리자 API
 export const adminAPI = {
   // 회원 목록

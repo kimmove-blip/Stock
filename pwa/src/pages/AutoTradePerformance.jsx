@@ -45,6 +45,7 @@ export default function AutoTradePerformance() {
   if (isLoading) return <Loading text="성과 분석 불러오는 중..." />;
 
   const dayOptions = [
+    { value: 1, label: '당일' },
     { value: 7, label: '7일' },
     { value: 30, label: '30일' },
     { value: 90, label: '90일' },
@@ -152,28 +153,66 @@ export default function AutoTradePerformance() {
         </div>
       )}
 
-      {/* 실현 손익 */}
-      <div
-        className={`rounded-xl p-4 ${
-          total_profit >= 0
-            ? 'bg-gradient-to-r from-orange-400 to-red-400'
-            : 'bg-gradient-to-r from-cyan-400 to-blue-400'
-        } text-white`}
-      >
-        <div className="flex items-center gap-2 mb-2">
-          {total_profit >= 0 ? <TrendingUp size={20} /> : <TrendingDown size={20} />}
-          <span className="font-medium">실현 손익</span>
+      {/* 손익 상세 (실현손익 + 미실현손익) */}
+      {initial_investment > 0 && (
+        <div className="bg-white rounded-xl p-4 shadow-sm">
+          <h3 className="font-bold text-gray-800 mb-3">손익 구성</h3>
+          <div className="space-y-3">
+            {/* 실현손익 */}
+            <div className="flex items-center justify-between p-3 bg-gray-50 rounded-lg">
+              <div>
+                <p className="text-sm text-gray-500">실현손익</p>
+                <p className="text-xs text-gray-400">매도 완료 종목</p>
+              </div>
+              <p className={`text-lg font-bold ${total_profit >= 0 ? 'text-red-600' : 'text-blue-600'}`}>
+                {total_profit >= 0 ? '+' : ''}{total_profit?.toLocaleString()}원
+              </p>
+            </div>
+            {/* 미실현손익 */}
+            <div className="flex items-center justify-between p-3 bg-gray-50 rounded-lg">
+              <div>
+                <p className="text-sm text-gray-500">미실현손익</p>
+                <p className="text-xs text-gray-400">보유 중인 종목</p>
+              </div>
+              <p className={`text-lg font-bold ${(total_profit_from_initial - total_profit) >= 0 ? 'text-red-600' : 'text-blue-600'}`}>
+                {(total_profit_from_initial - total_profit) >= 0 ? '+' : ''}{(total_profit_from_initial - total_profit)?.toLocaleString()}원
+              </p>
+            </div>
+            {/* 합계 = 총수익 */}
+            <div className="flex items-center justify-between p-3 border-t border-gray-200 pt-3">
+              <p className="text-sm font-medium text-gray-700">합계 (= 총수익)</p>
+              <p className={`text-lg font-bold ${total_profit_from_initial >= 0 ? 'text-red-600' : 'text-blue-600'}`}>
+                {total_profit_from_initial >= 0 ? '+' : ''}{total_profit_from_initial?.toLocaleString()}원
+              </p>
+            </div>
+          </div>
         </div>
-        <div className="flex items-end gap-2">
-          <p className="text-2xl font-bold">
-            {total_profit >= 0 ? '+' : ''}
-            {total_profit?.toLocaleString()}원
-          </p>
-          <p className="text-sm opacity-80 mb-1">
-            (매도 완료 종목)
-          </p>
+      )}
+
+      {/* 실현 손익 (초기투자금 미설정 시만 표시) */}
+      {initial_investment <= 0 && (
+        <div
+          className={`rounded-xl p-4 ${
+            total_profit >= 0
+              ? 'bg-gradient-to-r from-orange-400 to-red-400'
+              : 'bg-gradient-to-r from-cyan-400 to-blue-400'
+          } text-white`}
+        >
+          <div className="flex items-center gap-2 mb-2">
+            {total_profit >= 0 ? <TrendingUp size={20} /> : <TrendingDown size={20} />}
+            <span className="font-medium">실현 손익</span>
+          </div>
+          <div className="flex items-end gap-2">
+            <p className="text-2xl font-bold">
+              {total_profit >= 0 ? '+' : ''}
+              {total_profit?.toLocaleString()}원
+            </p>
+            <p className="text-sm opacity-80 mb-1">
+              (매도 완료 종목)
+            </p>
+          </div>
         </div>
-      </div>
+      )}
 
       {/* 주요 지표 */}
       <div className="bg-white rounded-xl p-4 shadow-sm">
