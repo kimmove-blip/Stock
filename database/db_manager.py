@@ -123,9 +123,10 @@ class DatabaseManager:
             """)
             conn.commit()
 
-            # 기존 users 테이블에 telegram 컬럼 추가 (마이그레이션)
+            # 기존 users 테이블에 컬럼 추가 (마이그레이션)
             self._migrate_telegram_columns(conn)
             self._migrate_push_columns(conn)
+            self._migrate_profile_picture_column(conn)
 
     def _migrate_telegram_columns(self, conn):
         """users 테이블에 telegram 관련 컬럼 추가 (마이그레이션)"""
@@ -144,6 +145,9 @@ class DatabaseManager:
         if 'is_admin' not in columns:
             conn.execute("ALTER TABLE users ADD COLUMN is_admin BOOLEAN DEFAULT 0")
 
+        if 'auto_trade_enabled' not in columns:
+            conn.execute("ALTER TABLE users ADD COLUMN auto_trade_enabled BOOLEAN DEFAULT 0")
+
         conn.commit()
 
     def _migrate_push_columns(self, conn):
@@ -153,6 +157,16 @@ class DatabaseManager:
 
         if 'push_alerts_enabled' not in columns:
             conn.execute("ALTER TABLE users ADD COLUMN push_alerts_enabled BOOLEAN DEFAULT 0")
+
+        conn.commit()
+
+    def _migrate_profile_picture_column(self, conn):
+        """users 테이블에 프로필 사진 컬럼 추가 (마이그레이션)"""
+        cursor = conn.execute("PRAGMA table_info(users)")
+        columns = [row[1] for row in cursor.fetchall()]
+
+        if 'profile_picture' not in columns:
+            conn.execute("ALTER TABLE users ADD COLUMN profile_picture TEXT")
 
         conn.commit()
 
@@ -212,6 +226,15 @@ class DatabaseManager:
             )
             conn.commit()
 
+    def update_profile_picture(self, user_id, picture_url):
+        """프로필 사진 URL 업데이트"""
+        with self.get_connection() as conn:
+            conn.execute(
+                "UPDATE users SET profile_picture = ? WHERE id = ?",
+                (picture_url, user_id)
+            )
+            conn.commit()
+
     def is_admin(self, user_id):
         """사용자가 관리자인지 확인"""
         with self.get_connection() as conn:
@@ -230,6 +253,25 @@ class DatabaseManager:
             )
             conn.commit()
             return True
+
+    def set_auto_trade_enabled(self, user_id, enabled=True):
+        """자동매매 권한 설정 (관리자용)"""
+        with self.get_connection() as conn:
+            conn.execute(
+                "UPDATE users SET auto_trade_enabled = ? WHERE id = ?",
+                (1 if enabled else 0, user_id)
+            )
+            conn.commit()
+            return True
+
+    def is_auto_trade_enabled(self, user_id):
+        """자동매매 권한 확인"""
+        with self.get_connection() as conn:
+            cursor = conn.execute(
+                "SELECT auto_trade_enabled FROM users WHERE id = ?", (user_id,)
+            )
+            row = cursor.fetchone()
+            return bool(row['auto_trade_enabled']) if row else False
 
     def get_user_by_id(self, user_id):
         """ID로 사용자 조회"""

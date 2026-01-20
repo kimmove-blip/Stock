@@ -96,9 +96,18 @@ export default function Settings() {
       {/* 프로필 섹션 */}
       <div className="bg-white rounded-xl p-4 shadow-sm mb-4">
         <div className="flex items-center gap-4">
-          <div className="w-16 h-16 bg-gradient-to-br from-purple-600 to-indigo-600 rounded-full flex items-center justify-center text-white text-2xl font-bold">
-            {(user?.name || user?.username)?.charAt(0)?.toUpperCase() || 'U'}
-          </div>
+          {user?.profile_picture ? (
+            <img
+              src={user.profile_picture}
+              alt="프로필"
+              className="w-16 h-16 rounded-full object-cover"
+              referrerPolicy="no-referrer"
+            />
+          ) : (
+            <div className="w-16 h-16 bg-gradient-to-br from-purple-600 to-indigo-600 rounded-full flex items-center justify-center text-white text-2xl font-bold">
+              {(user?.name || user?.username)?.charAt(0)?.toUpperCase() || 'U'}
+            </div>
+          )}
           <div>
             <h2 className="font-bold text-gray-800 text-lg">{user?.name || user?.username}</h2>
             <p className="text-gray-500 text-sm">{user?.email || '이메일 미등록'}</p>

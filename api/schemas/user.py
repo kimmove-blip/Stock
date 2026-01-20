@@ -31,6 +31,8 @@ class UserResponse(UserBase):
     name: Optional[str] = None
     email_subscription: bool = False
     is_admin: bool = False
+    auto_trade_enabled: bool = False
+    profile_picture: Optional[str] = None
     created_at: Optional[datetime] = None
 
     class Config:

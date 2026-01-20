@@ -122,7 +122,9 @@ async def get_me(current_user: dict = Depends(get_current_user_required)):
         email=current_user.get('email'),
         name=current_user.get('name'),
         email_subscription=bool(current_user.get('email_subscription', 0)),
-        is_admin=bool(current_user.get('is_admin', 0))
+        is_admin=bool(current_user.get('is_admin', 0)),
+        auto_trade_enabled=bool(current_user.get('auto_trade_enabled', 0)),
+        profile_picture=current_user.get('profile_picture')
     )
 
 
@@ -193,10 +195,11 @@ async def google_login(request: Request, login_request: GoogleLoginRequest, db: 
             clock_skew_in_seconds=60
         )
 
-        # 이메일과 이름 추출
+        # 이메일, 이름, 프로필 사진 추출
         email = idinfo.get('email')
         name = idinfo.get('name', email.split('@')[0])
         google_id = idinfo.get('sub')
+        picture = idinfo.get('picture')  # 구글 프로필 사진 URL
 
         if not email:
             raise HTTPException(
@@ -235,6 +238,10 @@ async def google_login(request: Request, login_request: GoogleLoginRequest, db: 
 
         # 마지막 로그인 시간 업데이트
         db.update_last_login(user['id'])
+
+        # 프로필 사진 업데이트 (매 로그인 시 최신 사진으로 갱신)
+        if picture:
+            db.update_profile_picture(user['id'], picture)
 
         # JWT 토큰 생성
         access_token = create_access_token(
@@ -282,3 +289,41 @@ async def delete_account(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="계정 삭제 중 오류가 발생했습니다"
         )
+
+
+class AutoTradeSettingRequest(BaseModel):
+    """자동매매 권한 설정 요청 (관리자용)"""
+    user_id: int
+    enabled: bool
+
+
+@router.put("/admin/auto-trade")
+async def set_user_auto_trade(
+    setting: AutoTradeSettingRequest,
+    current_user: dict = Depends(get_current_user_required),
+    db: DatabaseManager = Depends(get_db)
+):
+    """사용자 자동매매 권한 설정 (관리자 전용)"""
+    # 관리자 권한 확인
+    if not current_user.get('is_admin'):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="관리자 권한이 필요합니다"
+        )
+
+    # 대상 사용자 확인
+    target_user = db.get_user_by_id(setting.user_id)
+    if not target_user:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="사용자를 찾을 수 없습니다"
+        )
+
+    # 자동매매 권한 설정
+    db.set_auto_trade_enabled(setting.user_id, setting.enabled)
+
+    return {
+        "message": f"자동매매 권한이 {'활성화' if setting.enabled else '비활성화'}되었습니다",
+        "user_id": setting.user_id,
+        "auto_trade_enabled": setting.enabled
+    }
