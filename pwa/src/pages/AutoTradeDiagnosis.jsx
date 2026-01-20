@@ -218,9 +218,18 @@ export default function AutoTradeDiagnosis() {
               <div className="grid grid-cols-2 gap-2 mb-3 bg-gray-50 rounded-lg p-3">
                 <div>
                   <p className="text-xs text-gray-500">현재가</p>
-                  <p className="font-bold text-gray-800">
-                    {holding.current_price?.toLocaleString()}원
-                  </p>
+                  <div className="flex items-center gap-2">
+                    <p className="font-bold text-gray-800">
+                      {holding.current_price?.toLocaleString()}원
+                    </p>
+                    {holding.change_rate !== null && holding.change_rate !== undefined && (
+                      <span className={`text-xs font-medium ${
+                        holding.change_rate >= 0 ? 'text-red-500' : 'text-blue-500'
+                      }`}>
+                        {holding.change_rate >= 0 ? '+' : ''}{holding.change_rate?.toFixed(2)}%
+                      </span>
+                    )}
+                  </div>
                 </div>
                 <div>
                   <p className="text-xs text-gray-500">평균단가</p>

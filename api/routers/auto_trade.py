@@ -13,8 +13,9 @@ import os
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
-from api.dependencies import get_current_user_required
+from api.dependencies import get_current_user_required, get_db
 from trading.trade_logger import TradeLogger
+from database.db_manager import DatabaseManager
 import httpx
 
 router = APIRouter()
@@ -37,6 +38,41 @@ async def get_stock_ai_score(stock_code: str) -> dict:
     except Exception as e:
         print(f"AI 점수 조회 실패 [{stock_code}]: {e}")
     return {'score': 50, 'opinion': '관망', 'comment': ''}
+
+
+async def get_stock_current_price(stock_code: str) -> int:
+    """종목의 현재가 조회"""
+    try:
+        async with httpx.AsyncClient() as client:
+            response = await client.get(
+                f"http://localhost:8000/api/stocks/{stock_code}",
+                timeout=10.0
+            )
+            if response.status_code == 200:
+                data = response.json()
+                return data.get('price', 0) or data.get('current_price', 0)
+    except Exception as e:
+        print(f"현재가 조회 실패 [{stock_code}]: {e}")
+    return 0
+
+
+async def get_stock_price_info(stock_code: str) -> dict:
+    """종목의 현재가 및 전일비 조회"""
+    try:
+        async with httpx.AsyncClient() as client:
+            response = await client.get(
+                f"http://localhost:8000/api/stocks/{stock_code}",
+                timeout=10.0
+            )
+            if response.status_code == 200:
+                data = response.json()
+                return {
+                    'current_price': data.get('price', 0) or data.get('current_price', 0),
+                    'change_rate': data.get('change_rate', 0) or 0
+                }
+    except Exception as e:
+        print(f"가격 정보 조회 실패 [{stock_code}]: {e}")
+    return {'current_price': 0, 'change_rate': 0}
 
 
 def get_trade_logger():
@@ -91,11 +127,14 @@ class SuggestionResponse(BaseModel):
     stock_code: str
     stock_name: Optional[str]
     suggested_price: int
+    current_price: Optional[int] = None  # 현재가
+    change_rate: Optional[float] = None  # 전일대비 등락률
     quantity: int
     reason: Optional[str]
     score: Optional[float]
     status: str
     created_at: str
+    profit_rate: Optional[float] = None  # 매도 제안용 수익률
 
 
 class PerformanceSummary(BaseModel):
@@ -182,19 +221,53 @@ async def get_auto_trade_status(
         profit_rate=t.get('profit_rate')
     ) for t in trades_raw]
 
-    # 대기 중인 매수 제안 (user_id로 필터링)
+    # 대기 중인 매수 제안 (user_id로 필터링) - 수량 동적 계산
     suggestions_raw = logger.get_pending_suggestions(user_id=user_id)
-    pending_suggestions = [SuggestionResponse(
-        id=s['id'],
-        stock_code=s['stock_code'],
-        stock_name=s.get('stock_name'),
-        suggested_price=s['suggested_price'],
-        quantity=s['quantity'],
-        reason=s.get('reason'),
-        score=s.get('score'),
-        status=s['status'],
-        created_at=s['created_at']
-    ) for s in suggestions_raw]
+
+    # 사용자 설정에서 stock_ratio 가져오기 (기본값 10%)
+    user_settings = logger.get_auto_trade_settings(user_id)
+    stock_ratio = user_settings.get('stock_ratio', 10) if user_settings else 10
+
+    # 계좌 잔고 조회하여 종목당 투자금액 계산
+    investment_per_stock = 100000  # 기본값 10만원
+    try:
+        from api.services.kis_client import KISClient
+        client = KISClient(
+            app_key=api_key_data.get('app_key'),
+            app_secret=api_key_data.get('app_secret'),
+            account_number=api_key_data.get('account_number'),
+            account_product_code=api_key_data.get('account_product_code', '01'),
+            is_mock=bool(api_key_data.get('is_mock', True))
+        )
+        balance = client.get_account_balance()
+        if balance:
+            summary = balance.get('summary', {})
+            total_eval = summary.get('total_eval_amount', 0)
+            max_buy_amt = summary.get('max_buy_amt', 0)
+            total_assets = total_eval + max_buy_amt
+            if total_assets > 0:
+                investment_per_stock = int(total_assets * stock_ratio / 100)
+    except Exception as e:
+        print(f"[status] 계좌 조회 실패, 기본값 사용: {e}")
+
+    # 각 제안에 대해 동적으로 수량 계산
+    pending_suggestions = []
+    for s in suggestions_raw:
+        suggested_price = s.get('suggested_price', 0)
+        quantity = investment_per_stock // suggested_price if suggested_price > 0 else 1
+        quantity = max(1, quantity)  # 최소 1주
+
+        pending_suggestions.append(SuggestionResponse(
+            id=s['id'],
+            stock_code=s['stock_code'],
+            stock_name=s.get('stock_name'),
+            suggested_price=suggested_price,
+            quantity=quantity,
+            reason=s.get('reason'),
+            score=s.get('score'),
+            status=s['status'],
+            created_at=s['created_at']
+        ))
 
     # 가상 잔고 (user_id로 필터링)
     virtual_raw = logger.get_virtual_balance(user_id=user_id)
@@ -284,9 +357,12 @@ async def get_trade_history(
             is_mock=bool(api_key_data.get('is_mock', True))
         )
 
-        # 조회 기간 설정
+        # 조회 기간 설정 (days=1은 "당일"로 처리)
         end_date = datetime.now().strftime("%Y%m%d")
-        start_date = (datetime.now() - timedelta(days=days)).strftime("%Y%m%d")
+        if days <= 1:
+            start_date = end_date  # 당일만 조회
+        else:
+            start_date = (datetime.now() - timedelta(days=days)).strftime("%Y%m%d")
 
         history = client.get_order_history(start_date=start_date, end_date=end_date)
 
@@ -394,26 +470,78 @@ async def get_suggestions(
     if not api_key_data:
         return []
 
+    # 사용자 설정에서 stock_ratio 가져오기 (기본값 10%)
+    user_settings = logger.get_auto_trade_settings(user_id)
+    stock_ratio = user_settings.get('stock_ratio', 10) if user_settings else 10
+
+    # 계좌 잔고 조회하여 총 자산 계산
+    investment_per_stock = 100000  # 기본값 10만원
+    try:
+        from api.services.kis_client import KISClient
+        client = KISClient(
+            app_key=api_key_data.get('app_key'),
+            app_secret=api_key_data.get('app_secret'),
+            account_number=api_key_data.get('account_number'),
+            account_product_code=api_key_data.get('account_product_code', '01'),
+            is_mock=bool(api_key_data.get('is_mock', True))
+        )
+        balance = client.get_account_balance()
+        if balance:
+            summary = balance.get('summary', {})
+            total_eval = summary.get('total_eval_amount', 0)
+            max_buy_amt = summary.get('max_buy_amt', 0)
+            total_assets = total_eval + max_buy_amt
+            if total_assets > 0:
+                investment_per_stock = int(total_assets * stock_ratio / 100)
+                print(f"[제안조회] 총자산: {total_assets:,}원, stock_ratio: {stock_ratio}%, 종목당투자금: {investment_per_stock:,}원")
+    except Exception as e:
+        print(f"[제안조회] 계좌 조회 실패, 기본값 사용: {e}")
+
     # user_id로 필터링하여 해당 사용자의 제안만 조회
     if status == 'pending':
         suggestions_raw = logger.get_pending_suggestions(user_id=user_id)
     elif status == 'approved':
         suggestions_raw = logger.get_approved_suggestions(user_id=user_id)
+    elif status == 'executed':
+        suggestions_raw = logger.get_executed_suggestions(user_id=user_id)
     else:
-        # 전체 조회 (pending + approved)
-        suggestions_raw = logger.get_pending_suggestions(user_id=user_id) + logger.get_approved_suggestions(user_id=user_id)
+        # 전체 조회 (pending + approved + executed)
+        suggestions_raw = (
+            logger.get_pending_suggestions(user_id=user_id) +
+            logger.get_approved_suggestions(user_id=user_id) +
+            logger.get_executed_suggestions(user_id=user_id)
+        )
 
-    return [SuggestionResponse(
-        id=s['id'],
-        stock_code=s['stock_code'],
-        stock_name=s.get('stock_name'),
-        suggested_price=s['suggested_price'],
-        quantity=s['quantity'],
-        reason=s.get('reason'),
-        score=s.get('score'),
-        status=s['status'],
-        created_at=s['created_at']
-    ) for s in suggestions_raw]
+    # 각 제안에 대해 동적으로 수량 계산 + 현재가/등락률 조회
+    import asyncio
+    stock_codes = [s.get('stock_code', '') for s in suggestions_raw]
+    price_infos = await asyncio.gather(*[get_stock_price_info(code) for code in stock_codes])
+
+    result = []
+    for i, s in enumerate(suggestions_raw):
+        suggested_price = s.get('suggested_price', 0)
+        price_info = price_infos[i] if i < len(price_infos) else {}
+        current_price = price_info.get('current_price', 0)
+        change_rate = price_info.get('change_rate', 0)
+        # 수량 계산: 종목당 투자금 / 추천 매수가
+        quantity = investment_per_stock // suggested_price if suggested_price > 0 else 1
+        quantity = max(1, quantity)  # 최소 1주
+
+        result.append(SuggestionResponse(
+            id=s['id'],
+            stock_code=s['stock_code'],
+            stock_name=s.get('stock_name'),
+            suggested_price=suggested_price,
+            current_price=current_price,
+            change_rate=change_rate,
+            quantity=quantity,
+            reason=s.get('reason'),
+            score=s.get('score'),
+            status=s['status'],
+            created_at=s['created_at']
+        ))
+
+    return result
 
 
 @router.get("/performance")
@@ -467,9 +595,12 @@ async def get_performance(
             is_mock=bool(api_key_data.get('is_mock', True))
         )
 
-        # 조회 기간 설정
+        # 조회 기간 설정 (days=1은 "당일"로 처리)
         end_date = datetime.now().strftime("%Y%m%d")
-        start_date = (datetime.now() - timedelta(days=days)).strftime("%Y%m%d")
+        if days <= 1:
+            start_date = end_date  # 당일만 조회
+        else:
+            start_date = (datetime.now() - timedelta(days=days)).strftime("%Y%m%d")
 
         # 체결 내역 조회
         history = client.get_order_history(start_date=start_date, end_date=end_date)
@@ -569,12 +700,13 @@ async def get_performance(
                 # 총 평가금액
                 if summary and summary.get('total_eval_amount', 0) > 0:
                     total_evaluation = summary.get('total_eval_amount', 0)
-                    cash_balance = summary.get('cash_balance', 0)
                 else:
                     total_evaluation = sum(h.get('eval_amount', 0) for h in holdings)
-                    cash_balance = summary.get('cash_balance', 0)
 
-                current_total_asset = total_evaluation + cash_balance
+                # 최대매수가능금액 (가용자금)
+                max_buy_amt = summary.get('max_buy_amt', 0)
+
+                current_total_asset = total_evaluation + max_buy_amt
 
                 # 초기투자금 기준 총수익 계산
                 if initial_investment > 0:
@@ -834,23 +966,27 @@ async def get_account(
             # summary 데이터 사용
             total_evaluation = summary.get('total_eval_amount', 0)
             total_profit_loss = summary.get('total_profit_loss', 0)
-            cash_balance = summary.get('cash_balance', 0)
         else:
             # holdings 데이터에서 직접 계산
             total_evaluation = sum(h.get('eval_amount', 0) for h in holdings)
             total_profit_loss = sum(h.get('profit_loss', 0) for h in holdings)
-            cash_balance = summary.get('cash_balance', 0)  # 예수금은 summary에서만
+
+        # 예수금: d2_cash_balance (실제 자산)
+        d2_cash_balance = summary.get('d2_cash_balance', 0) or summary.get('cash_balance', 0)
+        # 주문가능금액: max_buy_amt (미체결 제외)
+        max_buy_amt = summary.get('max_buy_amt', 0) or d2_cash_balance
 
         # 수익률은 항상 직접 계산 (KIS API가 0을 반환하는 경우가 있음)
         profit_rate = ((total_evaluation - total_purchase) / total_purchase * 100) if total_purchase > 0 else 0
 
-        # 총 자산 = 평가금액 + 예수금
-        total_asset = total_evaluation + cash_balance
+        # 총 자산 = 평가금액 + d2 예수금 (실제 자산 기준)
+        total_asset = total_evaluation + d2_cash_balance
 
         return {
             'holdings': holdings,
             'balance': {
-                'cash': cash_balance,
+                'cash': d2_cash_balance,  # 예수금 (D+2)
+                'available': max_buy_amt,  # 주문가능금액
             },
             'summary': {
                 'total_asset': total_asset,
@@ -864,7 +1000,8 @@ async def get_account(
             'total_evaluation': total_evaluation,
             'total_profit_loss': total_profit_loss,
             'profit_rate': profit_rate,
-            'cash_balance': cash_balance,
+            'cash_balance': d2_cash_balance,  # 예수금 (D+2)
+            'max_buy_amt': max_buy_amt,  # 주문가능금액
             'is_mock': is_mock,
             'timestamp': account_data.get('timestamp')
         }
@@ -957,33 +1094,136 @@ async def save_settings(
 
 # ==================== 매수 제안 승인/거부 ====================
 
+class ApproveRequest(BaseModel):
+    """승인 요청 (선택적 매개변수)"""
+    custom_price: Optional[int] = None  # 사용자 지정 가격 (지정가 주문 시)
+    is_market_order: bool = False  # True: 시장가, False: 지정가
+
+
 @router.post("/suggestions/{suggestion_id}/approve")
 async def approve_suggestion(
     suggestion_id: int,
+    request: Optional[ApproveRequest] = None,
     current_user: dict = Depends(get_current_user_required)
 ):
-    """매수 제안 승인"""
+    """매수 제안 승인 및 즉시 주문 실행"""
     check_auto_trade_permission(current_user)
 
     logger = get_trade_logger()
+    user_id = current_user.get('id')
 
-    # API 키가 없으면 거부 (다른 사용자 데이터 수정 방지)
-    api_key_data = logger.get_api_key_settings(current_user.get('id'))
+    # API 키가 없으면 거부
+    api_key_data = logger.get_api_key_settings(user_id)
     if not api_key_data:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="API 키가 설정되지 않았습니다."
         )
 
-    success = logger.approve_suggestion(suggestion_id)
-
-    if not success:
+    # 제안 정보 조회
+    suggestion = logger.get_suggestion(suggestion_id)
+    if not suggestion or suggestion.get('status') != 'pending':
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="해당 제안을 찾을 수 없거나 이미 처리되었습니다"
         )
 
-    return {"message": "매수 제안이 승인되었습니다", "status": "approved"}
+    # 추가 매개변수 추출
+    custom_price = request.custom_price if request else None
+    is_market_order = request.is_market_order if request else False
+
+    # 주문 가격 결정
+    if is_market_order:
+        order_price = 0
+        order_type = "01"  # 시장가
+    else:
+        order_price = custom_price or suggestion.get('buy_band_high') or suggestion.get('recommended_price') or suggestion.get('current_price')
+        order_type = "00"  # 지정가
+
+    # 수량 계산 (사용자 설정 기반)
+    user_settings = logger.get_auto_trade_settings(user_id)
+    stock_ratio = user_settings.get('stock_ratio', 10) if user_settings else 10
+
+    try:
+        from api.services.kis_client import KISClient
+        client = KISClient(
+            app_key=api_key_data.get('app_key'),
+            app_secret=api_key_data.get('app_secret'),
+            account_number=api_key_data.get('account_number'),
+            account_product_code=api_key_data.get('account_product_code', '01'),
+            is_mock=bool(api_key_data.get('is_mock', True))
+        )
+
+        # 계좌 잔고 조회하여 수량 계산
+        balance = client.get_account_balance()
+        if balance:
+            summary = balance.get('summary', {})
+            total_eval = summary.get('total_eval_amount', 0)
+            d2_cash = summary.get('d2_cash_balance', 0) or summary.get('cash_balance', 0)
+            max_buy_amt = summary.get('max_buy_amt', 0) or d2_cash
+            total_assets = total_eval + d2_cash
+            investment_per_stock = int(total_assets * stock_ratio / 100)
+            # 실제 주문 가능 금액으로 제한
+            investment_per_stock = min(investment_per_stock, max_buy_amt)
+        else:
+            investment_per_stock = 100000
+
+        # 수량 계산
+        price_for_calc = order_price if order_price > 0 else suggestion.get('current_price', 0)
+        quantity = investment_per_stock // price_for_calc if price_for_calc > 0 else 1
+        quantity = max(1, quantity)
+
+        # 주문 실행
+        stock_code = suggestion.get('stock_code')
+        result = client.place_order(
+            stock_code=stock_code,
+            side='buy',
+            order_type=order_type,
+            quantity=quantity,
+            price=order_price
+        )
+
+        if result and result.get('order_no'):
+            # 승인 및 실행 완료 처리
+            logger.approve_suggestion(suggestion_id, custom_price=custom_price, is_market_order=is_market_order)
+            logger.mark_executed(suggestion_id)
+
+            # 거래 로그 기록
+            logger.log_trade(
+                user_id=user_id,
+                stock_code=stock_code,
+                stock_name=suggestion.get('stock_name'),
+                side='buy',
+                quantity=quantity,
+                price=order_price if order_price > 0 else price_for_calc,
+                order_no=result.get('order_no'),
+                trade_reason=f"매수제안 승인 (AI점수: {suggestion.get('score', '-')}점)",
+                status='ordered'
+            )
+
+            order_type_str = "시장가" if is_market_order else f"지정가 {order_price:,}원"
+            return {
+                "message": f"주문이 실행되었습니다 ({order_type_str}, {quantity}주)",
+                "status": "executed",
+                "order_no": result.get('order_no'),
+                "quantity": quantity,
+                "price": order_price
+            }
+        else:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=f"주문 실행 실패: {result.get('message', '알 수 없는 오류')}"
+            )
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"주문 실행 중 오류: {str(e)}"
+        )
 
 
 @router.post("/suggestions/{suggestion_id}/reject")
@@ -1039,22 +1279,38 @@ async def get_sell_suggestions(
     else:
         suggestions_raw = logger.get_pending_sell_suggestions() + logger.get_approved_sell_suggestions()
 
-    return [SuggestionResponse(
-        id=s['id'],
-        stock_code=s['stock_code'],
-        stock_name=s.get('stock_name'),
-        suggested_price=s['suggested_price'],
-        quantity=s['quantity'],
-        reason=s.get('reason'),
-        score=s.get('score'),
-        status=s['status'],
-        created_at=s['created_at']
-    ) for s in suggestions_raw]
+    # 현재가/등락률 조회
+    import asyncio
+    stock_codes = [s.get('stock_code', '') for s in suggestions_raw]
+    price_infos = await asyncio.gather(*[get_stock_price_info(code) for code in stock_codes])
+
+    result = []
+    for i, s in enumerate(suggestions_raw):
+        price_info = price_infos[i] if i < len(price_infos) else {}
+        current_price = price_info.get('current_price', 0)
+        change_rate = price_info.get('change_rate', 0)
+        result.append(SuggestionResponse(
+            id=s['id'],
+            stock_code=s['stock_code'],
+            stock_name=s.get('stock_name'),
+            suggested_price=s['suggested_price'],
+            current_price=current_price,
+            change_rate=change_rate,
+            quantity=s['quantity'],
+            reason=s.get('reason'),
+            score=s.get('score'),
+            status=s['status'],
+            created_at=s['created_at'],
+            profit_rate=s.get('profit_rate')
+        ))
+
+    return result
 
 
 @router.post("/sell-suggestions/{suggestion_id}/approve")
 async def approve_sell_suggestion(
     suggestion_id: int,
+    request: Optional[ApproveRequest] = None,
     current_user: dict = Depends(get_current_user_required)
 ):
     """매도 제안 승인"""
@@ -1070,7 +1326,15 @@ async def approve_sell_suggestion(
             detail="API 키가 설정되지 않았습니다."
         )
 
-    success = logger.approve_sell_suggestion(suggestion_id)
+    # 추가 매개변수 추출
+    custom_price = request.custom_price if request else None
+    is_market_order = request.is_market_order if request else False
+
+    success = logger.approve_sell_suggestion(
+        suggestion_id,
+        custom_price=custom_price,
+        is_market_order=is_market_order
+    )
 
     if not success:
         raise HTTPException(
@@ -1078,7 +1342,8 @@ async def approve_sell_suggestion(
             detail="해당 제안을 찾을 수 없거나 이미 처리되었습니다"
         )
 
-    return {"message": "매도 제안이 승인되었습니다", "status": "approved"}
+    order_type = "시장가" if is_market_order else f"지정가 {custom_price:,}원" if custom_price else "현재가"
+    return {"message": f"매도 제안이 승인되었습니다 ({order_type})", "status": "approved"}
 
 
 @router.post("/sell-suggestions/{suggestion_id}/reject")
@@ -1119,6 +1384,7 @@ class DiagnosisHolding(BaseModel):
     quantity: int
     avg_price: int
     current_price: Optional[int]
+    change_rate: Optional[float] = None  # 전일비 등락률
     profit_rate: Optional[float]
     health_score: Optional[int]  # 건강 점수 (0-100)
     signal: Optional[str]  # strong_buy, buy, hold, sell, strong_sell
@@ -1191,14 +1457,17 @@ async def get_diagnosis(
 
     import asyncio
 
-    # 모든 종목의 AI 점수를 병렬로 조회
+    # 모든 종목의 AI 점수와 가격 정보를 병렬로 조회
     stock_codes = [h.get('stock_code', '') for h in holdings]
     ai_scores = await asyncio.gather(*[get_stock_ai_score(code) for code in stock_codes])
+    price_infos = await asyncio.gather(*[get_stock_price_info(code) for code in stock_codes])
 
     for i, h in enumerate(holdings):
         profit_rate = h.get('profit_rate', 0)
         current_price = h.get('current_price', 0)
         avg_price = h.get('avg_price', 0)
+        # 전일비 등락률
+        change_rate = price_infos[i].get('change_rate', 0) if price_infos[i] else 0
 
         # AI 기술분석 점수 사용
         ai_data = ai_scores[i]
@@ -1240,6 +1509,7 @@ async def get_diagnosis(
             quantity=quantity,
             avg_price=avg_price,
             current_price=current_price,
+            change_rate=change_rate,
             profit_rate=profit_rate,
             health_score=health_score,
             signal=signal,
@@ -1404,6 +1674,9 @@ class PendingOrder(BaseModel):
     quantity: int
     remaining_quantity: int
     order_time: str
+    current_price: Optional[int] = None  # 현재가
+    change_rate: Optional[float] = None  # 전일비
+    score: Optional[int] = None  # AI 점수
 
 
 class PendingOrdersSummary(BaseModel):
@@ -1446,34 +1719,66 @@ async def get_pending_orders(
             is_mock=is_mock
         )
 
+        orders_raw = result.get('orders', [])
+
+        # 현재가 및 전일비 조회
+        import asyncio
+        stock_codes = [o.get('stock_code', '') for o in orders_raw]
+        price_infos = await asyncio.gather(*[get_stock_price_info(code) for code in stock_codes])
+
+        # AI 점수 조회 (최신 분석 결과에서)
+        scores_map = {}
+        try:
+            from config import OUTPUT_DIR
+            from datetime import datetime, timedelta
+            import json
+            today = datetime.now()
+            for days_back in range(7):
+                check_date = today - timedelta(days=days_back)
+                json_path = OUTPUT_DIR / f"top100_{check_date.strftime('%Y%m%d')}.json"
+                if json_path.exists():
+                    with open(json_path, 'r', encoding='utf-8') as f:
+                        data = json.load(f)
+                        for stock in data.get('stocks', []):
+                            scores_map[stock.get('code')] = stock.get('score', 0)
+                    break
+        except Exception as e:
+            print(f"점수 조회 실패: {e}")
+
         orders = []
         buy_count = 0
         sell_count = 0
         buy_amount = 0
         sell_amount = 0
 
-        for o in result.get('orders', []):
+        for i, o in enumerate(orders_raw):
             side = o.get('side', 'buy')
-            price = o.get('price', 0)
-            quantity = o.get('quantity', 0)
+            price = o.get('order_price', 0)
+            quantity = o.get('order_qty', 0)
+            remaining_qty = o.get('remaining_qty', quantity)
+            stock_code = o.get('stock_code', '')
 
             if side == 'buy':
                 buy_count += 1
-                buy_amount += price * quantity
+                buy_amount += price * remaining_qty
             else:
                 sell_count += 1
-                sell_amount += price * quantity
+                sell_amount += price * remaining_qty
 
+            price_info = price_infos[i] if i < len(price_infos) else {}
             orders.append(PendingOrder(
-                order_id=o.get('order_id', ''),
-                stock_code=o.get('stock_code', ''),
+                order_id=o.get('order_no', ''),
+                stock_code=stock_code,
                 stock_name=o.get('stock_name', ''),
                 side=side,
-                order_type=o.get('order_type', 'limit'),
+                order_type='limit' if price > 0 else 'market',
                 price=price,
                 quantity=quantity,
-                remaining_quantity=o.get('remaining_quantity', quantity),
-                order_time=o.get('order_time', '')
+                remaining_quantity=remaining_qty,
+                order_time=o.get('order_time', ''),
+                current_price=price_info.get('current_price'),
+                change_rate=price_info.get('change_rate'),
+                score=scores_map.get(stock_code)
             ))
 
         return PendingOrdersResponse(
@@ -1491,3 +1796,166 @@ async def get_pending_orders(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"미체결 조회 실패: {str(e)}"
         )
+
+
+class ModifyOrderRequest(BaseModel):
+    """주문 정정 요청"""
+    order_id: str
+    stock_code: str
+    quantity: int
+    price: int
+    order_type: Optional[str] = "limit"  # limit: 지정가, market: 시장가
+
+
+@router.put("/pending-orders/{order_id}")
+async def modify_pending_order(
+    order_id: str,
+    request: ModifyOrderRequest,
+    current_user: dict = Depends(get_current_user_required)
+):
+    """주문 정정"""
+    check_auto_trade_permission(current_user)
+
+    logger = get_trade_logger()
+    api_key_data = logger.get_api_key_settings(current_user.get('id'))
+
+    if not api_key_data:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="API 키가 설정되지 않았습니다."
+        )
+
+    try:
+        is_mock = bool(api_key_data.get('is_mock', True))
+        is_market_order = request.order_type == "market"
+        result = logger.modify_order(
+            app_key=api_key_data.get('app_key'),
+            app_secret=api_key_data.get('app_secret'),
+            account_number=api_key_data.get('account_number'),
+            account_product_code=api_key_data.get('account_product_code', '01'),
+            order_no=order_id,
+            stock_code=request.stock_code,
+            quantity=request.quantity,
+            price=0 if is_market_order else request.price,
+            order_type="01" if is_market_order else "00",  # 01: 시장가, 00: 지정가
+            is_mock=is_mock
+        )
+
+        order_type_str = "시장가" if is_market_order else "지정가"
+        if result.get('success'):
+            return {
+                "success": True,
+                "message": f"주문이 {order_type_str}로 정정되었습니다.",
+                "new_order_id": result.get('new_order_no', '')
+            }
+        else:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=result.get('message', '주문 정정 실패')
+            )
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"주문 정정 실패: {str(e)}"
+        )
+
+
+@router.post("/sync-portfolio")
+async def sync_portfolio_from_auto_trade(
+    current_user: dict = Depends(get_current_user_required),
+    db: DatabaseManager = Depends(get_db)
+):
+    """
+    자동매매 계좌의 보유종목을 홈탭 포트폴리오와 동기화
+    - 증권사 계좌의 실제 보유종목을 포트폴리오에 반영
+    - 기존 포트폴리오 종목은 수량/단가 업데이트
+    - 새 종목은 추가
+    """
+    user_id = current_user['id']
+
+    # 자동매매 권한 체크
+    if not current_user.get('auto_trade_enabled'):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="자동매매 권한이 없습니다."
+        )
+
+    logger = TradeLogger()
+
+    # API 키 설정 조회
+    api_key_data = logger.get_api_key_settings(user_id)
+    if not api_key_data or not api_key_data.get('app_key'):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="API 키가 설정되지 않았습니다."
+        )
+
+    # 증권사 계좌에서 보유종목 조회
+    try:
+        account_data = logger.get_real_account_balance(
+            app_key=api_key_data.get('app_key'),
+            app_secret=api_key_data.get('app_secret'),
+            account_number=api_key_data.get('account_number'),
+            account_product_code=api_key_data.get('account_product_code', '01'),
+            is_mock=bool(api_key_data.get('is_mock', False))
+        )
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"계좌 조회 실패: {str(e)}"
+        )
+
+    holdings = account_data.get('holdings', [])
+
+    # 현재 포트폴리오 조회
+    current_portfolio = db.get_portfolio(user_id)
+    portfolio_map = {item['stock_code']: item for item in current_portfolio}
+
+    synced = 0
+    added = 0
+    updated = 0
+
+    for holding in holdings:
+        stock_code = holding.get('stock_code')
+        quantity = holding.get('quantity', 0)
+
+        # 수량이 0이면 스킵
+        if quantity <= 0:
+            continue
+
+        stock_name = holding.get('stock_name', '')
+        avg_price = holding.get('avg_price', 0)
+
+        if stock_code in portfolio_map:
+            # 기존 종목 업데이트
+            existing = portfolio_map[stock_code]
+            if existing['quantity'] != quantity or existing['buy_price'] != avg_price:
+                db.update_portfolio_item(
+                    existing['id'],
+                    quantity=quantity,
+                    buy_price=avg_price
+                )
+                updated += 1
+        else:
+            # 새 종목 추가
+            db.add_portfolio_item(
+                user_id=user_id,
+                stock_code=stock_code,
+                stock_name=stock_name,
+                buy_price=avg_price,
+                quantity=quantity
+            )
+            added += 1
+
+        synced += 1
+
+    return {
+        "success": True,
+        "message": f"동기화 완료: {synced}종목 (추가 {added}, 업데이트 {updated})",
+        "synced_count": synced,
+        "added_count": added,
+        "updated_count": updated
+    }

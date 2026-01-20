@@ -16,6 +16,29 @@ import {
   RefreshCw,
 } from 'lucide-react';
 
+// 호가단위 계산 함수
+const getPriceUnit = (price) => {
+  if (price < 2000) return 1;
+  if (price < 5000) return 5;
+  if (price < 20000) return 10;
+  if (price < 50000) return 50;
+  if (price < 200000) return 100;
+  if (price < 500000) return 500;
+  return 1000;
+};
+
+// 호가단위에 맞게 가격 조정 (내림)
+const adjustToValidPrice = (price, isBuy = true) => {
+  if (!price || price <= 0) return price;
+  const unit = getPriceUnit(price);
+  // 매수는 내림, 매도는 올림
+  if (isBuy) {
+    return Math.floor(price / unit) * unit;
+  } else {
+    return Math.ceil(price / unit) * unit;
+  }
+};
+
 export default function AutoTradeManual() {
   const { user } = useAuth();
   const queryClient = useQueryClient();
@@ -67,16 +90,18 @@ export default function AutoTradeManual() {
   });
 
   // 실시간 시세 조회
-  const fetchStockPrice = async (code) => {
+  const fetchStockPrice = async (code, isBuy = true) => {
     setPriceLoading(true);
     try {
       const response = await realtimeAPI.prices([code]);
       if (response.data?.prices?.[0]) {
         const price = response.data.prices[0];
         setStockPrice(price);
+        // 호가단위에 맞게 가격 조정
+        const validPrice = adjustToValidPrice(price.current_price, isBuy);
         setOrderData((prev) => ({
           ...prev,
-          price: price.current_price?.toString() || '',
+          price: validPrice?.toString() || '',
         }));
       }
     } catch (error) {
@@ -90,11 +115,11 @@ export default function AutoTradeManual() {
   useEffect(() => {
     if (selectedStock) {
       const code = selectedStock.stock_code || selectedStock.code;
-      fetchStockPrice(code);
+      fetchStockPrice(code, activeTab === 'buy');
     } else {
       setStockPrice(null);
     }
-  }, [selectedStock]);
+  }, [selectedStock, activeTab]);
 
   // 주문 실행
   const orderMutation = useMutation({
@@ -152,12 +177,13 @@ export default function AutoTradeManual() {
     }
   };
 
-  // 가격 조절 함수
+  // 가격 조절 함수 (호가단위 자동 적용)
   const adjustPrice = (percent) => {
     const currentPrice = stockPrice?.current_price || parseInt(orderData.price);
     if (currentPrice) {
-      const newPrice = Math.round(currentPrice * (1 + percent / 100));
-      setOrderData({ ...orderData, price: newPrice.toString() });
+      const rawPrice = Math.round(currentPrice * (1 + percent / 100));
+      const validPrice = adjustToValidPrice(rawPrice, activeTab === 'buy');
+      setOrderData({ ...orderData, price: validPrice.toString() });
     }
   };
 
@@ -378,7 +404,7 @@ export default function AutoTradeManual() {
               <div className="flex justify-between items-center mb-1">
                 <label className="text-sm font-medium text-gray-700">가격</label>
                 <button
-                  onClick={() => fetchStockPrice(selectedStock.stock_code || selectedStock.code)}
+                  onClick={() => fetchStockPrice(selectedStock.stock_code || selectedStock.code, activeTab === 'buy')}
                   className="text-xs text-purple-600 hover:underline flex items-center gap-1"
                 >
                   <RefreshCw size={12} />
@@ -389,9 +415,22 @@ export default function AutoTradeManual() {
                 type="number"
                 value={orderData.price}
                 onChange={(e) => setOrderData({ ...orderData, price: e.target.value })}
+                onBlur={(e) => {
+                  const price = parseInt(e.target.value);
+                  if (price > 0) {
+                    const validPrice = adjustToValidPrice(price, activeTab === 'buy');
+                    setOrderData({ ...orderData, price: validPrice.toString() });
+                  }
+                }}
                 className="w-full px-3 py-2.5 border border-gray-300 rounded-lg focus:ring-2 focus:ring-purple-500 text-right font-bold text-lg"
                 placeholder="0"
               />
+              {/* 호가단위 안내 */}
+              {orderData.price && parseInt(orderData.price) > 0 && (
+                <p className="text-xs text-gray-500 mt-1 text-right">
+                  호가단위: {getPriceUnit(parseInt(orderData.price)).toLocaleString()}원
+                </p>
+              )}
               {/* 가격 조절 버튼 */}
               <div className="flex gap-1 mt-2">
                 {[
@@ -405,7 +444,8 @@ export default function AutoTradeManual() {
                     key={btn.label}
                     onClick={() => {
                       if (btn.value === 0 && stockPrice?.current_price) {
-                        setOrderData({ ...orderData, price: stockPrice.current_price.toString() });
+                        const validPrice = adjustToValidPrice(stockPrice.current_price, activeTab === 'buy');
+                        setOrderData({ ...orderData, price: validPrice.toString() });
                       } else {
                         adjustPrice(btn.value);
                       }

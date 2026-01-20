@@ -61,6 +61,15 @@ export default function AutoTrade() {
     refetchOnWindowFocus: true,
   });
 
+  // 미체결 주문 조회
+  const { data: pendingOrdersData } = useQuery({
+    queryKey: ['pendingOrders'],
+    queryFn: () => autoTradeAPI.getPendingOrders().then((res) => res.data),
+    staleTime: 1000 * 30,
+    refetchOnWindowFocus: true,
+    enabled: !!apiKeyData?.is_connected,
+  });
+
   // 설정 조회 (초기투자금)
   const { data: settings } = useQuery({
     queryKey: ['autoTradeSettings'],
@@ -70,6 +79,7 @@ export default function AutoTrade() {
 
   const isConnected = apiKeyData?.is_connected;
   const pendingCount = statusData?.pending_suggestions?.length || 0;
+  const pendingOrdersCount = pendingOrdersData?.orders?.length || 0;
 
   const menuItems = [
     // 1행: API 키, 계좌, 설정
@@ -80,13 +90,13 @@ export default function AutoTrade() {
       bgColor: 'bg-blue-100',
       iconColor: 'text-blue-500',
       path: '/auto-trade/api-key',
-      badge: isConnected ? (
-        <span className="flex items-center justify-center text-[10px] text-green-600">
+      bottomBadge: isConnected ? (
+        <span className="flex items-center justify-center text-[10px] text-green-600 mt-1">
           <CheckCircle2 size={10} className="mr-0.5" />
           연동됨
         </span>
       ) : (
-        <span className="flex items-center justify-center text-[10px] text-gray-400">
+        <span className="flex items-center justify-center text-[10px] text-gray-400 mt-1">
           <XCircle size={10} className="mr-0.5" />
           미연동
         </span>
@@ -150,6 +160,11 @@ export default function AutoTrade() {
       iconColor: 'text-amber-500',
       path: '/auto-trade/pending-orders',
       disabled: !isConnected,
+      badge: pendingOrdersCount > 0 ? (
+        <span className="bg-amber-500 text-white text-[10px] px-1.5 py-0.5 rounded-full">
+          {pendingOrdersCount}
+        </span>
+      ) : null,
     },
     {
       id: 'history',
@@ -194,14 +209,19 @@ export default function AutoTrade() {
         {/* 자동매매 계좌 카드 */}
         {isConnected ? (
           (() => {
-            const initialInvestment = settings?.initial_investment || 0;
-            const totalAsset = accountData?.summary?.total_asset || accountData?.total_evaluation || 0;
+            // 모의투자는 1천만원 기준, 실제투자는 설정된 초기투자금 사용
+            const isMock = apiKeyData?.is_mock;
+            const initialInvestment = isMock ? 10000000 : (settings?.initial_investment || 0);
+            const totalEvaluation = accountData?.summary?.total_eval_amount || accountData?.summary?.total_evaluation || accountData?.total_evaluation || 0;
+            // D+2 예수금 사용 (balance.cash 또는 summary에서 조회)
+            const cashBalance = accountData?.balance?.cash || accountData?.summary?.d2_cash_balance || accountData?.summary?.cash_balance || 0;
+            // 모의투자: 총자산 = 평가금액 + D+2 예수금
+            const totalAsset = isMock ? (totalEvaluation + cashBalance) : (accountData?.summary?.total_asset || totalEvaluation);
             const totalProfit = initialInvestment > 0 ? totalAsset - initialInvestment : 0;
             const profitRate = initialInvestment > 0 ? ((totalAsset / initialInvestment) - 1) * 100 : 0;
             const isProfit = totalProfit >= 0;
             const summaryProfit = accountData?.summary?.total_profit || accountData?.total_profit_loss || 0;
             const summaryProfitRate = accountData?.summary?.profit_rate || accountData?.profit_rate || 0;
-            const cashBalance = accountData?.balance?.cash || accountData?.cash || 0;
             const totalPurchase = accountData?.summary?.total_purchase || accountData?.total_purchase || 0;
 
             return (
@@ -225,10 +245,10 @@ export default function AutoTrade() {
                 </div>
 
                 {/* 초기투자금 대비 수익률 */}
-                {initialInvestment > 0 ? (
+                {(isMock || initialInvestment > 0) ? (
                   <>
                     <div className="mb-3">
-                      <p className="text-xs opacity-80">총 수익</p>
+                      <p className="text-xs opacity-80">{isMock ? '수익금' : '총 수익'}</p>
                       <div className="flex items-end gap-2">
                         <p className="text-2xl font-bold">
                           {isProfit ? '+' : ''}{totalProfit.toLocaleString()}원
@@ -240,12 +260,12 @@ export default function AutoTrade() {
                     </div>
                     <div className="grid grid-cols-3 gap-2 pt-3 border-t border-white/20">
                       <div>
-                        <p className="text-xs opacity-70">초기투자금</p>
+                        <p className="text-xs opacity-70">{isMock ? '시작금액' : '초기투자금'}</p>
                         <p className="text-sm font-medium">{initialInvestment.toLocaleString()}원</p>
                       </div>
                       <div>
-                        <p className="text-xs opacity-70">총 자산</p>
-                        <p className="text-sm font-medium">{totalAsset.toLocaleString()}원</p>
+                        <p className="text-xs opacity-70">평가금액</p>
+                        <p className="text-sm font-medium">{totalEvaluation.toLocaleString()}원</p>
                       </div>
                       <div>
                         <p className="text-xs opacity-70">예수금</p>
@@ -272,8 +292,8 @@ export default function AutoTrade() {
                         <p className="text-sm font-medium">{totalPurchase.toLocaleString()}원</p>
                       </div>
                       <div>
-                        <p className="text-xs opacity-70">총 자산</p>
-                        <p className="text-sm font-medium">{totalAsset.toLocaleString()}원</p>
+                        <p className="text-xs opacity-70">평가금액</p>
+                        <p className="text-sm font-medium">{totalEvaluation.toLocaleString()}원</p>
                       </div>
                       <div>
                         <p className="text-xs opacity-70">예수금</p>
@@ -309,7 +329,7 @@ export default function AutoTrade() {
         {/* 퀵 액션 그리드 */}
         <div className="mt-6 flex-1 overflow-y-auto min-h-0">
           <div className="grid grid-cols-3 gap-3">
-            {menuItems.map(({ id, icon: Icon, label, bgColor, iconColor, path, badge, disabled }) => (
+            {menuItems.map(({ id, icon: Icon, label, bgColor, iconColor, path, badge, bottomBadge, disabled }) => (
               <button
                 key={id}
                 onClick={() => !disabled && navigate(path)}
@@ -320,13 +340,20 @@ export default function AutoTrade() {
                     : 'hover:shadow-md active:scale-95'
                 }`}
               >
-                <div className={`w-12 h-12 ${bgColor} rounded-xl flex items-center justify-center mb-2`}>
-                  <Icon size={26} className={iconColor} />
+                <div className="relative mb-2">
+                  <div className={`w-12 h-12 ${bgColor} rounded-xl flex items-center justify-center`}>
+                    <Icon size={26} className={iconColor} />
+                  </div>
+                  {badge && (
+                    <div className="absolute -top-1 -right-1">
+                      {badge}
+                    </div>
+                  )}
                 </div>
                 <span className="text-xs font-medium text-gray-700 text-center whitespace-pre-line leading-tight">
                   {label}
                 </span>
-                {badge && <div className="mt-1">{badge}</div>}
+                {bottomBadge}
               </button>
             ))}
           </div>

@@ -234,14 +234,14 @@ export const autoTradeAPI = {
   getSettings: () => api.get('/auto-trade/settings'),
   // 자동매매 설정 저장
   saveSettings: (data) => api.post('/auto-trade/settings', data),
-  // 매수 제안 승인
-  approveSuggestion: (id) => api.post(`/auto-trade/suggestions/${id}/approve`),
+  // 매수 제안 승인 (data: { custom_price?: number, is_market_order?: boolean })
+  approveSuggestion: (id, data = {}) => api.post(`/auto-trade/suggestions/${id}/approve`, data),
   // 매수 제안 거부
   rejectSuggestion: (id) => api.post(`/auto-trade/suggestions/${id}/reject`),
   // 매도 제안 조회
   sellSuggestions: (status) => api.get(`/auto-trade/sell-suggestions${status ? `?status=${status}` : ''}`),
-  // 매도 제안 승인
-  approveSellSuggestion: (id) => api.post(`/auto-trade/sell-suggestions/${id}/approve`),
+  // 매도 제안 승인 (data: { custom_price?: number, is_market_order?: boolean })
+  approveSellSuggestion: (id, data = {}) => api.post(`/auto-trade/sell-suggestions/${id}/approve`, data),
   // 매도 제안 거부
   rejectSellSuggestion: (id) => api.post(`/auto-trade/sell-suggestions/${id}/reject`),
   // 보유종목 진단
@@ -252,6 +252,10 @@ export const autoTradeAPI = {
   getPendingOrders: () => api.get('/auto-trade/pending-orders'),
   // 주문 취소
   cancelOrder: (orderId) => api.delete(`/auto-trade/order/${orderId}`),
+  // 주문 정정
+  modifyOrder: (orderId, data) => api.put(`/auto-trade/pending-orders/${orderId}`, data),
+  // 포트폴리오 동기화 (증권 계좌 → 홈 보유종목)
+  syncPortfolio: () => api.post('/auto-trade/sync-portfolio'),
 };
 
 export default api;

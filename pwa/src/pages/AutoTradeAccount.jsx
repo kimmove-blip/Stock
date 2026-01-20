@@ -1,4 +1,5 @@
-import { useQuery } from '@tanstack/react-query';
+import { useState } from 'react';
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useNavigate } from 'react-router-dom';
 import { autoTradeAPI } from '../api/client';
 import { useAuth } from '../contexts/AuthContext';
@@ -11,11 +12,14 @@ import {
   AlertCircle,
   PiggyBank,
   BarChart3,
+  ArrowDownUp,
 } from 'lucide-react';
 
 export default function AutoTradeAccount() {
   const navigate = useNavigate();
   const { user } = useAuth();
+  const queryClient = useQueryClient();
+  const [syncMessage, setSyncMessage] = useState(null);
 
   // 자동매매 권한 체크
   if (!user?.auto_trade_enabled) {
@@ -43,6 +47,20 @@ export default function AutoTradeAccount() {
     queryKey: ['autoTradeSettings'],
     queryFn: () => autoTradeAPI.getSettings().then((res) => res.data),
     staleTime: 1000 * 60,
+  });
+
+  // 포트폴리오 동기화
+  const syncMutation = useMutation({
+    mutationFn: () => autoTradeAPI.syncPortfolio(),
+    onSuccess: (res) => {
+      setSyncMessage(res.data.message);
+      queryClient.invalidateQueries(['portfolio']);
+      setTimeout(() => setSyncMessage(null), 3000);
+    },
+    onError: (err) => {
+      setSyncMessage(err.response?.data?.detail || '동기화 실패');
+      setTimeout(() => setSyncMessage(null), 3000);
+    },
   });
 
   if (isLoading) return <Loading text="계좌 현황 불러오는 중..." />;
@@ -75,8 +93,16 @@ export default function AutoTradeAccount() {
 
   return (
     <div className="max-w-md mx-auto space-y-4">
-      {/* 새로고침 버튼 */}
-      <div className="flex justify-end">
+      {/* 새로고침 & 동기화 버튼 */}
+      <div className="flex justify-between items-center">
+        <button
+          onClick={() => syncMutation.mutate()}
+          disabled={syncMutation.isPending}
+          className="flex items-center gap-1 text-sm text-purple-600 hover:text-purple-700 transition-colors"
+        >
+          <ArrowDownUp size={16} className={syncMutation.isPending ? 'animate-pulse' : ''} />
+          {syncMutation.isPending ? '동기화 중...' : '홈 보유종목에 동기화'}
+        </button>
         <button
           onClick={() => refetch()}
           disabled={isFetching}
@@ -86,6 +112,13 @@ export default function AutoTradeAccount() {
           새로고침
         </button>
       </div>
+
+      {/* 동기화 메시지 */}
+      {syncMessage && (
+        <div className="bg-purple-100 text-purple-700 text-sm px-3 py-2 rounded-lg">
+          {syncMessage}
+        </div>
+      )}
 
       {/* 총 자산 및 수익률 */}
       {(() => {
@@ -131,8 +164,8 @@ export default function AutoTradeAccount() {
                     <p className="text-sm font-medium">{initialInvestment.toLocaleString()}원</p>
                   </div>
                   <div>
-                    <p className="text-xs opacity-70">총 자산</p>
-                    <p className="text-sm font-medium">{totalAsset.toLocaleString()}원</p>
+                    <p className="text-xs opacity-70">평가금액</p>
+                    <p className="text-sm font-medium">{(summary?.total_evaluation || 0).toLocaleString()}원</p>
                   </div>
                   <div>
                     <p className="text-xs opacity-70">예수금</p>
@@ -159,8 +192,8 @@ export default function AutoTradeAccount() {
                     <p className="text-sm font-medium">{(summary?.total_purchase || 0).toLocaleString()}원</p>
                   </div>
                   <div>
-                    <p className="text-xs opacity-70">총 자산</p>
-                    <p className="text-sm font-medium">{totalAsset.toLocaleString()}원</p>
+                    <p className="text-xs opacity-70">평가금액</p>
+                    <p className="text-sm font-medium">{(summary?.total_evaluation || 0).toLocaleString()}원</p>
                   </div>
                   <div>
                     <p className="text-xs opacity-70">예수금</p>
