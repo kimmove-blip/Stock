@@ -16,26 +16,30 @@ FONT_BOLD = FONT_DIR / "NanumBarunpenB.ttf"
 
 def get_base_css():
     """기본 CSS 스타일 (한글 폰트 포함)"""
+    # NanumBarunpen 폰트 사용 (fontconfig에 등록됨)
+    font_family = "'NanumBarunpen', '나눔바른펜', sans-serif"
     return f"""
     @font-face {{
-        font-family: 'NanumBarunpen';
-        src: url('file://{FONT_REGULAR}') format('truetype');
+        font-family: 'KoreanFont';
+        src: local('NanumBarunpen'), local('나눔바른펜');
         font-weight: normal;
-        font-style: normal;
     }}
     @font-face {{
-        font-family: 'NanumBarunpen';
-        src: url('file://{FONT_BOLD}') format('truetype');
+        font-family: 'KoreanFont';
+        src: local('NanumBarunpen Bold'), local('나눔바른펜 Bold');
         font-weight: bold;
-        font-style: normal;
+    }}
+
+    html, body, div, span, h1, h2, h3, h4, h5, h6, p, table, th, td, li, ul, ol {{
+        font-family: 'KoreanFont', {font_family} !important;
     }}
 
     * {{
-        font-family: 'NanumBarunpen', sans-serif;
+        font-family: 'KoreanFont', {font_family} !important;
     }}
 
     body {{
-        font-family: 'NanumBarunpen', sans-serif;
+        font-family: 'KoreanFont', {font_family};
         line-height: 1.6;
         color: #333;
         max-width: 100%;
@@ -45,7 +49,7 @@ def get_base_css():
     }}
 
     h1 {{
-        font-family: 'NanumBarunpen', sans-serif;
+        font-family: 'KoreanFont', 'NanumBarunpen', '나눔바른펜', sans-serif;
         font-weight: bold;
         color: #1a365d;
         border-bottom: 3px solid #2c5282;
@@ -55,7 +59,7 @@ def get_base_css():
     }}
 
     h2 {{
-        font-family: 'NanumBarunpen', sans-serif;
+        font-family: 'KoreanFont', 'NanumBarunpen', '나눔바른펜', sans-serif;
         font-weight: bold;
         color: #2c5282;
         margin-top: 25px;
@@ -65,7 +69,7 @@ def get_base_css():
     }}
 
     h3 {{
-        font-family: 'NanumBarunpen', sans-serif;
+        font-family: 'KoreanFont', 'NanumBarunpen', '나눔바른펜', sans-serif;
         font-weight: bold;
         color: #2d3748;
         font-size: 12pt;
@@ -457,6 +461,28 @@ def generate_signal_interpretation(signals, indicators):
     return interpretations
 
 
+def format_rank_change_html(rank_change):
+    """순위 변동을 HTML로 포맷"""
+    if rank_change is None:
+        return '<span style="color: #38a169; font-weight: bold;">NEW</span>'
+    elif rank_change > 0:
+        return f'<span style="color: #c53030;">↑{rank_change}</span>'
+    elif rank_change < 0:
+        return f'<span style="color: #2b6cb0;">↓{abs(rank_change)}</span>'
+    else:
+        return '<span style="color: #718096;">-</span>'
+
+
+def format_streak_html(streak):
+    """연속 일수를 HTML로 포맷"""
+    if streak >= 5:
+        return f'<span style="color: #c53030; font-weight: bold;">{streak}일 🔥</span>'
+    elif streak >= 3:
+        return f'<span style="color: #dd6b20; font-weight: bold;">{streak}일 ⭐</span>'
+    else:
+        return f'{streak}일'
+
+
 def create_detailed_html(results, stats=None, date_str=None):
     """상세 분석 결과를 HTML로 변환 (초기버전 형식)"""
     from config import get_signal_kr
@@ -474,6 +500,12 @@ def create_detailed_html(results, stats=None, date_str=None):
             "final_selected": len(results)
         }
 
+    # 연속 출현 통계
+    streak_stats = stats.get('streak_stats', {}) if stats else {}
+    new_entries = streak_stats.get('new_entries', 0)
+    continued = streak_stats.get('continued', 0)
+    streak_5plus = streak_stats.get('streak_5plus', 0)
+
     # 요약 테이블 HTML
     summary_html = f"""
     <table class="summary-table">
@@ -482,6 +514,13 @@ def create_detailed_html(results, stats=None, date_str=None):
         <tr><td>특수종목 제외 후</td><td>{stats.get('special_excluded', 915):,}개</td></tr>
         <tr><td>유효 분석 완료</td><td>{stats.get('valid_analyzed', 890):,}개</td></tr>
         <tr><td>최종 선정</td><td>{len(results)}개</td></tr>
+    </table>
+
+    <h3>신뢰도 지표</h3>
+    <table class="summary-table">
+        <tr><td>신규 진입</td><td>{new_entries}개</td></tr>
+        <tr><td>연속 유지</td><td><strong>{continued}개</strong></td></tr>
+        <tr><td>5일 이상 연속</td><td><span style="color:#c53030; font-weight:bold;">{streak_5plus}개 🔥</span></td></tr>
     </table>
     """
 
@@ -495,6 +534,12 @@ def create_detailed_html(results, stats=None, date_str=None):
         close = r.get("close", 0)
         change = r.get("change_pct", 0)
         change_sign = "+" if change >= 0 else ""
+
+        # 연속 출현 및 순위 변동
+        streak = r.get("streak", 1)
+        rank_change = r.get("rank_change")
+        rank_change_html = format_rank_change_html(rank_change)
+        streak_html = format_streak_html(streak)
 
         signals = r.get("signals", [])
         indicators = r.get("indicators", {})
@@ -567,7 +612,7 @@ def create_detailed_html(results, stats=None, date_str=None):
         # 종목 섹션
         detailed_html += f"""
         <div class="stock-section">
-            <div class="stock-title">{i}위. {name} ({code}) - {market}</div>
+            <div class="stock-title">{i}위. {name} ({code}) - {market} | {rank_change_html} | 연속 {streak_html}</div>
             <div class="stock-summary">
                 <span class="score">종합점수: {score}점</span> | 현재가: {close:,.0f}원 | 등락률: {change_sign}{change:.2f}%
             </div>
@@ -587,6 +632,8 @@ def create_detailed_html(results, stats=None, date_str=None):
                 <th>순위</th>
                 <th>종목코드</th>
                 <th>종목명</th>
+                <th>변동</th>
+                <th>연속</th>
                 <th>시장</th>
                 <th>점수</th>
                 <th>현재가</th>
@@ -597,11 +644,15 @@ def create_detailed_html(results, stats=None, date_str=None):
             change = r.get("change_pct", 0)
             change_class = "positive" if change >= 0 else "negative"
             change_sign = "+" if change >= 0 else ""
+            rank_change_html = format_rank_change_html(r.get("rank_change"))
+            streak_html = format_streak_html(r.get("streak", 1))
             remaining_html += f"""
             <tr>
                 <td style="text-align:center;">{i}</td>
                 <td style="text-align:center;">{r['code']}</td>
                 <td>{r['name']}</td>
+                <td style="text-align:center;">{rank_change_html}</td>
+                <td style="text-align:center;">{streak_html}</td>
                 <td style="text-align:center;">{r['market']}</td>
                 <td style="text-align:center;">{r['score']}</td>
                 <td style="text-align:right;">{r.get('close', 0):,.0f}</td>
@@ -717,7 +768,7 @@ def create_detailed_html(results, stats=None, date_str=None):
             <strong>생성일시:</strong> {date_str}
             <strong>분석 모드:</strong> 기술적 분석 (18개 지표 + 캔들패턴)
             <strong>분석 대상:</strong> KRX 전종목 (KOSPI + KOSDAQ)
-            <strong>필터 조건:</strong> 시가총액 300억~1조, 거래대금 3억 이상, 주가 10만원 이하
+            <strong>필터 조건:</strong> 시가총액 300억~1조, 거래대금 3억 이상, 주가 1,000원 이상, 관리종목/투자경고 제외
         </div>
 
         <h2>요약</h2>
