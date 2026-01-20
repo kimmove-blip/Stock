@@ -120,7 +120,8 @@ class KISClient:
 
     def _get_cache_key(self) -> str:
         """토큰 캐시 키 생성 (app_key + is_virtual 조합)"""
-        return f"{self.app_key}_{self.is_virtual}"
+        # bool로 변환하여 0/False, 1/True 불일치 방지
+        return f"{self.app_key}_{bool(self.is_virtual)}"
 
     def _load_user_cached_token(self) -> bool:
         """사용자별 캐시된 토큰 로드 (메모리 + 파일)"""
@@ -180,6 +181,32 @@ class KISClient:
                 MULTI_TOKEN_CACHE_FILE.chmod(0o600)
         except Exception:
             pass
+
+    def _invalidate_token(self):
+        """토큰 무효화 (캐시에서 삭제) - 토큰 만료 에러 시 호출"""
+        cache_key = self._get_cache_key()
+
+        # 메모리 토큰 초기화
+        self._access_token = None
+        self._token_expires_at = None
+
+        # 메모리 캐시에서 삭제
+        if cache_key in _memory_token_cache:
+            del _memory_token_cache[cache_key]
+
+        # 파일 캐시에서 삭제
+        try:
+            with _token_lock:
+                if MULTI_TOKEN_CACHE_FILE.exists():
+                    with open(MULTI_TOKEN_CACHE_FILE, 'r') as f:
+                        all_cache = json.load(f)
+                    if cache_key in all_cache:
+                        del all_cache[cache_key]
+                        with open(MULTI_TOKEN_CACHE_FILE, 'w') as f:
+                            json.dump(all_cache, f)
+                        print(f"[토큰] 만료된 토큰 캐시 삭제: {cache_key}")
+        except Exception as e:
+            print(f"[토큰] 캐시 삭제 실패: {e}")
 
     def _get_access_token(self) -> str:
         """OAuth 토큰 발급/갱신"""
@@ -387,7 +414,7 @@ class KISClient:
             print(f"일별 시세 조회 실패 [{stock_code}]: {str(e)}")
             return None
 
-    def get_account_balance(self) -> Optional[Dict]:
+    def get_account_balance(self, _retry: bool = False) -> Optional[Dict]:
         """
         계좌 잔고 조회
 
@@ -417,10 +444,28 @@ class KISClient:
 
         try:
             res = requests.get(url, headers=headers, params=params, timeout=10)
+
+            # 토큰 만료 에러 확인 (HTTP 500이어도 응답 본문 확인)
+            if res.status_code == 500:
+                try:
+                    err_data = res.json()
+                    if err_data.get("msg_cd") == "EGW00123":  # 토큰 만료
+                        if not _retry:
+                            print("[잔고조회] 토큰 만료 - 새 토큰 발급 후 재시도")
+                            self._invalidate_token()
+                            return self.get_account_balance(_retry=True)
+                except:
+                    pass
+
             res.raise_for_status()
             data = res.json()
 
             if data.get("rt_cd") != "0":
+                # 토큰 만료 에러 확인
+                if data.get("msg_cd") == "EGW00123" and not _retry:
+                    print("[잔고조회] 토큰 만료 - 새 토큰 발급 후 재시도")
+                    self._invalidate_token()
+                    return self.get_account_balance(_retry=True)
                 print(f"잔고 조회 오류: {data.get('msg1', '')}")
                 return None
 
