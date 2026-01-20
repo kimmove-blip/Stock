@@ -207,7 +207,7 @@ class RiskManager:
 
     def check_score_drop(self, current_score: int) -> Tuple[bool, int]:
         """
-        점수 하락 여부 확인
+        점수 하락 여부 확인 (래치 전략: 40점 미만 시 극단적 모멘텀 붕괴)
 
         Args:
             current_score: 현재 점수
@@ -215,16 +215,36 @@ class RiskManager:
         Returns:
             (매도 필요 여부, 현재 점수)
         """
-        if current_score <= self.limits.min_hold_score:
+        if current_score < self.limits.min_hold_score:  # 40점 미만
             return True, current_score
         return False, current_score
 
-    def check_sell_signals(self, signals: List[str]) -> Tuple[bool, List[str]]:
+    def check_ma_breach(self, current_price: float, sma20: float) -> Tuple[bool, str]:
+        """
+        20일 이동평균선 이탈 여부 확인 (래치 전략)
+
+        Args:
+            current_price: 현재가
+            sma20: 20일 이동평균선
+
+        Returns:
+            (매도 필요 여부, 사유)
+        """
+        if sma20 <= 0:
+            return False, ""
+
+        if current_price < sma20:
+            breach_pct = (current_price - sma20) / sma20 * 100
+            return True, f"20일선 이탈 ({breach_pct:.1f}%)"
+        return False, ""
+
+    def check_sell_signals(self, signals: List[str], current_score: int = None) -> Tuple[bool, List[str]]:
         """
         매도 신호 체크
 
         Args:
             signals: 현재 신호 리스트
+            current_score: 현재 점수 (있으면 점수 기반 필터링)
 
         Returns:
             (매도 필요 여부, 매도 사유 리스트)
@@ -249,8 +269,13 @@ class RiskManager:
             if signal in strong_sell_signals:
                 sell_signals.append(strong_sell_signals[signal])
 
-        # 2개 이상 매도 신호 발생 시 매도
-        if len(sell_signals) >= 2:
+        # 점수 기반 필터링: 70점 이상이면 매도 신호 무시
+        # (손절, 점수하락, 보유기간 초과는 별도 체크되므로 여기서는 신호만 무시)
+        if current_score is not None and current_score >= 70:
+            return False, sell_signals  # 신호 있어도 매도 안 함
+
+        # 3개 이상 매도 신호 발생 시 매도
+        if len(sell_signals) >= 3:
             return True, sell_signals
 
         return False, sell_signals
@@ -261,10 +286,11 @@ class RiskManager:
         current_prices: Dict[str, int],
         current_signals: Dict[str, List[str]] = None,
         buy_dates: Dict[str, datetime] = None,
-        current_scores: Dict[str, int] = None
+        current_scores: Dict[str, int] = None,
+        sma20_values: Dict[str, float] = None
     ) -> List[Dict]:
         """
-        보유 종목 평가 및 매도 대상 선정
+        보유 종목 평가 및 매도 대상 선정 (래치 전략 적용)
 
         Args:
             holdings: 보유 종목 리스트
@@ -272,6 +298,7 @@ class RiskManager:
             current_signals: 종목별 현재 신호 {stock_code: [signals]}
             buy_dates: 종목별 매수일 {stock_code: datetime}
             current_scores: 종목별 현재 점수 {stock_code: score}
+            sma20_values: 종목별 20일 이평선 {stock_code: sma20} (래치 전략용)
 
         Returns:
             매도 대상 종목 리스트 (사유 포함)
@@ -287,35 +314,47 @@ class RiskManager:
 
             sell_reasons = []
 
-            # 1. 손절 체크
+            # 1. 손절 체크 (최우선)
             is_stop_loss, profit_rate = self.check_stop_loss(avg_price, current_price)
             if is_stop_loss:
                 sell_reasons.append(f"손절 ({profit_rate*100:.1f}%)")
 
-            # 2. 익절 체크
+            # 2. 익절 체크 (설정된 경우에만)
             is_take_profit, profit_rate = self.check_take_profit(avg_price, current_price)
             if is_take_profit:
                 sell_reasons.append(f"익절 ({profit_rate*100:.1f}%)")
 
-            # 3. 최대 보유 기간 체크
-            if buy_dates and stock_code in buy_dates:
-                is_expired, hold_days = self.check_max_hold_days(buy_dates[stock_code])
-                if is_expired:
-                    sell_reasons.append(f"보유기간 초과 ({hold_days}일)")
+            # 3. 최대 보유 기간 체크 - 래치 전략에서는 비활성화
+            # (추세가 끝날 때까지 보유, 시간 기반 청산 안 함)
+            # if buy_dates and stock_code in buy_dates:
+            #     is_expired, hold_days = self.check_max_hold_days(buy_dates[stock_code])
+            #     if is_expired:
+            #         sell_reasons.append(f"보유기간 초과 ({hold_days}일)")
 
-            # 4. 매도 신호 체크
-            if current_signals and stock_code in current_signals:
-                signals = current_signals[stock_code]
-                should_sell, signal_reasons = self.check_sell_signals(signals)
-                if should_sell:
-                    sell_reasons.extend(signal_reasons)
+            # === 래치 전략 매도 조건 ===
 
-            # 5. 점수 하락 체크
+            # 4. 극단적 점수 하락 체크 (40점 미만)
             if current_scores and stock_code in current_scores:
                 score = current_scores[stock_code]
                 is_score_drop, current_score = self.check_score_drop(score)
                 if is_score_drop:
-                    sell_reasons.append(f"점수 하락 ({current_score}점)")
+                    sell_reasons.append(f"극단적 점수 하락 ({current_score}점)")
+
+            # 5. 20일선 이탈 체크 (래치 전략 핵심)
+            if sma20_values and stock_code in sma20_values:
+                sma20 = sma20_values[stock_code]
+                is_ma_breach, ma_reason = self.check_ma_breach(current_price, sma20)
+                if is_ma_breach:
+                    sell_reasons.append(ma_reason)
+
+            # 6. 매도 신호 체크 (점수 70점 이상이면 무시)
+            # 래치 전략에서는 신호 기반 매도를 줄이고, 위의 조건들에 집중
+            if current_signals and stock_code in current_signals:
+                signals = current_signals[stock_code]
+                score = current_scores.get(stock_code, 50) if current_scores else 50
+                should_sell, signal_reasons = self.check_sell_signals(signals, score)
+                if should_sell:
+                    sell_reasons.extend(signal_reasons)
 
             # 매도 대상 추가
             if sell_reasons:
@@ -325,6 +364,7 @@ class RiskManager:
                     "quantity": quantity,
                     "avg_price": avg_price,
                     "current_price": current_price,
+                    "market": holding.get("market", "KOSDAQ"),
                     "profit_rate": (current_price - avg_price) / avg_price if avg_price > 0 else 0,
                     "sell_reasons": sell_reasons
                 })
@@ -334,7 +374,8 @@ class RiskManager:
     def filter_buy_candidates(
         self,
         candidates: List[Dict],
-        current_holdings: List[Dict]
+        current_holdings: List[Dict],
+        today_blacklist: set = None
     ) -> List[Dict]:
         """
         매수 후보 필터링
@@ -342,12 +383,16 @@ class RiskManager:
         Args:
             candidates: 매수 후보 종목 리스트
             current_holdings: 현재 보유 종목 리스트
+            today_blacklist: 당일 거래한 종목 코드 집합 (왕복매매 방지)
 
         Returns:
             필터링된 매수 후보 리스트
         """
         # 이미 보유 중인 종목 코드
         holding_codes = {h.get("stock_code") for h in current_holdings}
+
+        # 당일 블랙리스트 (없으면 빈 집합)
+        blacklist = today_blacklist or set()
 
         # 남은 매수 가능 종목 수
         remaining_slots = self.limits.max_holdings - len(current_holdings)
@@ -361,6 +406,11 @@ class RiskManager:
 
             # 이미 보유 중인 종목 제외
             if stock_code in holding_codes:
+                continue
+
+            # 당일 이미 거래한 종목 제외 (왕복매매 방지)
+            if stock_code in blacklist:
+                print(f"  [{candidate.get('stock_name', stock_code)}] 당일 거래 이력 - 재매수 제외")
                 continue
 
             # 매수 조건 검증

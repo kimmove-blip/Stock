@@ -28,6 +28,7 @@ from trading.order_executor import OrderExecutor
 from trading.risk_manager import RiskManager, TradingLimits
 from trading.trade_logger import TradeLogger, BuySuggestionManager
 from technical_analyst import TechnicalAnalyst
+from market_screener import MarketScreener
 from config import AutoTraderConfig, TelegramConfig, OUTPUT_DIR, SIGNAL_NAMES_KR
 
 
@@ -205,6 +206,9 @@ class AutoTrader:
         max_hold_days = self.config.MAX_HOLD_DAYS
         min_buy_score = self.config.MIN_BUY_SCORE
 
+        # min_hold_score(매도 점수) 기본값
+        min_hold_score = self.config.MIN_HOLD_SCORE
+
         if user_settings:
             # 사용자 설정이 있으면 해당 값 사용
             stock_ratio = user_settings.get('stock_ratio')
@@ -227,6 +231,11 @@ class AutoTrader:
             if user_settings.get('min_buy_score'):
                 min_buy_score = user_settings['min_buy_score']
 
+            # 버그 수정: sell_score 사용자 설정 반영
+            if user_settings.get('sell_score') is not None:
+                min_hold_score = user_settings['sell_score']
+                print(f"[AutoTrader] 사용자 {user_id} sell_score: {min_hold_score}점 (매도 기준)")
+
         self.risk_manager = RiskManager(TradingLimits(
             max_position_pct=max_position_pct,
             stop_loss_pct=stop_loss_pct,
@@ -235,7 +244,7 @@ class AutoTrader:
             max_holdings=max_holdings,
             max_hold_days=max_hold_days,
             min_buy_score=min_buy_score,
-            min_hold_score=self.config.MIN_HOLD_SCORE,
+            min_hold_score=min_hold_score,  # 사용자 설정 반영
             min_volume_ratio=self.config.MIN_VOLUME_RATIO,
         ))
         self.suggestion_manager = BuySuggestionManager(user_id=user_id)
@@ -348,6 +357,9 @@ class AutoTrader:
             target_price = stock.get("target_price") or int(recommended_price * 1.20)
             stop_loss_price = int(recommended_price * 0.90)
 
+            # 전일 등락률 (시초가 갭 전략용)
+            change_pct = stock.get("change_pct", 0)
+
             candidates.append({
                 "stock_code": stock_code,
                 "stock_name": stock.get("name"),
@@ -356,6 +368,7 @@ class AutoTrader:
                 "signals": signals,
                 "volume_ratio": volume_ratio,
                 "current_price": current_price,
+                "change_pct": change_pct,  # 전일 등락률 (상한가 여부 판단용)
                 "recommended_price": recommended_price,
                 "buy_band_high": buy_band_high,
                 "target_price": target_price,
@@ -376,11 +389,192 @@ class AutoTrader:
         return []
 
     def get_current_score(self, stock_code: str, analysis_stocks: List[Dict]) -> int:
-        """종목의 현재 점수 조회"""
+        """종목의 현재 점수 조회 (TOP100에 없으면 실시간 분석)"""
         for stock in analysis_stocks:
             if stock.get("code") == stock_code:
                 return stock.get("score", 50)
-        return 50  # 분석 데이터 없으면 기본 50점
+
+        # TOP100에 없으면 실시간 분석 수행
+        return self._analyze_realtime(stock_code)
+
+    def _analyze_realtime(self, stock_code: str) -> int:
+        """보유 종목 실시간 분석 (TOP100에 없는 종목용) - 변별력 강화 버전 사용"""
+        try:
+            df = self.analyst.get_ohlcv(stock_code, days=120)
+            if df is None or len(df) < 60:
+                print(f"  [실시간 분석] {stock_code}: 데이터 부족 → 70점 (중립)")
+                return 70
+
+            # 변별력 강화 버전 사용 (래치 전략)
+            result = self.analyst.analyze_trend_following_strict(df)
+            if result:
+                score = result.get("score", 70)
+                signals = result.get("signals", [])
+                print(f"  [실시간 분석-Strict] {stock_code}: {score}점 (신호: {len(signals)}개)")
+                return score
+
+            print(f"  [실시간 분석] {stock_code}: 분석 실패 → 70점 (중립)")
+            return 70  # 분석 실패 시 중립값 (매도 조건 미충족)
+        except Exception as e:
+            print(f"  [실시간 분석] {stock_code}: 오류 ({e}) → 70점 (중립)")
+            return 70  # 오류 시 중립값
+
+    def get_sma20(self, stock_code: str) -> float:
+        """종목의 20일 이동평균선 조회 (래치 전략용)"""
+        try:
+            df = self.analyst.get_ohlcv(stock_code, days=60)
+            if df is None or len(df) < 20:
+                return 0
+            close_col = 'Close' if 'Close' in df.columns else 'close'
+            sma20 = df[close_col].rolling(window=20).mean().iloc[-1]
+            return sma20
+        except:
+            return 0
+
+    # ==================== 시초가 갭 전략 ====================
+
+    def is_limit_up_stock(self, change_pct: float) -> bool:
+        """상한가 종목 여부 확인 (전일 등락률 기준)"""
+        return change_pct >= self.config.LIMIT_UP_THRESHOLD
+
+    def get_opening_gap(self, stock_code: str, prev_close: int = None) -> dict:
+        """
+        시초가 갭 계산 (동시호가 시간대에 예상 체결가 조회)
+
+        Returns:
+            {
+                'prev_close': 전일 종가,
+                'expected_open': 예상 시초가 (또는 현재가),
+                'gap_pct': 갭 비율 (%),
+                'is_premarket': 동시호가 시간대 여부
+            }
+        """
+        now = datetime.now()
+        is_premarket = (now.hour == 8 and now.minute >= 30) or (now.hour == 9 and now.minute == 0)
+
+        # 현재가 조회 (동시호가 중에는 예상 체결가가 반환됨)
+        price_data = self.executor.kis_client.get_current_price(stock_code)
+
+        if not price_data:
+            return {'prev_close': 0, 'expected_open': 0, 'gap_pct': 0, 'is_premarket': is_premarket}
+
+        # 전일 종가 (인자로 받거나 API에서 조회)
+        if prev_close is None or prev_close <= 0:
+            prev_close = price_data.get('prev_close', 0)
+
+        # 예상 시초가 (동시호가 중) 또는 현재가 (장중)
+        expected_open = price_data.get('current_price', 0)
+
+        # 갭 계산
+        if prev_close > 0:
+            gap_pct = (expected_open - prev_close) / prev_close * 100
+        else:
+            gap_pct = 0
+
+        return {
+            'prev_close': prev_close,
+            'expected_open': expected_open,
+            'gap_pct': gap_pct,
+            'is_premarket': is_premarket
+        }
+
+    def evaluate_gap_strategy(self, stock_code: str, stock_name: str,
+                               yesterday_change_pct: float, prev_close: int = None) -> dict:
+        """
+        시초가 갭 전략 평가
+
+        Args:
+            stock_code: 종목코드
+            stock_name: 종목명
+            yesterday_change_pct: 전일 등락률 (상한가 여부 판단용)
+            prev_close: 전일 종가
+
+        Returns:
+            {
+                'action': 'BUY' | 'SKIP' | 'WAIT',
+                'reason': 판단 사유,
+                'gap_pct': 갭 비율,
+                'order_type': 'market' | 'limit',
+                'order_price': 주문가 (지정가인 경우)
+            }
+        """
+        if not self.config.GAP_STRATEGY_ENABLED:
+            return {'action': 'BUY', 'reason': '갭전략 비활성화', 'gap_pct': 0, 'order_type': 'market'}
+
+        # 갭 정보 조회
+        gap_info = self.get_opening_gap(stock_code, prev_close)
+        gap_pct = gap_info['gap_pct']
+
+        is_limit_up = self.is_limit_up_stock(yesterday_change_pct)
+
+        if is_limit_up:
+            # === 상한가 종목 전략 ===
+            if self.config.LIMIT_UP_GAP_MIN <= gap_pct <= self.config.LIMIT_UP_GAP_MAX:
+                return {
+                    'action': 'BUY',
+                    'reason': f'상한가→갭 {gap_pct:.1f}% (적정)',
+                    'gap_pct': gap_pct,
+                    'order_type': 'market'
+                }
+            elif gap_pct > self.config.LIMIT_UP_GAP_MAX:
+                return {
+                    'action': 'SKIP',
+                    'reason': f'상한가→갭 {gap_pct:.1f}% (과열, >{self.config.LIMIT_UP_GAP_MAX}%)',
+                    'gap_pct': gap_pct,
+                    'order_type': None
+                }
+            elif gap_pct < self.config.LIMIT_UP_GAP_MIN:
+                return {
+                    'action': 'SKIP',
+                    'reason': f'상한가→갭 {gap_pct:.1f}% (모멘텀 약함, <{self.config.LIMIT_UP_GAP_MIN}%)',
+                    'gap_pct': gap_pct,
+                    'order_type': None
+                }
+        else:
+            # === 일반 종목 전략 ===
+            if self.config.NORMAL_GAP_MIN <= gap_pct <= self.config.NORMAL_GAP_IDEAL_MAX:
+                # 황금 구간 (3~8%)
+                return {
+                    'action': 'BUY',
+                    'reason': f'갭 {gap_pct:.1f}% (황금구간)',
+                    'gap_pct': gap_pct,
+                    'order_type': 'market'
+                }
+            elif self.config.NORMAL_GAP_IDEAL_MAX < gap_pct <= self.config.NORMAL_GAP_MAX:
+                # 조심 구간 (8~10%) - 진입은 하되 주의
+                return {
+                    'action': 'BUY',
+                    'reason': f'갭 {gap_pct:.1f}% (주의구간)',
+                    'gap_pct': gap_pct,
+                    'order_type': 'market'
+                }
+            elif gap_pct > self.config.NORMAL_GAP_MAX:
+                # 과열 구간 (10% 초과) - 스킵
+                return {
+                    'action': 'SKIP',
+                    'reason': f'갭 {gap_pct:.1f}% (과열, >{self.config.NORMAL_GAP_MAX}%)',
+                    'gap_pct': gap_pct,
+                    'order_type': None
+                }
+            elif 0 <= gap_pct < self.config.NORMAL_GAP_MIN:
+                # 모멘텀 약함 (0~3%) - 돌파 대기 또는 스킵
+                return {
+                    'action': 'SKIP',
+                    'reason': f'갭 {gap_pct:.1f}% (모멘텀 약함, <{self.config.NORMAL_GAP_MIN}%)',
+                    'gap_pct': gap_pct,
+                    'order_type': None
+                }
+            else:
+                # 갭 하락 - 매수 금지
+                return {
+                    'action': 'SKIP',
+                    'reason': f'갭 {gap_pct:.1f}% (갭하락, 매수금지)',
+                    'gap_pct': gap_pct,
+                    'order_type': None
+                }
+
+        # 기본값 (도달하지 않아야 함)
+        return {'action': 'SKIP', 'reason': '판단 불가', 'gap_pct': gap_pct, 'order_type': None}
 
     def check_market_hours(self) -> bool:
         """장 운영 시간 체크"""
@@ -498,7 +692,7 @@ class AutoTrader:
 
     def execute_buy_orders(self, buy_list: List[Dict], investment_per_stock: int) -> List[Dict]:
         """
-        매수 주문 실행
+        매수 주문 실행 (시초가 갭 전략 적용)
 
         Args:
             buy_list: 매수 대상 종목 리스트
@@ -512,6 +706,10 @@ class AutoTrader:
         for item in buy_list:
             stock_code = item["stock_code"]
             stock_name = item.get("stock_name", stock_code)
+
+            # 전일 등락률 (상한가 여부 판단용)
+            yesterday_change_pct = item.get("change_pct", 0)
+
             # 현재가 조회 (실시간)
             current_price = self.executor.get_current_price(stock_code)
             if not current_price or current_price <= 0:
@@ -521,12 +719,32 @@ class AutoTrader:
                 print(f"  {stock_name}: 가격 조회 실패")
                 continue
 
-            # 추천 매수가 체크 - 현재가가 매수밴드 이하일 때만 매수
-            buy_band_high = item.get("buy_band_high", current_price)
-            recommended_price = item.get("recommended_price", current_price)
-            if current_price > buy_band_high:
-                print(f"  {stock_name}: 현재가 {current_price:,}원 > 매수밴드 {buy_band_high:,}원 (추천가 {recommended_price:,}원) - 대기")
+            # === 시초가 갭 전략 평가 ===
+            prev_close = item.get("current_price", current_price)  # 전일 종가 (분석 시점 가격)
+            gap_result = self.evaluate_gap_strategy(
+                stock_code=stock_code,
+                stock_name=stock_name,
+                yesterday_change_pct=yesterday_change_pct,
+                prev_close=prev_close
+            )
+
+            if gap_result['action'] == 'SKIP':
+                print(f"  {stock_name}: 갭 전략 스킵 - {gap_result['reason']}")
                 continue
+            elif gap_result['action'] == 'WAIT':
+                print(f"  {stock_name}: 갭 전략 대기 - {gap_result['reason']}")
+                continue
+
+            # 갭 전략 통과 시 로그
+            print(f"  {stock_name}: 갭 전략 통과 - {gap_result['reason']}")
+
+            # === 기존 매수밴드 체크 (갭 전략 비활성화 시 또는 추가 안전장치) ===
+            if not self.config.GAP_STRATEGY_ENABLED:
+                buy_band_high = item.get("buy_band_high", current_price)
+                recommended_price = item.get("recommended_price", current_price)
+                if current_price > buy_band_high:
+                    print(f"  {stock_name}: 현재가 {current_price:,}원 > 매수밴드 {buy_band_high:,}원 - 대기")
+                    continue
 
             quantity = investment_per_stock // current_price
 
@@ -535,8 +753,9 @@ class AutoTrader:
                 continue
 
             print(f"\n매수: {stock_name} ({stock_code})")
-            print(f"  현재가: {current_price:,}원 (추천가 {recommended_price:,}원 이하)")
-            print(f"  가격: {current_price:,}원 x {quantity}주 = {current_price * quantity:,}원")
+            print(f"  현재가: {current_price:,}원, 전일등락: {yesterday_change_pct:+.1f}%")
+            print(f"  갭: {gap_result['gap_pct']:+.1f}%, 주문: 시장가")
+            print(f"  수량: {quantity}주 = {current_price * quantity:,}원")
             print(f"  점수: {item.get('score')}, 신호: {len(item.get('signals', []))}개")
 
             if self.dry_run:
@@ -867,18 +1086,20 @@ class AutoTrader:
             print(f"  미체결 주문: {len(self._pending_orders)}건")
 
         # 4. 보유 종목 매도 체크 - semi-auto에서는 매도 실행 안 함 (알림만)
-        print("\n[4] 보유 종목 평가 중...")
+        print("\n[4] 보유 종목 평가 중... (래치 전략 적용)")
         if holdings:
             current_prices = {}
             current_signals = {}
             current_scores = {}
             buy_dates = {}
+            sma20_values = {}  # 래치 전략용 20일선
 
             for h in holdings:
                 stock_code = h["stock_code"]
                 current_prices[stock_code] = h.get("current_price", 0)
                 current_signals[stock_code] = self.get_current_signals(stock_code, analysis_stocks)
                 current_scores[stock_code] = self.get_current_score(stock_code, analysis_stocks)
+                sma20_values[stock_code] = self.get_sma20(stock_code)  # 20일선 조회
                 buy_date = self.logger.get_buy_date(stock_code)
                 if buy_date:
                     buy_dates[stock_code] = buy_date
@@ -888,7 +1109,8 @@ class AutoTrader:
                 current_prices=current_prices,
                 current_signals=current_signals,
                 buy_dates=buy_dates,
-                current_scores=current_scores
+                current_scores=current_scores,
+                sma20_values=sma20_values  # 래치 전략용
             )
 
             if sell_list:
@@ -926,8 +1148,14 @@ class AutoTrader:
 
         # 현재 보유 종목과 리스크 관리 반영
         current_holdings = self.executor.get_holdings()
+
+        # 당일 블랙리스트 조회 (왕복매매 방지)
+        today_blacklist = self.logger.get_today_traded_stocks(self.user_id)
+        if today_blacklist:
+            print(f"  당일 거래 종목: {len(today_blacklist)}개 (재매수 제외)")
+
         filtered_candidates = self.risk_manager.filter_buy_candidates(
-            candidates, current_holdings
+            candidates, current_holdings, today_blacklist
         )
 
         # 최대 대기 제안 수 체크
@@ -1069,33 +1297,36 @@ class AutoTrader:
         print(f"  보유 종목: {len(holdings)}개 (수량>0 필터링)")
         print(f"  총 자산: {total_assets:,}원")
 
-        # 3. 보유 종목 매도 체크
-        print("\n[3] 보유 종목 평가 중...")
+        # 3. 보유 종목 매도 체크 (래치 전략 적용)
+        print("\n[3] 보유 종목 평가 중... (래치 전략 적용)")
         if holdings:
-            # 현재가, 신호, 점수 조회
+            # 현재가, 신호, 점수, 20일선 조회
             current_prices = {}
             current_signals = {}
             current_scores = {}
             buy_dates = {}
+            sma20_values = {}  # 래치 전략용 20일선
 
             for h in holdings:
                 stock_code = h["stock_code"]
                 current_prices[stock_code] = h.get("current_price", 0)
                 current_signals[stock_code] = self.get_current_signals(stock_code, analysis_stocks)
                 current_scores[stock_code] = self.get_current_score(stock_code, analysis_stocks)
+                sma20_values[stock_code] = self.get_sma20(stock_code)  # 20일선 조회
 
                 # DB에서 매수일 조회
                 buy_date = self.logger.get_buy_date(stock_code)
                 if buy_date:
                     buy_dates[stock_code] = buy_date
 
-            # 매도 대상 선정
+            # 매도 대상 선정 (래치 전략: 40점 미만 또는 20일선 이탈)
             sell_list = self.risk_manager.evaluate_holdings(
                 holdings=holdings,
                 current_prices=current_prices,
                 current_signals=current_signals,
                 buy_dates=buy_dates,
-                current_scores=current_scores
+                current_scores=current_scores,
+                sma20_values=sma20_values  # 래치 전략용
             )
 
             if sell_list:
@@ -1115,8 +1346,14 @@ class AutoTrader:
 
         # 현재 보유 종목과 리스크 관리 반영
         current_holdings = self.executor.get_holdings()
+
+        # 당일 블랙리스트 조회 (왕복매매 방지)
+        today_blacklist = self.logger.get_today_traded_stocks(self.user_id)
+        if today_blacklist:
+            print(f"  당일 거래 종목: {len(today_blacklist)}개 (재매수 제외)")
+
         filtered_candidates = self.risk_manager.filter_buy_candidates(
-            candidates, current_holdings
+            candidates, current_holdings, today_blacklist
         )
         print(f"  최종 매수 후보: {len(filtered_candidates)}개")
 
@@ -1174,18 +1411,224 @@ class AutoTrader:
         report = self.logger.export_report(days=days)
         print(report)
 
+    def run_intraday(self, min_score: int = 75) -> Dict:
+        """
+        장중 10분 스크리닝 모드
+
+        cron으로 10분마다 실행하여 신규 매수 후보를 찾고 자동 매수합니다.
+        - 전종목 실시간 스크리닝 (strict 모드)
+        - 75점 이상 종목 자동 매수
+        - 당일 블랙리스트 적용 (왕복매매 방지)
+
+        cron 예시: */10 9-14 * * 1-5 /path/to/python auto_trader.py --intraday
+        """
+        print("\n" + "=" * 60)
+        print(f"  장중 스크리닝 시작: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+        print("=" * 60)
+
+        # 장 시간 체크 (09:00 ~ 15:20)
+        now = datetime.now()
+        market_open = now.replace(hour=9, minute=0, second=0, microsecond=0)
+        market_close = now.replace(hour=15, minute=20, second=0, microsecond=0)
+
+        if now < market_open or now > market_close:
+            print(f"  장 운영 시간이 아닙니다. (09:00 ~ 15:20)")
+            return {"status": "skipped", "reason": "outside_market_hours"}
+
+        # 사용자 설정 확인
+        if not self._check_trading_enabled():
+            return {"status": "skipped", "reason": "trading_disabled"}
+
+        # 1. 계좌 잔고 조회
+        print("\n[1] 계좌 잔고 조회 중...")
+        balance = self.executor.get_account_balance()
+        if not balance:
+            print("  계좌 잔고 조회 실패")
+            return {"status": "error", "reason": "balance_fetch_failed"}
+
+        total_assets = balance.get("total_assets", 0)
+        available_cash = balance.get("available_cash", 0)
+        max_buy_amt = balance.get("max_buy_amount", available_cash)
+        current_holdings = balance.get("holdings", [])
+        holdings = [h for h in current_holdings if h.get("quantity", 0) > 0]
+
+        print(f"  총 자산: {total_assets:,}원")
+        print(f"  주문 가능: {max_buy_amt:,}원")
+        print(f"  보유 종목: {len(holdings)}개")
+
+        # 보유 종목 수 체크
+        remaining_slots = self.risk_manager.limits.max_holdings - len(holdings)
+        if remaining_slots <= 0:
+            print(f"  최대 보유 종목 수 도달 ({self.risk_manager.limits.max_holdings}개)")
+            return {"status": "skipped", "reason": "max_holdings_reached"}
+
+        # 2. 전종목 스크리닝 (strict 모드)
+        print(f"\n[2] 전종목 스크리닝 중 (strict 모드)...")
+        screener = MarketScreener(max_workers=10)
+        top_stocks, stats = screener.run_full_screening(
+            top_n=100,
+            mode="strict",  # 변별력 강화 버전 사용
+            min_marcap=50_000_000_000,  # 시총 500억 이상
+            min_amount=1_000_000_000,   # 거래대금 10억 이상
+        )
+
+        if not top_stocks:
+            print("  스크리닝 결과 없음")
+            return {"status": "completed", "buy_count": 0}
+
+        print(f"  스크리닝 완료: {len(top_stocks)}개 종목")
+
+        # 3. 매수 후보 필터링 (min_score 이상)
+        print(f"\n[3] 매수 후보 필터링 중 (점수 >= {min_score})...")
+        candidates = []
+        for stock in top_stocks:
+            if stock.get("score", 0) >= min_score:
+                # auto_trader 형식으로 변환
+                candidates.append({
+                    "stock_code": stock.get("code"),
+                    "stock_name": stock.get("name"),
+                    "score": stock.get("score"),
+                    "signals": stock.get("signals", []),
+                    "current_price": int(stock.get("close", 0)),
+                    "volume_ratio": stock.get("indicators", {}).get("volume_ratio", 1.0),
+                    "change_pct": stock.get("change_pct", 0),
+                })
+
+        print(f"  {min_score}점 이상 종목: {len(candidates)}개")
+
+        if not candidates:
+            print("  매수 조건 충족 종목 없음")
+            return {"status": "completed", "buy_count": 0}
+
+        # 4. 당일 블랙리스트 및 보유 종목 필터링
+        print("\n[4] 블랙리스트 및 보유 종목 필터링 중...")
+        holding_codes = {h.get("stock_code") for h in holdings}
+        today_blacklist = self.logger.get_today_traded_stocks(self.user_id)
+
+        if today_blacklist:
+            print(f"  당일 거래 종목: {len(today_blacklist)}개 (재매수 제외)")
+
+        filtered_candidates = []
+        for c in candidates:
+            code = c.get("stock_code")
+            name = c.get("stock_name")
+
+            if code in holding_codes:
+                print(f"  [{name}] 이미 보유 중 - 제외")
+                continue
+            if code in today_blacklist:
+                print(f"  [{name}] 당일 거래 이력 - 재매수 제외")
+                continue
+
+            filtered_candidates.append(c)
+
+            # 남은 슬롯만큼만 선택
+            if len(filtered_candidates) >= remaining_slots:
+                break
+
+        print(f"  최종 매수 후보: {len(filtered_candidates)}개")
+
+        if not filtered_candidates:
+            return {"status": "completed", "buy_count": 0}
+
+        # 5. 매수 실행
+        print("\n[5] 매수 주문 실행 중...")
+        investment_per_stock = self.risk_manager.calculate_investment_amount(total_assets)
+        actual_investment = min(investment_per_stock, max_buy_amt // len(filtered_candidates))
+        print(f"  종목당 투자금: {actual_investment:,}원")
+
+        buy_count = 0
+        for candidate in filtered_candidates:
+            stock_code = candidate["stock_code"]
+            stock_name = candidate["stock_name"]
+            current_price = candidate["current_price"]
+            score = candidate["score"]
+
+            # 실시간 가격 조회
+            live_price = self.executor.get_current_price(stock_code)
+            if live_price and live_price > 0:
+                current_price = live_price
+
+            quantity = actual_investment // current_price
+            if quantity <= 0:
+                print(f"  {stock_name}: 매수 가능 수량 없음")
+                continue
+
+            print(f"\n매수: {stock_name} ({stock_code})")
+            print(f"  현재가: {current_price:,}원, 점수: {score}점")
+            print(f"  수량: {quantity}주 = {current_price * quantity:,}원")
+
+            if self.dry_run:
+                print("  [DRY-RUN] 실제 주문 실행 안함")
+                result = {"success": True, "dry_run": True}
+            else:
+                result = self.executor.place_buy_order(
+                    stock_code=stock_code,
+                    quantity=quantity
+                )
+
+            if result.get("success"):
+                buy_count += 1
+
+                # 거래 기록
+                self.logger.log_order(
+                    stock_code=stock_code,
+                    stock_name=stock_name,
+                    side="buy",
+                    quantity=quantity,
+                    price=current_price,
+                    order_no=result.get("order_no"),
+                    trade_reason=f"장중스크리닝 {score}점",
+                    status="executed" if not self.dry_run else "dry_run"
+                )
+
+                # 알림
+                self.notifier.notify_buy(stock_name, current_price, quantity, stock_code)
+
+                print(f"  매수 완료!")
+
+        print("\n" + "=" * 60)
+        print(f"  장중 스크리닝 완료: 매수 {buy_count}건")
+        print("=" * 60)
+
+        return {
+            "status": "completed",
+            "buy_count": buy_count,
+            "screened_stocks": len(top_stocks),
+            "candidates": len(candidates),
+            "filtered": len(filtered_candidates),
+            "timestamp": datetime.now().isoformat()
+        }
+
+    def _check_trading_enabled(self) -> bool:
+        """사용자 설정에서 거래 활성화 여부 확인"""
+        if self.user_id:
+            user_settings = self.logger.get_auto_trade_settings(self.user_id)
+            if user_settings:
+                if not user_settings.get('trading_enabled', True):
+                    print(f"  거래 비활성화 상태 (user_id={self.user_id})")
+                    return False
+        return True
+
 
 def main():
     parser = argparse.ArgumentParser(description="자동매매 시스템")
     parser.add_argument("--dry-run", action="store_true", help="테스트 실행 (실제 주문 X)")
     parser.add_argument("--report", action="store_true", help="성과 리포트만 출력")
     parser.add_argument("--days", type=int, default=30, help="리포트 조회 기간 (기본: 30일)")
+    parser.add_argument("--intraday", action="store_true", help="장중 10분 스크리닝 모드")
+    parser.add_argument("--min-score", type=int, default=75, help="장중 스크리닝 최소 점수 (기본: 75)")
+    parser.add_argument("--user-id", type=int, help="사용자 ID (장중 스크리닝용)")
     args = parser.parse_args()
 
-    trader = AutoTrader(dry_run=args.dry_run)
+    # user_id가 지정되면 해당 사용자 설정 사용
+    trader = AutoTrader(dry_run=args.dry_run, user_id=args.user_id)
 
     if args.report:
         trader.print_report(days=args.days)
+    elif args.intraday:
+        # 장중 10분 스크리닝 모드
+        trader.run_intraday(min_score=args.min_score)
     else:
         trader.run()
 

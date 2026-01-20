@@ -83,6 +83,32 @@ class TechnicalAnalyst:
         df = fdr.DataReader(stock_code, start_date)
         return df
 
+    def calculate_projected_volume(self, curr_vol):
+        """
+        장중 예상 거래량 계산 (시간 가중치 적용)
+        - 장 초반(9~10시) 거래량 쏠림 보정 (0.7 계수)
+        - 장 마감 후에는 실제 거래량 그대로 반환
+        """
+        now = datetime.now()
+        market_open = now.replace(hour=9, minute=0, second=0, microsecond=0)
+        market_close = now.replace(hour=15, minute=30, second=0, microsecond=0)
+
+        if now < market_open:
+            return curr_vol  # 장 시작 전
+        if now >= market_close:
+            return curr_vol  # 장 마감 후
+
+        total_minutes = 390  # 6시간 30분
+        elapsed_minutes = max(1, (now - market_open).total_seconds() / 60)
+
+        # 장 초반 거래량 쏠림 보정
+        if elapsed_minutes < 60:
+            projection_factor = (total_minutes / elapsed_minutes) * 0.7
+        else:
+            projection_factor = total_minutes / elapsed_minutes
+
+        return int(curr_vol * projection_factor)
+
     def analyze(self, df):
         """기본 분석 (기존 호환성 유지)"""
         if df is None or len(df) < 60:
@@ -154,7 +180,7 @@ class TechnicalAnalyst:
             return None
 
         result = {
-            'score': 50,  # 기본 중립 점수에서 시작
+            'score': 0,
             'signals': [],
             'indicators': {},
             'patterns': []
@@ -533,17 +559,18 @@ class TechnicalAnalyst:
             self._analyze_candle_patterns(df, result)
 
             # 최종 점수 조정
-            # 기본 50점에서 시작, 신호에 따라 증감
-            # 최소 30점, 최대 95점으로 제한
+            # 점수 구간별 차등 스케일링:
+            # - 낮은 점수(0-60)는 비교적 그대로 유지
+            # - 높은 점수(60+)는 더 강하게 압축
+            # 이를 통해 80점 이상은 정말 강한 신호, 90점 이상은 매우 드문 경우
             raw_score = result['score']
-            # 스케일링: raw 0-50 -> 30-50, raw 50-100 -> 50-75, raw 100+ -> 75-95
-            if raw_score <= 50:
-                scaled_score = 30 + int((raw_score / 50) * 20)  # 0-50 -> 30-50
+            if raw_score <= 60:
+                scaled_score = int(raw_score * 0.9)  # 0-60 -> 0-54
             elif raw_score <= 100:
-                scaled_score = 50 + int(((raw_score - 50) / 50) * 25)  # 50-100 -> 50-75
+                scaled_score = 54 + int((raw_score - 60) * 0.65)  # 60-100 -> 54-80
             else:
-                scaled_score = 75 + int(((raw_score - 100) / 50) * 20)  # 100+ -> 75-95
-            result['score'] = max(30, min(95, scaled_score))
+                scaled_score = 80 + int((raw_score - 100) * 0.4)  # 100+ -> 80-100
+            result['score'] = max(0, min(100, scaled_score))
 
             return result
 
@@ -800,6 +827,516 @@ class TechnicalAnalyst:
 
         except Exception as e:
             print(f"추천 매수가 계산 오류: {e}")
+            return None
+
+    def analyze_trend_following(self, df):
+        """
+        추세 추종형(Trend Following) 분석 로직
+
+        기존 로직과의 차이점:
+        1. 과매도 점수 삭제 (RSI < 30 → -10점으로 변경, 떨어지는 칼날 잡지 않음)
+        2. 과매수 감점 완화 (RSI 70~85 → 0점, 85+ → -5점만)
+        3. 역배열 시 과락 (return 0, 매수 금지)
+        4. 중복 지표 통합 (RSI만 사용, Stoch은 골든크로스만, CCI/WR 제거)
+
+        점수 구성 (100점 만점):
+        - 추세(Trend): 40점 - 방향이 위쪽인가?
+        - 모멘텀(Momentum): 30점 - 올라탈 힘이 있는가?
+        - 거래량/수급(Volume): 30점 - 가짜 상승을 걸러냄
+        """
+        if df is None or len(df) < 60:
+            return None
+
+        result = {
+            'score': 0,
+            'signals': [],
+            'indicators': {},
+            'patterns': [],
+            'analysis_type': 'trend_following'
+        }
+
+        try:
+            curr = df.iloc[-1]
+            prev = df.iloc[-2]
+
+            # 기본 정보
+            result['indicators']['close'] = curr['Close']
+            result['indicators']['change_pct'] = ((curr['Close'] - prev['Close']) / prev['Close']) * 100
+            result['indicators']['volume'] = curr['Volume']
+
+            # ========== 이동평균선 계산 ==========
+            df['SMA_5'] = ta.sma(df['Close'], length=5)
+            df['SMA_20'] = ta.sma(df['Close'], length=20)
+            df['SMA_60'] = ta.sma(df['Close'], length=60)
+
+            curr = df.iloc[-1]
+            prev = df.iloc[-2]
+
+            # === 과락 조건: 역배열 (5 < 20 < 60) ===
+            # 역배열이면 점수 0 반환 (매수 금지)
+            if curr['SMA_5'] < curr['SMA_20'] < curr['SMA_60']:
+                result['signals'].append('MA_REVERSE_ALIGNED')
+                result['indicators']['ma_status'] = 'reverse_aligned'
+                result['score'] = 0
+                return result
+
+            # ========== 1. 추세 그룹 (최대 40점) ==========
+            trend_score = 0
+
+            # 정배열 (+15)
+            if curr['SMA_5'] > curr['SMA_20'] > curr['SMA_60']:
+                trend_score += 15
+                result['signals'].append('MA_ALIGNED')
+                result['indicators']['ma_status'] = 'aligned'
+
+            # 골든크로스 5/20 (+10)
+            if prev['SMA_5'] < prev['SMA_20'] and curr['SMA_5'] > curr['SMA_20']:
+                trend_score += 10
+                result['signals'].append('GOLDEN_CROSS_5_20')
+
+            # 골든크로스 20/60 (+15) - 더 강한 신호
+            if prev['SMA_20'] < prev['SMA_60'] and curr['SMA_20'] > curr['SMA_60']:
+                trend_score += 15
+                result['signals'].append('GOLDEN_CROSS_20_60')
+
+            # MACD
+            macd = ta.macd(df['Close'], fast=12, slow=26, signal=9)
+            if macd is not None:
+                macd_col = [c for c in macd.columns if 'MACD_' in c and 'MACDh' not in c and 'MACDs' not in c][0]
+                signal_col = [c for c in macd.columns if 'MACDs' in c][0]
+                hist_col = [c for c in macd.columns if 'MACDh' in c][0]
+
+                curr_macd = macd.iloc[-1][macd_col]
+                curr_signal = macd.iloc[-1][signal_col]
+                prev_macd = macd.iloc[-2][macd_col]
+                prev_signal = macd.iloc[-2][signal_col]
+
+                result['indicators']['macd'] = curr_macd
+                result['indicators']['macd_signal'] = curr_signal
+
+                # MACD가 0선 위에서 상승 중 (+10)
+                if curr_macd > 0 and curr_macd > prev_macd:
+                    trend_score += 10
+                    result['signals'].append('MACD_ABOVE_ZERO_RISING')
+                # MACD 골든크로스 (+10)
+                elif prev_macd < prev_signal and curr_macd > curr_signal:
+                    trend_score += 10
+                    result['signals'].append('MACD_GOLDEN_CROSS')
+
+            # Supertrend
+            supertrend = ta.supertrend(df['High'], df['Low'], df['Close'], length=10, multiplier=3)
+            if supertrend is not None:
+                st_col = [c for c in supertrend.columns if 'SUPERTd' in c][0]
+                curr_st = supertrend.iloc[-1][st_col]
+                prev_st = supertrend.iloc[-2][st_col]
+
+                result['indicators']['supertrend'] = curr_st
+
+                # 상승 전환 (+10)
+                if prev_st == -1 and curr_st == 1:
+                    trend_score += 10
+                    result['signals'].append('SUPERTREND_BUY')
+                # 상승 유지 (+5)
+                elif curr_st == 1:
+                    trend_score += 5
+                    result['signals'].append('SUPERTREND_UPTREND')
+
+            # ADX (추세 강도)
+            adx = ta.adx(df['High'], df['Low'], df['Close'], length=14)
+            if adx is not None:
+                adx_col = [c for c in adx.columns if c.startswith('ADX')][0]
+                dmp_col = [c for c in adx.columns if 'DMP' in c][0]
+                dmn_col = [c for c in adx.columns if 'DMN' in c][0]
+
+                curr_adx = adx.iloc[-1][adx_col]
+                curr_dmp = adx.iloc[-1][dmp_col]
+                curr_dmn = adx.iloc[-1][dmn_col]
+
+                result['indicators']['adx'] = curr_adx
+
+                # ADX > 25이고 상승추세 (+5)
+                if curr_adx > 25 and curr_dmp > curr_dmn:
+                    trend_score += 5
+                    result['signals'].append('ADX_STRONG_UPTREND')
+
+            # 추세 점수 상한 40점
+            trend_score = min(40, trend_score)
+
+            # ========== 2. 모멘텀 그룹 (최대 30점) ==========
+            momentum_score = 0
+
+            # RSI (핵심 변경: 과매도 감점, 과매수 유지)
+            df['RSI'] = ta.rsi(df['Close'], length=14)
+            rsi = df.iloc[-1]['RSI']
+            prev_rsi = df.iloc[-2]['RSI']
+            if pd.notna(rsi):
+                result['indicators']['rsi'] = rsi
+
+                if rsi < 30:
+                    # 과매도 = 떨어지는 칼날 (-10점)
+                    momentum_score -= 10
+                    result['signals'].append('RSI_FALLING_KNIFE')
+                elif 30 <= rsi < 50:
+                    # 회복 중 (+5)
+                    momentum_score += 5
+                    result['signals'].append('RSI_RECOVERING')
+                elif 50 <= rsi < 70:
+                    # 안정적 상승 (+15)
+                    momentum_score += 15
+                    result['signals'].append('RSI_HEALTHY_UPTREND')
+                elif 70 <= rsi < 85:
+                    # 강한 상승 - 감점 없음 (+10)
+                    momentum_score += 10
+                    result['signals'].append('RSI_STRONG_MOMENTUM')
+                else:  # rsi >= 85
+                    # 초강세: 꺾일 때만 감점, 계속 오르면 홀딩
+                    if pd.notna(prev_rsi) and rsi < prev_rsi:
+                        # 고점 찍고 내려옴 → 감점
+                        momentum_score -= 5
+                        result['signals'].append('RSI_PEAK_OUT')
+                    else:
+                        # 계속 상승 중 → 감점 없음 (초강세 유지)
+                        momentum_score += 5
+                        result['signals'].append('RSI_EXTREME_BULL')
+
+            # Stochastic (골든크로스만 사용)
+            stoch = ta.stoch(df['High'], df['Low'], df['Close'], k=14, d=3)
+            if stoch is not None:
+                k_col = [c for c in stoch.columns if 'STOCHk' in c][0]
+                d_col = [c for c in stoch.columns if 'STOCHd' in c][0]
+
+                curr_k = stoch.iloc[-1][k_col]
+                curr_d = stoch.iloc[-1][d_col]
+                prev_k = stoch.iloc[-2][k_col]
+                prev_d = stoch.iloc[-2][d_col]
+
+                result['indicators']['stoch_k'] = curr_k
+                result['indicators']['stoch_d'] = curr_d
+
+                # 골든크로스만 점수 부여 (+10)
+                if prev_k < prev_d and curr_k > curr_d:
+                    momentum_score += 10
+                    result['signals'].append('STOCH_GOLDEN_CROSS')
+
+            # 일목균형표 (구름대 위)
+            ichimoku = ta.ichimoku(df['High'], df['Low'], df['Close'])
+            if ichimoku is not None and len(ichimoku) == 2:
+                ich_df = ichimoku[0]
+                span_a_col = [c for c in ich_df.columns if 'ISA' in c]
+                span_b_col = [c for c in ich_df.columns if 'ISB' in c]
+
+                if span_a_col and span_b_col:
+                    span_a = ich_df.iloc[-1][span_a_col[0]]
+                    span_b = ich_df.iloc[-1][span_b_col[0]]
+                    if pd.notna(span_a) and pd.notna(span_b):
+                        cloud_top = max(span_a, span_b)
+                        if curr['Close'] > cloud_top:
+                            momentum_score += 5
+                            result['signals'].append('ICHIMOKU_ABOVE_CLOUD')
+
+            # 모멘텀 점수 상한 30점
+            momentum_score = min(30, max(-10, momentum_score))
+
+            # ========== 3. 거래량/수급 그룹 (최대 30점) ==========
+            volume_score = 0
+
+            # 거래량 분석 (NaN 안전 처리)
+            df['VOL_MA20'] = ta.sma(df['Volume'], length=20)
+            vol_ma = df.iloc[-1]['VOL_MA20']
+            if pd.isna(vol_ma) or vol_ma == 0:
+                vol_ratio = 1.0
+            else:
+                vol_ratio = curr['Volume'] / vol_ma
+
+            result['indicators']['volume_ratio'] = vol_ratio
+
+            if vol_ratio >= 2.0:
+                volume_score += 15
+                result['signals'].append('VOLUME_SURGE')
+            elif vol_ratio >= 1.5:
+                volume_score += 10
+                result['signals'].append('VOLUME_HIGH')
+            elif vol_ratio >= 1.2:
+                volume_score += 5
+                result['signals'].append('VOLUME_ABOVE_AVG')
+
+            # OBV
+            obv = ta.obv(df['Close'], df['Volume'])
+            if obv is not None:
+                df['OBV'] = obv
+                df['OBV_SMA'] = ta.sma(obv, length=20)
+
+                curr_obv = df.iloc[-1]['OBV']
+                curr_obv_sma = df.iloc[-1]['OBV_SMA']
+
+                if pd.notna(curr_obv_sma) and curr_obv > curr_obv_sma:
+                    volume_score += 5
+                    result['signals'].append('OBV_ABOVE_MA')
+
+            # CMF (자금 유입)
+            cmf = ta.cmf(df['High'], df['Low'], df['Close'], df['Volume'], length=20)
+            if cmf is not None:
+                curr_cmf = cmf.iloc[-1]
+                result['indicators']['cmf'] = curr_cmf
+
+                if curr_cmf > 0.2:
+                    volume_score += 10
+                    result['signals'].append('CMF_STRONG_INFLOW')
+                elif curr_cmf > 0:
+                    volume_score += 5
+                    result['signals'].append('CMF_POSITIVE')
+                elif curr_cmf < -0.2:
+                    volume_score -= 10
+                    result['signals'].append('CMF_STRONG_OUTFLOW')
+
+            # 거래량 점수 상한 30점
+            volume_score = min(30, max(-10, volume_score))
+
+            # ========== 최종 점수 계산 ==========
+            raw_score = trend_score + momentum_score + volume_score
+
+            # 점수 스케일링 (0-100)
+            # 추세 추종형은 덜 압축 (상승 추세에서 높은 점수 유지)
+            if raw_score <= 50:
+                scaled_score = int(raw_score * 1.0)  # 0-50 그대로
+            elif raw_score <= 80:
+                scaled_score = 50 + int((raw_score - 50) * 1.2)  # 50-80 → 50-86
+            else:
+                scaled_score = 86 + int((raw_score - 80) * 0.7)  # 80-100 → 86-100
+
+            result['score'] = max(0, min(100, scaled_score))
+
+            # 디버그 정보
+            result['indicators']['trend_score'] = trend_score
+            result['indicators']['momentum_score'] = momentum_score
+            result['indicators']['volume_score'] = volume_score
+            result['indicators']['raw_score'] = raw_score
+
+            return result
+
+        except Exception as e:
+            print(f"추세 추종 분석 오류: {e}")
+            return None
+
+    def analyze_trend_following_strict(self, df):
+        """
+        [변별력 강화판] 추세 추종 분석 로직
+
+        기존 로직 대비 변경점:
+        1. 기본 점수 대폭 축소 (정배열 +15 → +5, MACD +10 → +3)
+        2. 20일선 '기울기(Slope)' 추가 - 급등 추세 가산점
+        3. 거래대금 100억 이상 가산점 (소형 잡주 필터링)
+        4. 60일 신고가 돌파 가산점 (매물대 없는 종목)
+        5. 거래량 기준 상향 (2배 → 3배)
+
+        목표: 80점 이상은 진짜 주도주만 나오도록
+        """
+        if df is None or len(df) < 60:
+            return None
+
+        result = {
+            'score': 0,
+            'signals': [],
+            'indicators': {},
+            'patterns': [],
+            'analysis_type': 'trend_following_strict'
+        }
+
+        try:
+            curr = df.iloc[-1]
+            prev = df.iloc[-2]
+
+            # 기본 정보
+            result['indicators']['close'] = curr['Close']
+            result['indicators']['change_pct'] = ((curr['Close'] - prev['Close']) / prev['Close']) * 100
+            result['indicators']['volume'] = curr['Volume']
+
+            # 거래대금 계산 (주도주 필터의 핵심)
+            trading_value = curr['Close'] * curr['Volume']
+            result['indicators']['trading_value'] = trading_value
+            result['indicators']['trading_value_억'] = trading_value / 100_000_000
+
+            # ========== 이동평균선 계산 ==========
+            df['SMA_5'] = ta.sma(df['Close'], length=5)
+            df['SMA_20'] = ta.sma(df['Close'], length=20)
+            df['SMA_60'] = ta.sma(df['Close'], length=60)
+
+            curr = df.iloc[-1]
+            prev = df.iloc[-2]
+
+            curr_sma5 = curr['SMA_5']
+            curr_sma20 = curr['SMA_20']
+            curr_sma60 = curr['SMA_60']
+
+            # === 과락 조건: 역배열 ===
+            if curr_sma5 < curr_sma20 < curr_sma60:
+                result['signals'].append('MA_REVERSE_ALIGNED')
+                result['indicators']['ma_status'] = 'reverse_aligned'
+                result['score'] = 0
+                return result
+
+            # ========== 1. 추세 그룹 (최대 30점) - 점수 다이어트 ==========
+            trend_score = 0
+
+            # 정배열: +15 → +5 (기본 소양일 뿐)
+            if curr_sma5 > curr_sma20 > curr_sma60:
+                trend_score += 5
+                result['signals'].append('MA_ALIGNED')
+                result['indicators']['ma_status'] = 'aligned'
+            else:
+                result['indicators']['ma_status'] = 'partial'
+
+            # [핵심] 20일선 기울기 (추세 강도)
+            # 5일전 대비 20일선이 얼마나 상승했는지
+            if len(df) >= 6:
+                sma20_5d_ago = df['SMA_20'].iloc[-6]
+                if pd.notna(sma20_5d_ago) and sma20_5d_ago > 0:
+                    sma20_slope = (curr_sma20 - sma20_5d_ago) / sma20_5d_ago * 100
+                    result['indicators']['sma20_slope'] = sma20_slope
+
+                    if sma20_slope > 3.0:  # 기울기가 매우 가파름
+                        trend_score += 15
+                        result['signals'].append('MA_20_VERY_STEEP')
+                    elif sma20_slope > 1.5:  # 기울기가 가파름
+                        trend_score += 10
+                        result['signals'].append('MA_20_STEEP')
+                    elif sma20_slope > 0.5:  # 완만한 상승
+                        trend_score += 3
+                        result['signals'].append('MA_20_RISING')
+
+            # MACD: +10 → +3 (당연한 것)
+            macd = ta.macd(df['Close'], fast=12, slow=26, signal=9)
+            if macd is not None:
+                macd_col = [c for c in macd.columns if 'MACD_' in c and 'MACDh' not in c and 'MACDs' not in c][0]
+                curr_macd = macd.iloc[-1][macd_col]
+                result['indicators']['macd'] = curr_macd
+
+                if curr_macd > 0:
+                    trend_score += 3
+                    result['signals'].append('MACD_BULL')
+
+            # Supertrend 매수 전환 (희소성 있음)
+            supertrend = ta.supertrend(df['High'], df['Low'], df['Close'], length=10, multiplier=3)
+            if supertrend is not None:
+                st_col = [c for c in supertrend.columns if 'SUPERTd' in c][0]
+                curr_st = supertrend.iloc[-1][st_col]
+                prev_st = supertrend.iloc[-2][st_col]
+
+                if prev_st == -1 and curr_st == 1:
+                    trend_score += 7
+                    result['signals'].append('SUPERTREND_BUY')
+
+            trend_score = min(30, trend_score)
+
+            # ========== 2. 모멘텀 그룹 (최대 35점) ==========
+            momentum_score = 0
+
+            # RSI: 60~75가 알짜 구간 (상승 가속 구간)
+            df['RSI'] = ta.rsi(df['Close'], length=14)
+            rsi = df.iloc[-1]['RSI']
+            prev_rsi = df.iloc[-2]['RSI']
+
+            if pd.notna(rsi):
+                result['indicators']['rsi'] = rsi
+
+                if 60 <= rsi <= 75:
+                    # 상승 가속 구간 (Sweet Spot)
+                    momentum_score += 15
+                    result['signals'].append('RSI_SWEET_SPOT')
+                elif 50 <= rsi < 60:
+                    momentum_score += 5
+                    result['signals'].append('RSI_HEALTHY')
+                elif rsi > 80:
+                    # 과열이지만 계속 오르면 주도주 특성
+                    if pd.notna(prev_rsi) and rsi > prev_rsi:
+                        momentum_score += 10
+                        result['signals'].append('RSI_POWER_BULL')
+                    else:
+                        momentum_score -= 5
+                        result['signals'].append('RSI_PEAK_OUT')
+                elif rsi < 30:
+                    momentum_score -= 10
+                    result['signals'].append('RSI_FALLING_KNIFE')
+
+            # [핵심] 60일 신고가 돌파 (매물대 없음 = 큰 가산점)
+            high_60d = df['High'].tail(60).max()
+            result['indicators']['high_60d'] = high_60d
+            result['indicators']['high_60d_pct'] = (curr['Close'] / high_60d - 1) * 100
+
+            if curr['Close'] >= high_60d:
+                momentum_score += 15
+                result['signals'].append('BREAKOUT_60D_HIGH')
+            elif curr['Close'] >= high_60d * 0.97:
+                momentum_score += 7
+                result['signals'].append('NEAR_60D_HIGH')
+            elif curr['Close'] >= high_60d * 0.95:
+                momentum_score += 3
+                result['signals'].append('CLOSE_TO_60D_HIGH')
+
+            momentum_score = min(35, max(-10, momentum_score))
+
+            # ========== 3. 거래량/거래대금 그룹 (최대 35점) - 변별력 핵심 ==========
+            volume_score = 0
+
+            # 거래량 분석 (기준 상향: 2배 → 3배)
+            df['VOL_MA20'] = ta.sma(df['Volume'], length=20)
+            vol_ma = df.iloc[-1]['VOL_MA20']
+            curr_vol = int(curr['Volume'])
+            projected_vol = self.calculate_projected_volume(curr_vol)  # 장중 예상 거래량
+
+            if pd.isna(vol_ma) or vol_ma == 0:
+                vol_ratio = 1.0
+            else:
+                vol_ratio = projected_vol / vol_ma  # 예상 거래량으로 비율 계산
+
+            result['indicators']['volume_ratio'] = vol_ratio
+            result['indicators']['projected_volume'] = projected_vol
+            result['indicators']['actual_volume'] = curr_vol
+
+            if vol_ratio >= 5.0:
+                volume_score += 20
+                result['signals'].append('VOLUME_EXPLOSION')
+            elif vol_ratio >= 3.0:
+                volume_score += 12
+                result['signals'].append('VOLUME_SURGE_3X')
+            elif vol_ratio >= 2.0:
+                volume_score += 5
+                result['signals'].append('VOLUME_HIGH')
+            # 1.5배는 이제 점수 없음 (참가상 방지)
+
+            # [핵심] 거래대금 필터 (잡주 걸러내기)
+            if trading_value >= 50_000_000_000:  # 500억 이상
+                volume_score += 15
+                result['signals'].append('TRADING_VALUE_500B')
+            elif trading_value >= 10_000_000_000:  # 100억 이상
+                volume_score += 10
+                result['signals'].append('TRADING_VALUE_100B')
+            elif trading_value >= 3_000_000_000:  # 30억 이상
+                volume_score += 3
+                result['signals'].append('TRADING_VALUE_30B')
+            elif trading_value < 1_000_000_000:  # 10억 미만
+                volume_score -= 5
+                result['signals'].append('LOW_LIQUIDITY')
+
+            volume_score = min(35, max(-10, volume_score))
+
+            # ========== 최종 점수 계산 ==========
+            raw_score = trend_score + momentum_score + volume_score
+
+            # 스케일링 없이 그대로 (빡빡한 기준)
+            # 80점 넘으려면: 기울기 급함 + 신고가 근처 + 거래대금 터짐 모두 필요
+            result['score'] = max(0, min(100, raw_score))
+
+            # 디버그 정보
+            result['indicators']['trend_score'] = trend_score
+            result['indicators']['momentum_score'] = momentum_score
+            result['indicators']['volume_score'] = volume_score
+            result['indicators']['raw_score'] = raw_score
+
+            return result
+
+        except Exception as e:
+            print(f"변별력 강화 분석 오류: {e}")
             return None
 
     def get_quick_score(self, df):

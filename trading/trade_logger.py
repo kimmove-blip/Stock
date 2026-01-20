@@ -517,6 +517,38 @@ class TradeLogger:
         trades = self.get_today_trades()
         return len([t for t in trades if t.get("status") == "executed"])
 
+    def get_today_traded_stocks(self, user_id: int) -> set:
+        """
+        당일 거래한 종목 코드 집합 반환 (블랙리스트용)
+
+        매수/매도 여부 상관없이 오늘 거래된 모든 종목을 반환합니다.
+        장중 10분 스크리닝 시 같은 종목 왕복매매 방지용.
+
+        Args:
+            user_id: 사용자 ID
+
+        Returns:
+            오늘 거래한 종목 코드 집합 (set)
+        """
+        if user_id is None:
+            return set()
+
+        today = datetime.now().strftime("%Y-%m-%d")
+
+        query = """
+            SELECT DISTINCT stock_code
+            FROM trade_log
+            WHERE user_id = ?
+              AND trade_date = ?
+              AND status = 'executed'
+        """
+
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(query, (user_id, today))
+            rows = cursor.fetchall()
+            return {row['stock_code'] for row in rows}
+
     def save_daily_performance(
         self,
         total_assets: int,
@@ -672,12 +704,13 @@ class TradeLogger:
 
     # ========== 모의투자 가상 잔고 관리 ==========
 
-    def init_virtual_balance(self, initial_cash: int) -> bool:
+    def init_virtual_balance(self, initial_cash: int, user_id: int = None) -> bool:
         """
         모의투자 가상 잔고 초기화
 
         Args:
             initial_cash: 초기 자금
+            user_id: 사용자 ID
 
         Returns:
             성공 여부
@@ -688,7 +721,10 @@ class TradeLogger:
             cursor = conn.cursor()
 
             # 기존 잔고가 있는지 확인
-            cursor.execute("SELECT id FROM virtual_balance LIMIT 1")
+            if user_id:
+                cursor.execute("SELECT id FROM virtual_balance WHERE user_id = ?", (user_id,))
+            else:
+                cursor.execute("SELECT id FROM virtual_balance LIMIT 1")
             existing = cursor.fetchone()
 
             if existing:
@@ -697,10 +733,10 @@ class TradeLogger:
 
             cursor.execute("""
                 INSERT INTO virtual_balance (
-                    initial_cash, current_cash, total_invested,
+                    user_id, initial_cash, current_cash, total_invested,
                     total_eval, total_profit, created_at, updated_at
-                ) VALUES (?, ?, 0, 0, 0, ?, ?)
-            """, (initial_cash, initial_cash, now.isoformat(), now.isoformat()))
+                ) VALUES (?, ?, ?, 0, 0, 0, ?, ?)
+            """, (user_id, initial_cash, initial_cash, now.isoformat(), now.isoformat()))
 
             return True
 
@@ -1020,14 +1056,17 @@ class TradeLogger:
             # stock_data.db를 attach하여 users 테이블 접근
             cursor.execute(f"ATTACH DATABASE '{stock_db_path}' AS stock_db")
 
-            # auto_trade_enabled 유저 중 API 키가 설정된 유저만 조회
+            # auto_trade_enabled 유저 중 API 키가 설정되고 trading_enabled=1인 유저만 조회
+            # 중요: auto_trade_settings.trading_enabled=1이어야만 자동매매 실행
             cursor.execute("""
                 SELECT u.id, u.username, u.name, u.telegram_chat_id,
                        a.app_key, a.app_secret, a.account_number,
                        a.account_product_code, a.is_mock
                 FROM stock_db.users u
                 JOIN api_key_settings a ON u.id = a.user_id
+                JOIN auto_trade_settings s ON u.id = s.user_id
                 WHERE u.auto_trade_enabled = 1 AND u.is_active = 1
+                  AND s.trading_enabled = 1
             """)
             rows = cursor.fetchall()
 
@@ -1097,6 +1136,82 @@ class TradeLogger:
         except Exception as e:
             raise Exception(f"계좌 조회 실패: {str(e)}")
 
+    def place_order(
+        self,
+        app_key: str,
+        app_secret: str,
+        account_number: str,
+        account_product_code: str = "01",
+        stock_code: str = "",
+        side: str = "buy",
+        quantity: int = 0,
+        price: int = 0,
+        order_type: str = "market",
+        is_mock: bool = True
+    ) -> Dict:
+        """
+        주식 주문 실행 (KIS API)
+
+        Args:
+            app_key: API 앱키
+            app_secret: API 시크릿
+            account_number: 계좌번호
+            account_product_code: 상품코드
+            stock_code: 종목코드
+            side: 매수/매도 (buy/sell)
+            quantity: 수량
+            price: 가격 (0이면 시장가)
+            order_type: 주문유형 (limit: 지정가, market: 시장가)
+            is_mock: 모의투자 여부
+
+        Returns:
+            {'success': bool, 'order_id': str, 'message': str}
+        """
+        try:
+            import sys
+            import os
+            sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+            from api.services.kis_client import KISClient
+
+            client = KISClient(
+                app_key=app_key,
+                app_secret=app_secret,
+                account_number=account_number,
+                account_product_code=account_product_code,
+                is_mock=is_mock
+            )
+
+            # order_type 변환 (limit -> 00, market -> 01)
+            kis_order_type = "00" if order_type == "limit" else "01"
+
+            result = client.place_order(
+                stock_code=stock_code,
+                side=side,
+                quantity=quantity,
+                price=price,
+                order_type=kis_order_type
+            )
+
+            if result and result.get('success'):
+                return {
+                    'success': True,
+                    'order_id': result.get('order_id', ''),
+                    'message': result.get('message', '주문 접수 완료')
+                }
+            else:
+                return {
+                    'success': False,
+                    'order_id': '',
+                    'message': result.get('message', '주문 실패') if result else '주문 실패'
+                }
+
+        except Exception as e:
+            return {
+                'success': False,
+                'order_id': '',
+                'message': f"주문 실패: {str(e)}"
+            }
+
     def get_pending_orders(
         self,
         app_key: str,
@@ -1135,6 +1250,148 @@ class TradeLogger:
         except Exception as e:
             raise Exception(f"미체결 조회 실패: {str(e)}")
 
+    def modify_order(
+        self,
+        app_key: str,
+        app_secret: str,
+        account_number: str,
+        account_product_code: str = "01",
+        order_no: str = "",
+        stock_code: str = "",
+        quantity: int = 0,
+        price: int = 0,
+        order_type: str = "00",  # 00: 지정가, 01: 시장가
+        is_mock: bool = True
+    ) -> Dict:
+        """
+        주문 정정 (KIS API)
+
+        Args:
+            order_no: 원주문번호
+            stock_code: 종목코드
+            quantity: 정정 수량
+            price: 정정 가격
+            order_type: 주문 구분 ("00": 지정가, "01": 시장가)
+
+        Returns:
+            {'success': bool, 'new_order_no': str, 'message': str}
+        """
+        try:
+            import sys
+            import os
+            sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+            from api.services.kis_client import KISClient
+
+            client = KISClient(
+                app_key=app_key,
+                app_secret=app_secret,
+                account_number=account_number,
+                account_product_code=account_product_code,
+                is_mock=is_mock
+            )
+
+            result = client.modify_order(
+                order_no=order_no,
+                stock_code=stock_code,
+                quantity=quantity,
+                price=price,
+                order_type=order_type
+            )
+
+            if result and result.get('success'):
+                return {
+                    'success': True,
+                    'new_order_no': result.get('new_order_no', ''),
+                    'message': '주문 정정 완료'
+                }
+            else:
+                return {
+                    'success': False,
+                    'new_order_no': '',
+                    'message': result.get('error', '주문 정정 실패') if result else '주문 정정 실패'
+                }
+
+        except Exception as e:
+            return {
+                'success': False,
+                'new_order_no': '',
+                'message': f"주문 정정 실패: {str(e)}"
+            }
+
+    def cancel_order(
+        self,
+        app_key: str,
+        app_secret: str,
+        account_number: str,
+        account_product_code: str = "01",
+        order_id: str = "",
+        is_mock: bool = True
+    ) -> Dict:
+        """
+        주문 취소 (KIS API)
+
+        Args:
+            order_id: 원주문번호
+
+        Returns:
+            {'success': bool, 'message': str}
+        """
+        try:
+            import sys
+            import os
+            sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+            from api.services.kis_client import KISClient
+
+            client = KISClient(
+                app_key=app_key,
+                app_secret=app_secret,
+                account_number=account_number,
+                account_product_code=account_product_code,
+                is_mock=is_mock
+            )
+
+            # 미체결 주문에서 해당 주문 정보 조회
+            pending_orders = client.get_pending_orders()
+            target_order = None
+            if pending_orders:
+                for order in pending_orders:
+                    if order.get('order_no') == order_id:
+                        target_order = order
+                        break
+
+            if not target_order:
+                return {
+                    'success': False,
+                    'message': '해당 주문을 찾을 수 없습니다.'
+                }
+
+            stock_code = target_order.get('stock_code', '')
+            quantity = target_order.get('remaining_qty', 0) or target_order.get('order_qty', 0)
+
+            result = client.cancel_order(
+                order_no=order_id,
+                stock_code=stock_code,
+                quantity=quantity,
+                order_type="00"
+            )
+
+            if result and result.get('success'):
+                return {
+                    'success': True,
+                    'message': '주문 취소 완료'
+                }
+            else:
+                return {
+                    'success': False,
+                    'message': result.get('error', '주문 취소 실패') if result else '주문 취소 실패'
+                }
+
+        except Exception as e:
+            return {
+                'success': False,
+                'message': f"주문 취소 실패: {str(e)}"
+            }
+
     # ========== 자동매매 설정 관리 ==========
 
     def get_auto_trade_settings(self, user_id: int = None) -> Optional[Dict]:
@@ -1161,32 +1418,71 @@ class TradeLogger:
             cursor = conn.cursor()
             cursor.execute("""
                 INSERT OR REPLACE INTO auto_trade_settings (
-                    user_id, trade_mode, max_investment, stock_ratio,
+                    user_id, trade_mode, max_per_stock,
                     stop_loss_rate, min_buy_score, sell_score,
-                    max_holdings, max_daily_trades, max_holding_days,
-                    trading_enabled, trading_start_time, trading_end_time,
-                    initial_investment, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    trading_enabled, initial_investment, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, (
                 user_id,
                 settings.get('trade_mode', 'manual'),
-                settings.get('max_investment', 1000000),
-                settings.get('stock_ratio', 5),
+                settings.get('max_per_stock', 200000),
                 settings.get('stop_loss_rate', -7.0),
                 settings.get('min_buy_score', 70),
                 settings.get('sell_score', 40),
-                settings.get('max_holdings', 10),
-                settings.get('max_daily_trades', 10),
-                settings.get('max_holding_days', 14),
                 1 if settings.get('trading_enabled', True) else 0,
-                settings.get('trading_start_time', '09:00'),
-                settings.get('trading_end_time', '15:20'),
                 settings.get('initial_investment', 0),
                 now.isoformat()
             ))
             return cursor.rowcount > 0
 
     # ========== 매수 제안 관리 (BuySuggestionManager 기능 통합) ==========
+
+    def get_suggestion(self, suggestion_id: int) -> Optional[Dict]:
+        """특정 매수 제안 조회 (ID로)"""
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                SELECT * FROM pending_buy_suggestions WHERE id = ?
+            """, (suggestion_id,))
+            row = cursor.fetchone()
+
+            if row:
+                item = dict(row)
+                if item.get('signals'):
+                    try:
+                        item['signals'] = json.loads(item['signals'])
+                    except:
+                        pass
+                return item
+            return None
+
+    def mark_executed(self, suggestion_id: int) -> bool:
+        """매수 제안 실행 완료 처리"""
+        now = datetime.now()
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                UPDATE pending_buy_suggestions
+                SET status = 'executed', executed_at = ?, updated_at = ?
+                WHERE id = ?
+            """, (now.isoformat(), now.isoformat(), suggestion_id))
+            return cursor.rowcount > 0
+
+    def log_trade(self, user_id: int, stock_code: str, stock_name: str, side: str,
+                  quantity: int, price: int, order_no: str = None,
+                  trade_reason: str = None, status: str = 'ordered') -> int:
+        """거래 로그 기록"""
+        now = datetime.now()
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                INSERT INTO trade_log (user_id, stock_code, stock_name, side, quantity, price,
+                                       amount, order_no, trade_reason, status, trade_date, trade_time, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, (user_id, stock_code, stock_name, side, quantity, price,
+                  quantity * price, order_no, trade_reason, status,
+                  now.strftime('%Y-%m-%d'), now.strftime('%H:%M:%S'), now.isoformat()))
+            return cursor.lastrowid
 
     def get_pending_suggestions(self, user_id: int = None) -> List[Dict]:
         """대기 중인 매수 제안 목록 조회"""
@@ -1251,17 +1547,115 @@ class TradeLogger:
 
             return results
 
-    def approve_suggestion(self, suggestion_id: int) -> bool:
-        """매수 제안 승인"""
+    def get_executed_suggestions(self, user_id: int = None) -> List[Dict]:
+        """체결된 매수 제안 목록 조회"""
+        # user_id가 없으면 빈 리스트 반환 (보안)
+        if user_id is None:
+            return []
+
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                SELECT id, stock_code, stock_name, recommended_price as suggested_price,
+                       1 as quantity, signals as reason, score, status, created_at
+                FROM pending_buy_suggestions
+                WHERE status = 'executed' AND user_id = ?
+                ORDER BY executed_at DESC
+                LIMIT 50
+            """, (user_id,))
+            rows = cursor.fetchall()
+
+            results = []
+            for row in rows:
+                item = dict(row)
+                if item.get('reason'):
+                    try:
+                        signals = json.loads(item['reason'])
+                        if isinstance(signals, list):
+                            item['reason'] = ', '.join(signals[:3])
+                    except:
+                        pass
+                results.append(item)
+
+            return results
+
+    # ========== 매도 제안 관리 (TradeLogger) ==========
+
+    def get_pending_sell_suggestions(self, user_id: int = None) -> List[Dict]:
+        """대기 중인 매도 제안 목록 조회"""
+        if user_id is None:
+            return []
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                SELECT id, user_id, stock_code, stock_name, quantity, avg_price,
+                       suggested_price, current_price, profit_rate, reason,
+                       status, created_at
+                FROM pending_sell_suggestions
+                WHERE status = 'pending' AND user_id = ?
+                ORDER BY created_at DESC
+            """, (user_id,))
+            return [dict(row) for row in cursor.fetchall()]
+
+    def get_approved_sell_suggestions(self, user_id: int = None) -> List[Dict]:
+        """승인된 매도 제안 목록 조회"""
+        if user_id is None:
+            return []
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                SELECT id, user_id, stock_code, stock_name, quantity, avg_price,
+                       suggested_price, current_price, profit_rate, reason,
+                       status, custom_price, is_market_order, created_at
+                FROM pending_sell_suggestions
+                WHERE status = 'approved' AND user_id = ?
+                ORDER BY created_at DESC
+            """, (user_id,))
+            return [dict(row) for row in cursor.fetchall()]
+
+    def approve_sell_suggestion(self, suggestion_id: int, custom_price: int = None, is_market_order: bool = False) -> bool:
+        """매도 제안 승인"""
+        now = datetime.now()
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                UPDATE pending_sell_suggestions
+                SET status = 'approved', approved_at = ?, updated_at = ?,
+                    custom_price = ?, is_market_order = ?
+                WHERE id = ? AND status = 'pending'
+            """, (now.isoformat(), now.isoformat(), custom_price, 1 if is_market_order else 0, suggestion_id))
+            return cursor.rowcount > 0
+
+    def reject_sell_suggestion(self, suggestion_id: int) -> bool:
+        """매도 제안 거부"""
+        now = datetime.now()
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                UPDATE pending_sell_suggestions
+                SET status = 'rejected', updated_at = ?
+                WHERE id = ? AND status = 'pending'
+            """, (now.isoformat(), suggestion_id))
+            return cursor.rowcount > 0
+
+    def approve_suggestion(self, suggestion_id: int, custom_price: int = None, is_market_order: bool = False) -> bool:
+        """매수 제안 승인
+
+        Args:
+            suggestion_id: 제안 ID
+            custom_price: 사용자 지정 매수가 (지정가 주문 시)
+            is_market_order: True면 시장가, False면 지정가
+        """
         now = datetime.now()
 
         with self._get_connection() as conn:
             cursor = conn.cursor()
             cursor.execute("""
                 UPDATE pending_buy_suggestions
-                SET status = 'approved', approved_at = ?, updated_at = ?
+                SET status = 'approved', approved_at = ?, updated_at = ?,
+                    custom_price = ?, is_market_order = ?
                 WHERE id = ? AND status = 'pending'
-            """, (now.isoformat(), now.isoformat(), suggestion_id))
+            """, (now.isoformat(), now.isoformat(), custom_price, 1 if is_market_order else 0, suggestion_id))
 
             return cursor.rowcount > 0
 
@@ -1468,11 +1862,17 @@ class BuySuggestionManager:
         with self._get_connection() as conn:
             cursor = conn.cursor()
 
-            # 동일 종목 기존 pending 제안이 있으면 업데이트
-            cursor.execute("""
-                SELECT id FROM pending_buy_suggestions
-                WHERE stock_code = ? AND status = 'pending'
-            """, (stock_code,))
+            # 동일 종목 + 동일 사용자 기존 pending 제안이 있으면 업데이트
+            if self.user_id:
+                cursor.execute("""
+                    SELECT id FROM pending_buy_suggestions
+                    WHERE stock_code = ? AND status = 'pending' AND user_id = ?
+                """, (stock_code, self.user_id))
+            else:
+                cursor.execute("""
+                    SELECT id FROM pending_buy_suggestions
+                    WHERE stock_code = ? AND status = 'pending' AND user_id IS NULL
+                """, (stock_code,))
             existing = cursor.fetchone()
 
             if existing:
@@ -1496,13 +1896,13 @@ class BuySuggestionManager:
             else:
                 cursor.execute("""
                     INSERT INTO pending_buy_suggestions (
-                        stock_code, stock_name, score, probability, confidence,
+                        user_id, stock_code, stock_name, score, probability, confidence,
                         current_price, recommended_price, target_price,
                         stop_loss_price, buy_band_low, buy_band_high,
                         signals, status, created_at, updated_at, expires_at
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?)
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?)
                 """, (
-                    stock_code, stock_name, score, probability, confidence,
+                    self.user_id, stock_code, stock_name, score, probability, confidence,
                     current_price, recommended_price, target_price,
                     stop_loss_price, buy_band_low, buy_band_high,
                     json.dumps(signals), now.isoformat(), now.isoformat(),
@@ -1511,14 +1911,22 @@ class BuySuggestionManager:
                 return cursor.lastrowid
 
     def get_pending_suggestions(self) -> List[Dict]:
-        """대기 중인 매수 제안 목록 조회"""
+        """대기 중인 매수 제안 목록 조회 (사용자별)"""
         with self._get_connection() as conn:
             cursor = conn.cursor()
-            cursor.execute("""
-                SELECT * FROM pending_buy_suggestions
-                WHERE status = 'pending'
-                ORDER BY score DESC, created_at DESC
-            """)
+            # user_id로 필터링하여 사용자별 제안만 조회
+            if self.user_id:
+                cursor.execute("""
+                    SELECT * FROM pending_buy_suggestions
+                    WHERE status = 'pending' AND user_id = ?
+                    ORDER BY score DESC, created_at DESC
+                """, (self.user_id,))
+            else:
+                cursor.execute("""
+                    SELECT * FROM pending_buy_suggestions
+                    WHERE status = 'pending'
+                    ORDER BY score DESC, created_at DESC
+                """)
             rows = cursor.fetchall()
 
             results = []
@@ -1531,14 +1939,22 @@ class BuySuggestionManager:
             return results
 
     def get_approved_suggestions(self) -> List[Dict]:
-        """승인된 매수 제안 목록 조회"""
+        """승인된 매수 제안 목록 조회 (사용자별)"""
         with self._get_connection() as conn:
             cursor = conn.cursor()
-            cursor.execute("""
-                SELECT * FROM pending_buy_suggestions
-                WHERE status = 'approved'
-                ORDER BY approved_at DESC
-            """)
+            # user_id로 필터링하여 사용자별 제안만 조회
+            if self.user_id:
+                cursor.execute("""
+                    SELECT * FROM pending_buy_suggestions
+                    WHERE status = 'approved' AND user_id = ?
+                    ORDER BY approved_at DESC
+                """, (self.user_id,))
+            else:
+                cursor.execute("""
+                    SELECT * FROM pending_buy_suggestions
+                    WHERE status = 'approved'
+                    ORDER BY approved_at DESC
+                """)
             rows = cursor.fetchall()
 
             results = []
@@ -1566,22 +1982,23 @@ class BuySuggestionManager:
                 return item
             return None
 
-    def approve_suggestion(self, suggestion_id: int) -> bool:
-        """매수 제안 승인"""
+    def approve_suggestion_v2(self, suggestion_id: int, custom_price: int = None, is_market_order: bool = False) -> bool:
+        """매수 제안 승인 (v2 - 별도 메서드, 사용되지 않음)"""
         now = datetime.now()
 
         with self._get_connection() as conn:
             cursor = conn.cursor()
             cursor.execute("""
                 UPDATE pending_buy_suggestions
-                SET status = 'approved', approved_at = ?, updated_at = ?
+                SET status = 'approved', approved_at = ?, updated_at = ?,
+                    custom_price = ?, is_market_order = ?
                 WHERE id = ? AND status = 'pending'
-            """, (now.isoformat(), now.isoformat(), suggestion_id))
+            """, (now.isoformat(), now.isoformat(), custom_price, 1 if is_market_order else 0, suggestion_id))
 
             return cursor.rowcount > 0
 
-    def reject_suggestion(self, suggestion_id: int) -> bool:
-        """매수 제안 거부"""
+    def reject_suggestion_v2(self, suggestion_id: int) -> bool:
+        """매수 제안 거부 (v2 - 별도 메서드, 사용되지 않음)"""
         now = datetime.now()
 
         with self._get_connection() as conn:
@@ -1623,27 +2040,55 @@ class BuySuggestionManager:
             return cursor.rowcount
 
     def has_pending_for_stock(self, stock_code: str) -> bool:
-        """해당 종목에 대기 중인 제안이 있는지 확인"""
+        """해당 종목에 대기 중인 제안 또는 당일 거부된 제안이 있는지 확인 (사용자별)"""
+        from datetime import datetime
+        today = datetime.now().strftime('%Y-%m-%d')
+
         with self._get_connection() as conn:
             cursor = conn.cursor()
-            cursor.execute("""
-                SELECT COUNT(*) FROM pending_buy_suggestions
-                WHERE stock_code = ? AND status IN ('pending', 'approved')
-            """, (stock_code,))
+            # user_id로 필터링하여 사용자별로 제안 관리
+            # pending/approved 상태이거나, 당일 rejected된 경우 True 반환
+            if self.user_id:
+                cursor.execute("""
+                    SELECT COUNT(*) FROM pending_buy_suggestions
+                    WHERE stock_code = ? AND user_id = ? AND (
+                        status IN ('pending', 'approved')
+                        OR (status = 'rejected' AND date(updated_at) = ?)
+                    )
+                """, (stock_code, self.user_id, today))
+            else:
+                cursor.execute("""
+                    SELECT COUNT(*) FROM pending_buy_suggestions
+                    WHERE stock_code = ? AND (
+                        status IN ('pending', 'approved')
+                        OR (status = 'rejected' AND date(updated_at) = ?)
+                    )
+                """, (stock_code, today))
             count = cursor.fetchone()[0]
             return count > 0
 
     def get_statistics(self) -> Dict:
-        """제안 통계"""
+        """제안 통계 (사용자별)"""
         with self._get_connection() as conn:
             cursor = conn.cursor()
-            cursor.execute("""
-                SELECT
-                    status,
-                    COUNT(*) as count
-                FROM pending_buy_suggestions
-                GROUP BY status
-            """)
+            # user_id로 필터링하여 사용자별 통계
+            if self.user_id:
+                cursor.execute("""
+                    SELECT
+                        status,
+                        COUNT(*) as count
+                    FROM pending_buy_suggestions
+                    WHERE user_id = ?
+                    GROUP BY status
+                """, (self.user_id,))
+            else:
+                cursor.execute("""
+                    SELECT
+                        status,
+                        COUNT(*) as count
+                    FROM pending_buy_suggestions
+                    GROUP BY status
+                """)
             rows = cursor.fetchall()
 
             stats = {
@@ -1673,23 +2118,108 @@ class BuySuggestionManager:
 
             return cursor.rowcount
 
-    # ========== 매도 제안 관리 (스텁 메서드) ==========
+    # ========== 매도 제안 관리 ==========
 
-    def get_pending_sell_suggestions(self) -> List[Dict]:
-        """대기 중인 매도 제안 목록 조회 (현재 미구현 - 빈 리스트 반환)"""
-        return []
+    def get_pending_sell_suggestions(self, user_id: int = None) -> List[Dict]:
+        """대기 중인 매도 제안 목록 조회"""
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            if user_id:
+                cursor.execute("""
+                    SELECT id, user_id, stock_code, stock_name, quantity, avg_price,
+                           suggested_price, current_price, profit_rate, reason,
+                           status, created_at
+                    FROM pending_sell_suggestions
+                    WHERE status = 'pending' AND user_id = ?
+                    ORDER BY created_at DESC
+                """, (user_id,))
+            else:
+                cursor.execute("""
+                    SELECT id, user_id, stock_code, stock_name, quantity, avg_price,
+                           suggested_price, current_price, profit_rate, reason,
+                           status, created_at
+                    FROM pending_sell_suggestions
+                    WHERE status = 'pending'
+                    ORDER BY created_at DESC
+                """)
+            return [dict(row) for row in cursor.fetchall()]
 
-    def get_approved_sell_suggestions(self) -> List[Dict]:
-        """승인된 매도 제안 목록 조회 (현재 미구현 - 빈 리스트 반환)"""
-        return []
+    def get_approved_sell_suggestions(self, user_id: int = None) -> List[Dict]:
+        """승인된 매도 제안 목록 조회"""
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            if user_id:
+                cursor.execute("""
+                    SELECT id, user_id, stock_code, stock_name, quantity, avg_price,
+                           suggested_price, current_price, profit_rate, reason,
+                           status, custom_price, is_market_order, created_at
+                    FROM pending_sell_suggestions
+                    WHERE status = 'approved' AND user_id = ?
+                    ORDER BY created_at DESC
+                """, (user_id,))
+            else:
+                cursor.execute("""
+                    SELECT id, user_id, stock_code, stock_name, quantity, avg_price,
+                           suggested_price, current_price, profit_rate, reason,
+                           status, custom_price, is_market_order, created_at
+                    FROM pending_sell_suggestions
+                    WHERE status = 'approved'
+                    ORDER BY created_at DESC
+                """)
+            return [dict(row) for row in cursor.fetchall()]
 
-    def approve_sell_suggestion(self, suggestion_id: int) -> bool:
-        """매도 제안 승인 (현재 미구현)"""
-        return False
+    def approve_sell_suggestion(self, suggestion_id: int, custom_price: int = None, is_market_order: bool = False) -> bool:
+        """매도 제안 승인
+
+        Args:
+            suggestion_id: 제안 ID
+            custom_price: 사용자 지정 매도가 (지정가 주문 시)
+            is_market_order: True면 시장가, False면 지정가
+        """
+        now = datetime.now()
+
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                UPDATE pending_sell_suggestions
+                SET status = 'approved', approved_at = ?, updated_at = ?,
+                    custom_price = ?, is_market_order = ?
+                WHERE id = ? AND status = 'pending'
+            """, (now.isoformat(), now.isoformat(), custom_price, 1 if is_market_order else 0, suggestion_id))
+
+            return cursor.rowcount > 0
 
     def reject_sell_suggestion(self, suggestion_id: int) -> bool:
-        """매도 제안 거부 (현재 미구현)"""
-        return False
+        """매도 제안 거부"""
+        now = datetime.now()
+
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                UPDATE pending_sell_suggestions
+                SET status = 'rejected', updated_at = ?
+                WHERE id = ? AND status = 'pending'
+            """, (now.isoformat(), suggestion_id))
+
+            return cursor.rowcount > 0
+
+    def add_sell_suggestion(self, user_id: int, stock_code: str, stock_name: str,
+                           quantity: int, avg_price: int, suggested_price: int,
+                           profit_rate: float, reason: str) -> int:
+        """매도 제안 추가"""
+        now = datetime.now()
+
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                INSERT INTO pending_sell_suggestions
+                (user_id, stock_code, stock_name, quantity, avg_price,
+                 suggested_price, current_price, profit_rate, reason, created_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, (user_id, stock_code, stock_name, quantity, avg_price,
+                  suggested_price, suggested_price, profit_rate, reason, now.isoformat()))
+
+            return cursor.lastrowid
 
     def get_trade_reasons_by_order_nos(self, order_nos: List[str], user_id: int = None) -> Dict[str, Dict]:
         """
