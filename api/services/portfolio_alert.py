@@ -198,7 +198,11 @@ def check_portfolio_alerts():
                 code = item['stock_code']
                 name = item['stock_name'] or code
                 buy_price = item['buy_price'] or 0
-                quantity = item['quantity'] or 1
+                quantity = item['quantity'] or 0
+
+                # 수량이 0 이하면 건너뛰기 (보유하지 않는 종목)
+                if quantity <= 0:
+                    continue
 
                 # 분석 실행
                 result = analyze_stock_for_alert(code)

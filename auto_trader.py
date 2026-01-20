@@ -31,6 +31,33 @@ from technical_analyst import TechnicalAnalyst
 from config import AutoTraderConfig, TelegramConfig, OUTPUT_DIR, SIGNAL_NAMES_KR
 
 
+def get_tick_size(price: int) -> int:
+    """주가에 따른 호가 단위 반환"""
+    if price < 1000:
+        return 1
+    elif price < 5000:
+        return 5
+    elif price < 10000:
+        return 10
+    elif price < 50000:
+        return 50
+    elif price < 100000:
+        return 100
+    elif price < 500000:
+        return 500
+    else:
+        return 1000
+
+
+def round_to_tick(price: int, round_down: bool = True) -> int:
+    """호가 단위로 반올림/내림"""
+    tick = get_tick_size(price)
+    if round_down:
+        return (price // tick) * tick  # 내림
+    else:
+        return ((price + tick - 1) // tick) * tick  # 올림
+
+
 class TelegramNotifier:
     """텔레그램 + 푸시 알림 발송"""
 
@@ -191,20 +218,52 @@ class AutoTrader:
         else:
             self.kis_client = KISClient(is_virtual=self.config.IS_VIRTUAL)
 
-        # 모듈 초기화
+        # 모듈 초기화 - 순서 중요: logger를 먼저 초기화해야 사용자 설정 조회 가능
+        self.logger = TradeLogger()
         self.executor = OrderExecutor(self.kis_client)
+
+        # 사용자 설정에서 stock_ratio 가져오기 (DB 설정 > config 설정)
+        user_settings = self.logger.get_auto_trade_settings(user_id) if user_id else None
+        max_position_pct = self.config.MAX_POSITION_PCT  # 기본값 (config에서)
+        stop_loss_pct = self.config.STOP_LOSS_PCT
+        max_holdings = self.config.MAX_HOLDINGS
+        max_daily_trades = self.config.MAX_DAILY_TRADES
+        max_hold_days = self.config.MAX_HOLD_DAYS
+        min_buy_score = self.config.MIN_BUY_SCORE
+
+        if user_settings:
+            # 사용자 설정이 있으면 해당 값 사용
+            stock_ratio = user_settings.get('stock_ratio')
+            if stock_ratio and stock_ratio > 0:
+                max_position_pct = stock_ratio / 100  # 10% -> 0.1
+                print(f"[AutoTrader] 사용자 {user_id} stock_ratio: {stock_ratio}% -> max_position_pct: {max_position_pct}")
+
+            if user_settings.get('stop_loss_rate'):
+                stop_loss_pct = -abs(user_settings['stop_loss_rate']) / 100
+
+            if user_settings.get('max_holdings'):
+                max_holdings = user_settings['max_holdings']
+
+            if user_settings.get('max_daily_trades'):
+                max_daily_trades = user_settings['max_daily_trades']
+
+            if user_settings.get('max_holding_days'):
+                max_hold_days = user_settings['max_holding_days']
+
+            if user_settings.get('min_buy_score'):
+                min_buy_score = user_settings['min_buy_score']
+
         self.risk_manager = RiskManager(TradingLimits(
-            max_position_pct=self.config.MAX_POSITION_PCT,
-            stop_loss_pct=self.config.STOP_LOSS_PCT,
+            max_position_pct=max_position_pct,
+            stop_loss_pct=stop_loss_pct,
             take_profit_pct=self.config.TAKE_PROFIT_PCT,
-            max_daily_trades=self.config.MAX_DAILY_TRADES,
-            max_holdings=self.config.MAX_HOLDINGS,
-            max_hold_days=self.config.MAX_HOLD_DAYS,
-            min_buy_score=self.config.MIN_BUY_SCORE,
+            max_daily_trades=max_daily_trades,
+            max_holdings=max_holdings,
+            max_hold_days=max_hold_days,
+            min_buy_score=min_buy_score,
             min_hold_score=self.config.MIN_HOLD_SCORE,
             min_volume_ratio=self.config.MIN_VOLUME_RATIO,
         ))
-        self.logger = TradeLogger()
         self.suggestion_manager = BuySuggestionManager(user_id=user_id)
         self.analyst = TechnicalAnalyst()
 
@@ -228,6 +287,22 @@ class AutoTrader:
             "sell_orders": [],
             "total_profit": 0,
         }
+
+    def _save_alert_history(self, stock_code: str, stock_name: str, alert_type: str, message: str):
+        """알림 기록 저장"""
+        if not self.user_id:
+            return
+        try:
+            from database.db_manager import DatabaseManager
+            db = DatabaseManager()
+            with db.get_connection() as conn:
+                conn.execute("""
+                    INSERT INTO alert_history (user_id, stock_code, stock_name, alert_type, message)
+                    VALUES (?, ?, ?, ?, ?)
+                """, (self.user_id, stock_code, stock_name, alert_type, message))
+                conn.commit()
+        except Exception as e:
+            print(f"알림 기록 저장 실패: {e}")
 
     def load_analysis_results(self) -> Optional[List[Dict]]:
         """
@@ -269,8 +344,8 @@ class AutoTrader:
             score = stock.get("score", 0)
             signals = stock.get("signals", []) + stock.get("patterns", [])
 
-            # 점수 조건
-            if score < self.config.MIN_BUY_SCORE:
+            # 점수 조건 (사용자 설정 min_buy_score 사용)
+            if score < self.risk_manager.limits.min_buy_score:
                 continue
 
             # 거래량 조건
@@ -562,6 +637,18 @@ class AutoTrader:
             print(f"  {stock_name}: 이미 대기 중인 제안 존재")
             return None
 
+        # 미체결 매수 주문이 있는 종목은 스킵 (중복 주문 방지)
+        pending_orders = getattr(self, '_pending_orders', []) or []
+        total_assets = getattr(self, '_total_assets', 0)
+
+        if pending_orders:
+            for order in pending_orders:
+                if order.get('stock_code') == stock_code and order.get('side') == 'buy':
+                    pending_amount = int(order.get('order_qty', 0)) * int(order.get('order_price', 0))
+                    pct = pending_amount / total_assets * 100 if total_assets > 0 else 0
+                    print(f"  {stock_name}: 미체결 매수 주문 존재 ({pending_amount:,}원, {pct:.1f}%) - 스킵")
+                    return None
+
         # 주가 데이터 가져와서 추천 매수가 계산
         try:
             df = self.analyst.get_ohlcv(stock_code, days=120)
@@ -652,20 +739,31 @@ class AutoTrader:
                 print(f"  {stock_name}: 현재가 조회 실패")
                 continue
 
-            # 추천 매수가(또는 매수 밴드 상단) 이하인지 확인
-            if current_price > buy_band_high:
-                print(f"  {stock_name}: 현재가({current_price:,}) > 매수밴드상단({buy_band_high:,}) - 대기")
-                continue
+            # 매수 가격 및 방식 결정
+            if current_price <= buy_band_high:
+                # 현재가가 매수밴드 이하 → 시장가 매수
+                order_price = 0
+                order_type = "01"  # 시장가
+                exec_price = current_price
+                order_desc = "시장가"
+            else:
+                # 현재가가 매수밴드 초과 → 매수밴드 가격으로 지정가 주문
+                # 호가 단위로 내림 (2201 → 2200)
+                limit_price = round_to_tick(buy_band_high, round_down=True)
+                order_price = limit_price
+                order_type = "00"  # 지정가
+                exec_price = limit_price
+                order_desc = f"지정가 {limit_price:,}원"
 
-            # 매수 수량 계산
-            quantity = investment_per_stock // current_price
+            # 매수 수량 계산 (지정가 기준)
+            quantity = investment_per_stock // exec_price
             if quantity <= 0:
                 print(f"  {stock_name}: 매수 가능 수량 없음")
                 continue
 
             print(f"\n[승인 제안 매수] {stock_name}")
             print(f"  추천가: {recommended_price:,}원 / 현재가: {current_price:,}원")
-            print(f"  수량: {quantity}주")
+            print(f"  주문: {order_desc} x {quantity}주")
 
             if self.dry_run:
                 print("  [DRY-RUN] 실제 주문 실행 안함")
@@ -673,44 +771,57 @@ class AutoTrader:
             else:
                 result = self.executor.place_buy_order(
                     stock_code=stock_code,
-                    quantity=quantity
+                    quantity=quantity,
+                    price=order_price,
+                    order_type=order_type
                 )
 
             if result.get("success"):
-                # 거래 기록
+                # 지정가/시장가 구분
+                is_limit_order = (order_type == "00")
+
+                # 거래 기록 (지정가는 pending, 시장가는 executed)
                 self.logger.log_order(
                     stock_code=stock_code,
                     stock_name=stock_name,
                     side="buy",
                     quantity=quantity,
-                    price=current_price,
+                    price=exec_price,
                     order_no=result.get("order_no"),
-                    trade_reason=f"제안승인 (점수 {suggestion.get('score')}점)",
-                    status="executed" if not self.dry_run else "dry_run"
+                    trade_reason=f"제안승인 (점수 {suggestion.get('score')}점) - {order_desc}",
+                    status="pending" if is_limit_order else ("executed" if not self.dry_run else "dry_run")
                 )
 
-                # 보유 종목 추가
-                if not self.dry_run:
+                # 시장가 주문은 바로 체결 → 보유 종목 추가
+                # 지정가 주문은 미체결 → 보유 종목 추가 안 함 (체결 시 별도 처리)
+                if not self.dry_run and not is_limit_order:
                     self.logger.add_holding(
                         stock_code=stock_code,
                         stock_name=stock_name,
                         quantity=quantity,
-                        avg_price=current_price,
+                        avg_price=exec_price,
                         buy_reason=f"제안승인 (점수 {suggestion.get('score')}점)",
                         market=suggestion.get("market", "KOSDAQ")
                     )
 
                     # 모의투자 가상 잔고 업데이트 (매수 수수료 차감)
                     if self.config.IS_VIRTUAL:
-                        buy_amount = current_price * quantity
+                        buy_amount = exec_price * quantity
                         buy_commission = int(buy_amount * self.config.COMMISSION_RATE)
                         self.logger.update_virtual_balance_on_buy(buy_amount + buy_commission)
 
-                # 제안 실행 완료 처리
+                # 제안 실행 완료 처리 (주문 접수됨)
                 self.suggestion_manager.mark_executed(suggestion['id'])
 
                 # 알림
-                self.notifier.notify_suggestion_executed(stock_name, current_price, quantity)
+                if is_limit_order:
+                    self.notifier.send_push(
+                        title=f"📝 지정가 매수 주문: {stock_name}",
+                        body=f"{exec_price:,}원 x {quantity}주 (미체결)",
+                        url="/auto-trade/pending-orders"
+                    )
+                else:
+                    self.notifier.notify_suggestion_executed(stock_name, exec_price, quantity)
 
                 self.stats["buy_orders"].append(result)
                 self.risk_manager.increment_trade_count()
@@ -761,14 +872,30 @@ class AutoTrader:
             self.notifier.notify_error("계좌 잔고 조회 실패")
             return {"status": "balance_error"}
 
-        holdings = balance.get("holdings", [])
-        cash = balance.get("summary", {}).get("cash_balance", 0)
-        total_assets = balance.get("summary", {}).get("total_eval_amount", 0) + cash
+        all_holdings = balance.get("holdings", [])
+        # 수량 > 0인 종목만 필터링 (매도 완료된 종목 제외)
+        holdings = [h for h in all_holdings if h.get("quantity", 0) > 0]
+        summary = balance.get("summary", {})
+        # 예수금: d2_cash_balance (실제 자산 기준)
+        d2_cash = summary.get("d2_cash_balance", 0) or summary.get("cash_balance", 0)
+        # 주문가능금액: max_buy_amt (미체결 제외)
+        max_buy_amt = summary.get("max_buy_amt", 0) or d2_cash
+        # 총자산: 평가금액 + d2 예수금 (고정)
+        total_eval = summary.get("total_eval_amount", 0)
+        total_assets = total_eval + d2_cash
 
-        print(f"  현금: {cash:,}원")
-        print(f"  보유 종목: {len(holdings)}개")
+        print(f"  예수금(D+2): {d2_cash:,}원")
+        print(f"  주문가능금액: {max_buy_amt:,}원")
+        print(f"  보유 종목: {len(holdings)}개 (수량>0 필터링)")
 
-        # 4. 보유 종목 매도 체크 (기존 로직과 동일)
+        # 미체결 주문 조회 (제안 생성 시 중복 체크용)
+        self._pending_orders = self.executor.get_pending_orders()
+        self._total_assets = total_assets
+        self._investment_per_stock = self.risk_manager.calculate_investment_amount(total_assets)
+        if self._pending_orders:
+            print(f"  미체결 주문: {len(self._pending_orders)}건")
+
+        # 4. 보유 종목 매도 체크 - semi-auto에서는 매도 실행 안 함 (알림만)
         print("\n[4] 보유 종목 평가 중...")
         if holdings:
             current_prices = {}
@@ -794,15 +921,32 @@ class AutoTrader:
             )
 
             if sell_list:
-                print(f"  매도 대상: {len(sell_list)}개")
-                self.execute_sell_orders(sell_list)
+                # semi-auto 모드에서는 매도 실행하지 않고 알림만 전송
+                print(f"  ⚠️ 매도 신호 감지: {len(sell_list)}개 (semi-auto 모드에서는 자동 매도 안 함)")
+                for item in sell_list:
+                    stock_code = item.get('stock_code')
+                    stock_name = item.get('stock_name', stock_code)
+                    reasons = ', '.join(item.get('sell_reasons', []))
+                    profit_rate = item.get('profit_rate', 0) * 100
+                    print(f"    - {stock_name}: {reasons} ({profit_rate:+.1f}%)")
+                    # 푸시 알림으로 매도 신호 전달 (사용자가 직접 판단)
+                    self.notifier.send_push(
+                        title=f"⚠️ 매도 신호: {stock_name}",
+                        body=f"{reasons} ({profit_rate:+.1f}%)",
+                        url=f"/auto-trade/manual"
+                    )
+                    # 알림 기록 저장
+                    self._save_alert_history(stock_code, stock_name, "매도 신호", f"{reasons} ({profit_rate:+.1f}%)")
             else:
                 print("  매도 대상 없음")
 
         # 5. 승인된 매수 제안 실행 (추천 매수가 이하일 때)
         print("\n[5] 승인된 제안 매수 실행 중...")
         investment_per_stock = self.risk_manager.calculate_investment_amount(total_assets)
-        self.execute_approved_suggestions(investment_per_stock)
+        # 실제 주문금액은 min(종목당 투자금, 주문가능금액)
+        actual_investment = min(investment_per_stock, max_buy_amt)
+        print(f"  종목당 투자금: {investment_per_stock:,}원, 주문가능: {max_buy_amt:,}원 → 실제: {actual_investment:,}원")
+        self.execute_approved_suggestions(actual_investment)
 
         # 6. 새 매수 후보 → 제안 생성
         print("\n[6] 새 매수 제안 생성 중...")
@@ -871,8 +1015,32 @@ class AutoTrader:
         Returns:
             실행 결과 요약
         """
-        # TRADE_MODE에 따라 분기
+        # 사용자별 설정 확인 (DB 설정 > config 설정)
         trade_mode = getattr(self.config, 'TRADE_MODE', 'auto')
+        trading_enabled = True  # 기본값
+
+        if self.user_id:
+            user_settings = self.logger.get_auto_trade_settings(self.user_id)
+            if user_settings:
+                # 중요: trading_enabled 체크 (비활성화면 실행 안 함)
+                trading_enabled = bool(user_settings.get('trading_enabled', 0))
+                if not trading_enabled:
+                    print(f"[AutoTrader] user_id={self.user_id}: trading_enabled=0 → 실행 안 함")
+                    return {"status": "disabled", "message": "자동매매가 비활성화되어 있습니다."}
+
+                db_mode = user_settings.get('trade_mode', 'auto')
+                # DB 값 변환: 'semi' -> 'semi-auto'
+                if db_mode == 'semi':
+                    trade_mode = 'semi-auto'
+                elif db_mode == 'auto':
+                    trade_mode = 'auto'
+                elif db_mode == 'manual':
+                    trade_mode = 'manual'
+
+        # manual 모드면 실행 안함
+        if trade_mode == 'manual':
+            return {"status": "manual_mode", "message": "수동 모드입니다."}
+
         if trade_mode == 'semi-auto':
             return self.run_semi_auto()
 
@@ -913,12 +1081,21 @@ class AutoTrader:
             self.notifier.notify_error("계좌 잔고 조회 실패")
             return {"status": "balance_error"}
 
-        holdings = balance.get("holdings", [])
-        cash = balance.get("summary", {}).get("cash_balance", 0)
-        total_assets = balance.get("summary", {}).get("total_eval_amount", 0) + cash
+        all_holdings = balance.get("holdings", [])
+        # 수량 > 0인 종목만 필터링 (매도 완료된 종목 제외)
+        holdings = [h for h in all_holdings if h.get("quantity", 0) > 0]
+        summary = balance.get("summary", {})
+        # 예수금: d2_cash_balance (실제 자산 기준)
+        d2_cash = summary.get("d2_cash_balance", 0) or summary.get("cash_balance", 0)
+        # 주문가능금액: max_buy_amt (미체결 제외)
+        max_buy_amt = summary.get("max_buy_amt", 0) or d2_cash
+        # 총자산: 평가금액 + d2 예수금 (고정)
+        total_eval = summary.get("total_eval_amount", 0)
+        total_assets = total_eval + d2_cash
 
-        print(f"  현금: {cash:,}원")
-        print(f"  보유 종목: {len(holdings)}개")
+        print(f"  예수금(D+2): {d2_cash:,}원")
+        print(f"  주문가능금액: {max_buy_amt:,}원")
+        print(f"  보유 종목: {len(holdings)}개 (수량>0 필터링)")
         print(f"  총 자산: {total_assets:,}원")
 
         # 3. 보유 종목 매도 체크
@@ -975,10 +1152,12 @@ class AutoTrader:
         # 5. 매수 실행
         if filtered_candidates:
             investment_per_stock = self.risk_manager.calculate_investment_amount(total_assets)
+            # 실제 주문금액은 min(종목당 투자금, 주문가능금액)
+            actual_investment = min(investment_per_stock, max_buy_amt)
             print(f"\n[5] 매수 주문 실행 중...")
-            print(f"  종목당 투자금액: {investment_per_stock:,}원")
+            print(f"  종목당 투자금: {investment_per_stock:,}원, 주문가능: {max_buy_amt:,}원 → 실제: {actual_investment:,}원")
 
-            self.execute_buy_orders(filtered_candidates, investment_per_stock)
+            self.execute_buy_orders(filtered_candidates, actual_investment)
         else:
             print("\n[5] 매수할 종목이 없습니다.")
 
