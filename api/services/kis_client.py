@@ -8,31 +8,178 @@ import json
 import time
 import requests
 from datetime import datetime, timedelta
+from pathlib import Path
 from typing import Optional, Dict, List
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dotenv import load_dotenv
+import threading
 
 load_dotenv()
+
+# 토큰 캐시 파일 경로 (단일 사용자용 - 환경변수 사용 시)
+TOKEN_CACHE_FILE = Path(__file__).parent.parent.parent / ".kis_token_cache.json"
+# 다중 사용자 토큰 캐시 (app_key별로 토큰 저장)
+MULTI_TOKEN_CACHE_FILE = Path(__file__).parent.parent.parent / ".kis_multi_token_cache.json"
+_token_lock = threading.Lock()
+
+# 메모리 내 토큰 캐시 (앱 키별)
+_memory_token_cache: Dict[str, Dict] = {}
 
 
 class KISClient:
     """한국투자증권 Open API 클라이언트"""
 
-    # API 기본 URL (실전투자)
-    BASE_URL = "https://openapi.koreainvestment.com:9443"
-    # 모의투자용: "https://openapivts.koreainvestment.com:29443"
+    # API URL 설정
+    VIRTUAL_URL = "https://openapivts.koreainvestment.com:29443"  # 모의투자
+    REAL_URL = "https://openapi.koreainvestment.com:9443"  # 실전투자
 
-    def __init__(self):
-        self.app_key = os.getenv("KIS_APP_KEY")
-        self.app_secret = os.getenv("KIS_APP_SECRET")
-        self.account_no = os.getenv("KIS_ACCOUNT_NO")
-        self.account_product_code = os.getenv("KIS_ACCOUNT_PRODUCT_CODE", "01")
+    # TR_ID 설정
+    TR_IDS = {
+        "virtual": {
+            "buy": "VTTC0802U",   # 모의 매수
+            "sell": "VTTC0801U",  # 모의 매도
+            "cancel": "VTTC0803U",  # 모의 취소
+            "balance": "VTTC8434R",  # 모의 잔고
+            "pending": "VTTC8036R",  # 모의 미체결
+        },
+        "real": {
+            "buy": "TTTC0802U",   # 실전 매수
+            "sell": "TTTC0801U",  # 실전 매도
+            "cancel": "TTTC0803U",  # 실전 취소
+            "balance": "TTTC8434R",  # 실전 잔고
+            "pending": "TTTC8036R",  # 실전 미체결
+        }
+    }
+
+    def __init__(
+        self,
+        is_virtual: bool = True,
+        app_key: str = None,
+        app_secret: str = None,
+        account_number: str = None,
+        account_product_code: str = None,
+        is_mock: bool = None  # is_virtual 별칭
+    ):
+        # is_mock이 전달되면 is_virtual 대신 사용
+        if is_mock is not None:
+            is_virtual = is_mock
+
+        # 파라미터로 전달되면 사용, 아니면 환경변수 사용
+        self.app_key = app_key or os.getenv("KIS_APP_KEY")
+        self.app_secret = app_secret or os.getenv("KIS_APP_SECRET")
+        self.account_no = account_number or os.getenv("KIS_ACCOUNT_NO")
+        self.account_product_code = account_product_code or os.getenv("KIS_ACCOUNT_PRODUCT_CODE", "01")
 
         self._access_token = None
         self._token_expires_at = None
 
+        # 모의/실전 투자 설정
+        self.is_virtual = is_virtual
+        self.BASE_URL = self.VIRTUAL_URL if is_virtual else self.REAL_URL
+        self.tr_ids = self.TR_IDS["virtual"] if is_virtual else self.TR_IDS["real"]
+
         if not all([self.app_key, self.app_secret]):
-            raise ValueError("KIS API 키가 설정되지 않았습니다. .env 파일을 확인하세요.")
+            raise ValueError("KIS API 키가 설정되지 않았습니다.")
+
+        # 파라미터로 전달받은 경우 토큰 캐시 사용 안함
+        self._use_custom_credentials = app_key is not None
+
+        # 시작 시 캐시된 토큰 로드 (환경변수 사용 시에만)
+        if not self._use_custom_credentials:
+            self._load_cached_token()
+
+    def _load_cached_token(self):
+        """파일에서 캐시된 토큰 로드"""
+        try:
+            if TOKEN_CACHE_FILE.exists():
+                with open(TOKEN_CACHE_FILE, 'r') as f:
+                    cache = json.load(f)
+
+                expires_at = datetime.fromisoformat(cache['expires_at'])
+                # 만료 5분 전까지 유효하면 사용
+                if datetime.now() < expires_at - timedelta(minutes=5):
+                    self._access_token = cache['access_token']
+                    self._token_expires_at = expires_at
+        except Exception:
+            pass  # 캐시 로드 실패 시 무시
+
+    def _save_token_cache(self):
+        """토큰을 파일에 캐시"""
+        try:
+            with _token_lock:
+                cache = {
+                    'access_token': self._access_token,
+                    'expires_at': self._token_expires_at.isoformat()
+                }
+                with open(TOKEN_CACHE_FILE, 'w') as f:
+                    json.dump(cache, f)
+                # 보안을 위해 파일 권한 제한
+                TOKEN_CACHE_FILE.chmod(0o600)
+        except Exception:
+            pass  # 캐시 저장 실패 시 무시
+
+    def _get_cache_key(self) -> str:
+        """토큰 캐시 키 생성 (app_key + is_virtual 조합)"""
+        return f"{self.app_key}_{self.is_virtual}"
+
+    def _load_user_cached_token(self) -> bool:
+        """사용자별 캐시된 토큰 로드 (메모리 + 파일)"""
+        cache_key = self._get_cache_key()
+
+        # 1. 메모리 캐시 확인
+        if cache_key in _memory_token_cache:
+            cached = _memory_token_cache[cache_key]
+            expires_at = datetime.fromisoformat(cached['expires_at'])
+            if datetime.now() < expires_at - timedelta(minutes=5):
+                self._access_token = cached['access_token']
+                self._token_expires_at = expires_at
+                return True
+
+        # 2. 파일 캐시 확인
+        try:
+            if MULTI_TOKEN_CACHE_FILE.exists():
+                with open(MULTI_TOKEN_CACHE_FILE, 'r') as f:
+                    all_cache = json.load(f)
+                    if cache_key in all_cache:
+                        cached = all_cache[cache_key]
+                        expires_at = datetime.fromisoformat(cached['expires_at'])
+                        if datetime.now() < expires_at - timedelta(minutes=5):
+                            self._access_token = cached['access_token']
+                            self._token_expires_at = expires_at
+                            # 메모리 캐시에도 저장
+                            _memory_token_cache[cache_key] = cached
+                            return True
+        except Exception:
+            pass
+
+        return False
+
+    def _save_user_token_cache(self):
+        """사용자별 토큰 캐시 저장 (메모리 + 파일)"""
+        cache_key = self._get_cache_key()
+        cache_data = {
+            'access_token': self._access_token,
+            'expires_at': self._token_expires_at.isoformat()
+        }
+
+        # 메모리 캐시에 저장
+        _memory_token_cache[cache_key] = cache_data
+
+        # 파일 캐시에 저장
+        try:
+            with _token_lock:
+                all_cache = {}
+                if MULTI_TOKEN_CACHE_FILE.exists():
+                    with open(MULTI_TOKEN_CACHE_FILE, 'r') as f:
+                        all_cache = json.load(f)
+
+                all_cache[cache_key] = cache_data
+
+                with open(MULTI_TOKEN_CACHE_FILE, 'w') as f:
+                    json.dump(all_cache, f)
+                MULTI_TOKEN_CACHE_FILE.chmod(0o600)
+        except Exception:
+            pass
 
     def _get_access_token(self) -> str:
         """OAuth 토큰 발급/갱신"""
@@ -40,6 +187,17 @@ class KISClient:
         if self._access_token and self._token_expires_at:
             if datetime.now() < self._token_expires_at - timedelta(minutes=5):
                 return self._access_token
+
+        # 사용자별 캐시에서 토큰 로드 (커스텀 자격증명도 포함)
+        if self._load_user_cached_token():
+            return self._access_token
+
+        # 환경변수 사용 시 기존 단일 캐시도 확인
+        if not self._use_custom_credentials:
+            self._load_cached_token()
+            if self._access_token and self._token_expires_at:
+                if datetime.now() < self._token_expires_at - timedelta(minutes=5):
+                    return self._access_token
 
         url = f"{self.BASE_URL}/oauth2/tokenP"
         headers = {"content-type": "application/json"}
@@ -59,6 +217,13 @@ class KISClient:
             expires_in = int(data.get("expires_in", 86400))
             self._token_expires_at = datetime.now() + timedelta(seconds=expires_in)
 
+            # 사용자별 토큰 캐시에 저장 (모든 사용자)
+            self._save_user_token_cache()
+
+            # 환경변수 사용 시 기존 단일 캐시에도 저장 (하위 호환성)
+            if not self._use_custom_credentials:
+                self._save_token_cache()
+
             return self._access_token
 
         except requests.exceptions.RequestException as e:
@@ -75,12 +240,13 @@ class KISClient:
             "tr_id": tr_id,
         }
 
-    def get_current_price(self, stock_code: str) -> Optional[Dict]:
+    def get_current_price(self, stock_code: str, retry_count: int = 2) -> Optional[Dict]:
         """
-        주식 현재가 조회
+        주식 현재가 조회 (재시도 로직 포함)
 
         Args:
             stock_code: 종목코드 (6자리, 예: '005930')
+            retry_count: 실패 시 재시도 횟수
 
         Returns:
             현재가 정보 딕셔너리
@@ -94,39 +260,48 @@ class KISClient:
             "FID_INPUT_ISCD": stock_code
         }
 
-        try:
-            res = requests.get(url, headers=headers, params=params, timeout=10)
-            res.raise_for_status()
-            data = res.json()
+        last_error = None
+        for attempt in range(retry_count + 1):
+            try:
+                if attempt > 0:
+                    time.sleep(0.3)  # 재시도 시 0.3초 대기
 
-            if data.get("rt_cd") != "0":
-                print(f"API 오류: {data.get('msg1', '알 수 없는 오류')}")
-                return None
+                res = requests.get(url, headers=headers, params=params, timeout=10)
+                res.raise_for_status()
+                data = res.json()
 
-            output = data.get("output", {})
+                if data.get("rt_cd") != "0":
+                    print(f"API 오류: {data.get('msg1', '알 수 없는 오류')}")
+                    return None
 
-            return {
-                "stock_code": stock_code,
-                "stock_name": output.get("hts_kor_isnm", ""),  # 종목명
-                "current_price": int(output.get("stck_prpr", 0)),  # 현재가
-                "change": int(output.get("prdy_vrss", 0)),  # 전일대비
-                "change_rate": float(output.get("prdy_ctrt", 0)),  # 등락률
-                "change_sign": output.get("prdy_vrss_sign", ""),  # 부호 (1:상한, 2:상승, 3:보합, 4:하한, 5:하락)
-                "volume": int(output.get("acml_vol", 0)),  # 누적거래량
-                "trading_value": int(output.get("acml_tr_pbmn", 0)),  # 누적거래대금
-                "open_price": int(output.get("stck_oprc", 0)),  # 시가
-                "high_price": int(output.get("stck_hgpr", 0)),  # 고가
-                "low_price": int(output.get("stck_lwpr", 0)),  # 저가
-                "prev_close": int(output.get("stck_sdpr", 0)),  # 전일종가
-                "per": float(output.get("per", 0)) if output.get("per") else None,  # PER
-                "pbr": float(output.get("pbr", 0)) if output.get("pbr") else None,  # PBR
-                "market_cap": int(output.get("hts_avls", 0)),  # 시가총액(억)
-                "timestamp": datetime.now().isoformat()
-            }
+                output = data.get("output", {})
 
-        except requests.exceptions.RequestException as e:
-            print(f"현재가 조회 실패 [{stock_code}]: {str(e)}")
-            return None
+                return {
+                    "stock_code": stock_code,
+                    "stock_name": output.get("hts_kor_isnm", ""),  # 종목명
+                    "current_price": int(output.get("stck_prpr", 0)),  # 현재가
+                    "change": int(output.get("prdy_vrss", 0)),  # 전일대비
+                    "change_rate": float(output.get("prdy_ctrt", 0)),  # 등락률
+                    "change_sign": output.get("prdy_vrss_sign", ""),  # 부호 (1:상한, 2:상승, 3:보합, 4:하한, 5:하락)
+                    "volume": int(output.get("acml_vol", 0)),  # 누적거래량
+                    "trading_value": int(output.get("acml_tr_pbmn", 0)),  # 누적거래대금
+                    "open_price": int(output.get("stck_oprc", 0)),  # 시가
+                    "high_price": int(output.get("stck_hgpr", 0)),  # 고가
+                    "low_price": int(output.get("stck_lwpr", 0)),  # 저가
+                    "prev_close": int(output.get("stck_sdpr", 0)),  # 전일종가
+                    "per": float(output.get("per", 0)) if output.get("per") else None,  # PER
+                    "pbr": float(output.get("pbr", 0)) if output.get("pbr") else None,  # PBR
+                    "market_cap": int(output.get("hts_avls", 0)),  # 시가총액(억)
+                    "timestamp": datetime.now().isoformat()
+                }
+
+            except requests.exceptions.RequestException as e:
+                last_error = e
+                if attempt < retry_count:
+                    continue  # 재시도
+
+        print(f"현재가 조회 실패 [{stock_code}]: {str(last_error)}")
+        return None
 
     def get_multiple_prices(self, stock_codes: List[str], max_workers: int = 10) -> List[Dict]:
         """
@@ -224,8 +399,8 @@ class KISClient:
 
         url = f"{self.BASE_URL}/uapi/domestic-stock/v1/trading/inquire-balance"
 
-        # TTTC8434R: 주식 잔고 조회
-        headers = self._get_headers("TTTC8434R")
+        # 모의/실전에 따라 TR_ID 선택
+        headers = self._get_headers(self.tr_ids["balance"])
         params = {
             "CANO": self.account_no,
             "ACNT_PRDT_CD": self.account_product_code,
@@ -269,11 +444,17 @@ class KISClient:
             if output2:
                 s = output2[0]
                 summary = {
-                    "total_eval_amount": int(s.get("tot_evlu_amt", 0)),
+                    "total_eval_amount": int(s.get("scts_evlu_amt", 0)),  # 주식 평가금액
                     "total_profit_loss": int(s.get("evlu_pfls_smtl_amt", 0)),
-                    "cash_balance": int(s.get("dnca_tot_amt", 0)),
-                    "profit_rate": float(s.get("tot_evlu_pfls_rt", 0)) if s.get("tot_evlu_pfls_rt") else 0
+                    "cash_balance": int(s.get("dnca_tot_amt", 0)),  # 현재 예수금
+                    "d2_cash_balance": int(s.get("prvs_rcdl_excc_amt", 0)),  # D+2 예수금
+                    "profit_rate": float(s.get("asst_icdc_erng_rt", 0)) if s.get("asst_icdc_erng_rt") else 0
                 }
+
+            # 최대매수가능금액 조회
+            max_buy_amt = self._get_max_buy_amount()
+            if max_buy_amt is not None:
+                summary["max_buy_amt"] = max_buy_amt
 
             return {
                 "holdings": holdings,
@@ -285,9 +466,416 @@ class KISClient:
             print(f"잔고 조회 실패: {str(e)}")
             return None
 
+    def _get_max_buy_amount(self) -> Optional[int]:
+        """최대매수가능금액 조회"""
+        try:
+            url = f"{self.BASE_URL}/uapi/domestic-stock/v1/trading/inquire-psbl-order"
+            tr_id = "VTTC8908R" if self.is_virtual else "TTTC8908R"
+            headers = self._get_headers(tr_id)
+            params = {
+                "CANO": self.account_no,
+                "ACNT_PRDT_CD": self.account_product_code,
+                "PDNO": "005930",  # 삼성전자 (기준 종목)
+                "ORD_UNPR": "0",
+                "ORD_DVSN": "01",
+                "CMA_EVLU_AMT_ICLD_YN": "N",
+                "OVRS_ICLD_YN": "N",
+            }
+            res = requests.get(url, headers=headers, params=params, timeout=10)
+            data = res.json()
+            if data.get("rt_cd") == "0":
+                return int(data.get("output", {}).get("max_buy_amt", 0))
+        except Exception as e:
+            print(f"최대매수가능금액 조회 실패: {e}")
+        return None
+
+    def place_order(
+        self,
+        stock_code: str,
+        side: str,
+        quantity: int,
+        price: int = 0,
+        order_type: str = "01"
+    ) -> Optional[Dict]:
+        """
+        주식 주문 실행
+
+        Args:
+            stock_code: 종목코드 (6자리)
+            side: 주문 방향 ("buy" 또는 "sell")
+            quantity: 주문 수량
+            price: 주문 가격 (시장가일 때 0)
+            order_type: 주문 구분 ("00": 지정가, "01": 시장가)
+
+        Returns:
+            주문 결과 딕셔너리
+        """
+        if not self.account_no:
+            raise ValueError("계좌번호가 설정되지 않았습니다.")
+
+        if side not in ["buy", "sell"]:
+            raise ValueError("side는 'buy' 또는 'sell'이어야 합니다.")
+
+        url = f"{self.BASE_URL}/uapi/domestic-stock/v1/trading/order-cash"
+
+        tr_id = self.tr_ids["buy"] if side == "buy" else self.tr_ids["sell"]
+        headers = self._get_headers(tr_id)
+
+        body = {
+            "CANO": self.account_no,
+            "ACNT_PRDT_CD": self.account_product_code,
+            "PDNO": stock_code,
+            "ORD_DVSN": order_type,
+            "ORD_QTY": str(quantity),
+            "ORD_UNPR": str(price),
+        }
+
+        try:
+            res = requests.post(url, headers=headers, json=body, timeout=10)
+            res.raise_for_status()
+            data = res.json()
+
+            if data.get("rt_cd") != "0":
+                error_msg = data.get("msg1", "알 수 없는 오류")
+                print(f"주문 실패: {error_msg}")
+                return {
+                    "success": False,
+                    "error": error_msg,
+                    "stock_code": stock_code,
+                    "side": side,
+                    "quantity": quantity,
+                    "price": price
+                }
+
+            output = data.get("output", {})
+
+            return {
+                "success": True,
+                "order_no": output.get("ODNO", ""),
+                "order_time": output.get("ORD_TMD", ""),
+                "stock_code": stock_code,
+                "side": side,
+                "quantity": quantity,
+                "price": price,
+                "order_type": "시장가" if order_type == "01" else "지정가",
+                "timestamp": datetime.now().isoformat()
+            }
+
+        except requests.exceptions.RequestException as e:
+            print(f"주문 요청 실패 [{stock_code}]: {str(e)}")
+            return {
+                "success": False,
+                "error": str(e),
+                "stock_code": stock_code,
+                "side": side,
+                "quantity": quantity,
+                "price": price
+            }
+
+    def cancel_order(
+        self,
+        order_no: str,
+        stock_code: str,
+        quantity: int,
+        order_type: str = "01"
+    ) -> Optional[Dict]:
+        """
+        주문 취소
+
+        Args:
+            order_no: 주문번호
+            stock_code: 종목코드
+            quantity: 취소 수량
+            order_type: 원주문 구분
+
+        Returns:
+            취소 결과 딕셔너리
+        """
+        if not self.account_no:
+            raise ValueError("계좌번호가 설정되지 않았습니다.")
+
+        url = f"{self.BASE_URL}/uapi/domestic-stock/v1/trading/order-rvsecncl"
+
+        tr_id = self.tr_ids["cancel"]
+        headers = self._get_headers(tr_id)
+
+        body = {
+            "CANO": self.account_no,
+            "ACNT_PRDT_CD": self.account_product_code,
+            "KRX_FWDG_ORD_ORGNO": "",
+            "ORGN_ODNO": order_no,
+            "ORD_DVSN": order_type,
+            "RVSE_CNCL_DVSN_CD": "02",  # 02: 취소
+            "ORD_QTY": str(quantity),
+            "ORD_UNPR": "0",
+            "QTY_ALL_ORD_YN": "Y",
+        }
+
+        try:
+            res = requests.post(url, headers=headers, json=body, timeout=10)
+            res.raise_for_status()
+            data = res.json()
+
+            if data.get("rt_cd") != "0":
+                error_msg = data.get("msg1", "알 수 없는 오류")
+                print(f"주문 취소 실패: {error_msg}")
+                return {
+                    "success": False,
+                    "error": error_msg,
+                    "order_no": order_no
+                }
+
+            output = data.get("output", {})
+
+            return {
+                "success": True,
+                "cancel_order_no": output.get("ODNO", ""),
+                "original_order_no": order_no,
+                "timestamp": datetime.now().isoformat()
+            }
+
+        except requests.exceptions.RequestException as e:
+            print(f"주문 취소 요청 실패: {str(e)}")
+            return {
+                "success": False,
+                "error": str(e),
+                "order_no": order_no
+            }
+
+    def modify_order(
+        self,
+        order_no: str,
+        stock_code: str,
+        quantity: int,
+        price: int,
+        order_type: str = "00"
+    ) -> Optional[Dict]:
+        """
+        주문 정정
+
+        Args:
+            order_no: 원주문번호
+            stock_code: 종목코드
+            quantity: 정정 수량
+            price: 정정 가격
+            order_type: 주문 구분 ("00": 지정가, "01": 시장가)
+
+        Returns:
+            정정 결과 딕셔너리
+        """
+        if not self.account_no:
+            raise ValueError("계좌번호가 설정되지 않았습니다.")
+
+        url = f"{self.BASE_URL}/uapi/domestic-stock/v1/trading/order-rvsecncl"
+
+        tr_id = self.tr_ids["cancel"]  # 정정/취소 동일 TR_ID 사용
+        headers = self._get_headers(tr_id)
+
+        body = {
+            "CANO": self.account_no,
+            "ACNT_PRDT_CD": self.account_product_code,
+            "KRX_FWDG_ORD_ORGNO": "",
+            "ORGN_ODNO": order_no,
+            "ORD_DVSN": order_type,
+            "RVSE_CNCL_DVSN_CD": "01",  # 01: 정정
+            "ORD_QTY": str(quantity),
+            "ORD_UNPR": str(price),
+            "QTY_ALL_ORD_YN": "N",
+        }
+
+        try:
+            res = requests.post(url, headers=headers, json=body, timeout=10)
+            res.raise_for_status()
+            data = res.json()
+
+            if data.get("rt_cd") != "0":
+                error_msg = data.get("msg1", "알 수 없는 오류")
+                print(f"주문 정정 실패: {error_msg}")
+                return {
+                    "success": False,
+                    "error": error_msg,
+                    "order_no": order_no
+                }
+
+            output = data.get("output", {})
+
+            return {
+                "success": True,
+                "new_order_no": output.get("ODNO", ""),
+                "original_order_no": order_no,
+                "quantity": quantity,
+                "price": price,
+                "timestamp": datetime.now().isoformat()
+            }
+
+        except requests.exceptions.RequestException as e:
+            print(f"주문 정정 요청 실패: {str(e)}")
+            return {
+                "success": False,
+                "error": str(e),
+                "order_no": order_no
+            }
+
+    def get_pending_orders(self) -> Optional[List[Dict]]:
+        """
+        미체결 주문 조회
+
+        Returns:
+            미체결 주문 리스트
+        """
+        if not self.account_no:
+            raise ValueError("계좌번호가 설정되지 않았습니다.")
+
+        url = f"{self.BASE_URL}/uapi/domestic-stock/v1/trading/inquire-psbl-rvsecncl"
+
+        tr_id = self.tr_ids["pending"]
+        headers = self._get_headers(tr_id)
+        params = {
+            "CANO": self.account_no,
+            "ACNT_PRDT_CD": self.account_product_code,
+            "CTX_AREA_FK100": "",
+            "CTX_AREA_NK100": "",
+            "INQR_DVSN_1": "0",
+            "INQR_DVSN_2": "0",
+        }
+
+        try:
+            res = requests.get(url, headers=headers, params=params, timeout=10)
+            res.raise_for_status()
+            data = res.json()
+
+            if data.get("rt_cd") != "0":
+                print(f"미체결 조회 오류: {data.get('msg1', '')}")
+                return None
+
+            output = data.get("output", [])
+
+            pending_orders = []
+            for item in output:
+                pending_orders.append({
+                    "order_no": item.get("odno", ""),
+                    "stock_code": item.get("pdno", ""),
+                    "stock_name": item.get("prdt_name", ""),
+                    "side": "buy" if item.get("sll_buy_dvsn_cd") == "02" else "sell",
+                    "order_qty": int(item.get("ord_qty", 0)),
+                    "executed_qty": int(item.get("tot_ccld_qty", 0)),
+                    "remaining_qty": int(item.get("ord_qty", 0)) - int(item.get("tot_ccld_qty", 0)),
+                    "order_price": int(item.get("ord_unpr", 0)),
+                    "order_time": item.get("ord_tmd", ""),
+                })
+
+            return pending_orders
+
+        except requests.exceptions.RequestException as e:
+            print(f"미체결 조회 실패: {str(e)}")
+            return None
+
+    def get_order_history(self, start_date: str = None, end_date: str = None) -> Optional[List[Dict]]:
+        """
+        체결 내역 조회 (연속조회 지원)
+
+        Args:
+            start_date: 조회 시작일 (YYYYMMDD)
+            end_date: 조회 종료일 (YYYYMMDD)
+
+        Returns:
+            체결 내역 리스트
+        """
+        if not self.account_no:
+            raise ValueError("계좌번호가 설정되지 않았습니다.")
+
+        if not start_date:
+            start_date = datetime.now().strftime("%Y%m%d")
+        if not end_date:
+            end_date = datetime.now().strftime("%Y%m%d")
+
+        url = f"{self.BASE_URL}/uapi/domestic-stock/v1/trading/inquire-daily-ccld"
+
+        # 모의/실전 TR_ID
+        tr_id = "VTTC8001R" if self.is_virtual else "TTTC8001R"
+
+        all_orders = []
+        seen_order_nos = set()  # 중복 체크용
+        ctx_area_fk100 = ""
+        ctx_area_nk100 = ""
+        tr_cont = ""  # 첫 요청은 빈 문자열
+        max_pages = 10
+
+        for page in range(max_pages):
+            headers = self._get_headers(tr_id)
+            # 연속조회 시 tr_cont 설정
+            if page > 0:
+                headers["tr_cont"] = "N"
+
+            params = {
+                "CANO": self.account_no,
+                "ACNT_PRDT_CD": self.account_product_code,
+                "INQR_STRT_DT": start_date,
+                "INQR_END_DT": end_date,
+                "SLL_BUY_DVSN_CD": "00",
+                "INQR_DVSN": "00",
+                "PDNO": "",
+                "CCLD_DVSN": "00",
+                "ORD_GNO_BRNO": "",
+                "ODNO": "",
+                "INQR_DVSN_3": "00",
+                "INQR_DVSN_1": "",
+                "CTX_AREA_FK100": ctx_area_fk100,
+                "CTX_AREA_NK100": ctx_area_nk100,
+            }
+
+            try:
+                res = requests.get(url, headers=headers, params=params, timeout=10)
+                res.raise_for_status()
+                data = res.json()
+
+                if data.get("rt_cd") != "0":
+                    print(f"체결 내역 조회 오류: {data.get('msg1', '')}")
+                    break
+
+                output = data.get("output1", [])
+
+                for item in output:
+                    order_no = item.get("odno", "")
+                    # 중복 체크
+                    if order_no in seen_order_nos:
+                        continue
+                    seen_order_nos.add(order_no)
+
+                    all_orders.append({
+                        "order_date": item.get("ord_dt", ""),
+                        "order_no": order_no,
+                        "stock_code": item.get("pdno", ""),
+                        "stock_name": item.get("prdt_name", ""),
+                        "side": "buy" if item.get("sll_buy_dvsn_cd") == "02" else "sell",
+                        "order_qty": int(item.get("ord_qty", 0)),
+                        "executed_qty": int(item.get("tot_ccld_qty", 0)),
+                        "executed_price": int(float(item.get("avg_prvs", 0))),
+                        "executed_amount": int(item.get("tot_ccld_amt", 0)),
+                    })
+
+                # 연속조회 키 업데이트
+                ctx_area_fk100 = data.get("ctx_area_fk100", "").strip()
+                ctx_area_nk100 = data.get("ctx_area_nk100", "").strip()
+                tr_cont_resp = res.headers.get("tr_cont", "")
+
+                # 더 이상 데이터가 없으면 종료
+                # tr_cont가 "D" 또는 ""이면 마지막, "M" 또는 "F"이면 더 있음
+                if not output or tr_cont_resp in ["D", ""] or not ctx_area_fk100:
+                    break
+
+                time.sleep(0.2)  # API 호출 간격
+
+            except requests.exceptions.RequestException as e:
+                print(f"체결 내역 조회 실패: {str(e)}")
+                break
+
+        return all_orders if all_orders else None
+
 
 # 싱글톤 인스턴스
 _kis_client: Optional[KISClient] = None
+_kis_price_client: Optional[KISClient] = None  # 시세 조회 전용 (실전투자 URL 사용)
 
 
 def get_kis_client() -> KISClient:
@@ -296,3 +884,16 @@ def get_kis_client() -> KISClient:
     if _kis_client is None:
         _kis_client = KISClient()
     return _kis_client
+
+
+def get_kis_client_for_prices() -> KISClient:
+    """
+    시세 조회 전용 KIS 클라이언트 반환 (실전투자 URL 사용)
+
+    주의: 시세 조회는 모의투자/실전투자 상관없이 실전투자 URL을 사용해야 합니다.
+    모의투자 URL로 시세 조회 시 일부 종목에서 500 에러가 발생합니다.
+    """
+    global _kis_price_client
+    if _kis_price_client is None:
+        _kis_price_client = KISClient(is_virtual=False)  # 실전투자 URL 사용
+    return _kis_price_client

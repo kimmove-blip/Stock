@@ -156,15 +156,16 @@ export default function RealtimePicks() {
 
   const items = data?.items?.slice(0, 20) || [];
 
-  // 종목 데이터에 실시간 시세 병합
+  // 종목 데이터에 실시간 시세 병합 (실시간 데이터 없으면 TOP100 데이터 사용)
   const getStockData = (stock) => {
     const realtime = realtimePrices[stock.code];
     if (realtime) {
       return {
         ...stock,
-        current_price: realtime.current_price,
+        current_price: realtime.current_price || stock.current_price,
         change: realtime.change,
-        change_rate: realtime.change_rate,
+        // 실시간 change_rate가 없으면 TOP100의 change_rate 사용
+        change_rate: realtime.change_rate ?? stock.change_rate,
         volume: realtime.volume,
       };
     }
@@ -206,7 +207,8 @@ export default function RealtimePicks() {
       <div className="space-y-3">
         {items.map((stock, idx) => {
           const stockData = getStockData(stock);
-          const changeRate = stockData.change_rate || 0;
+          const changeRate = stockData.change_rate;
+          const hasChangeRate = changeRate !== null && changeRate !== undefined;
 
           return (
             <div
@@ -251,19 +253,23 @@ export default function RealtimePicks() {
                 <p className="font-semibold">
                   {stockData.current_price?.toLocaleString()}원
                 </p>
-                <p
-                  className={`text-sm flex items-center justify-end gap-1 ${
-                    changeRate >= 0 ? 'text-red-500' : 'text-blue-500'
-                  }`}
-                >
-                  {changeRate >= 0 ? (
-                    <TrendingUp size={14} />
-                  ) : (
-                    <TrendingDown size={14} />
-                  )}
-                  {changeRate >= 0 ? '+' : ''}
-                  {changeRate.toFixed(2)}%
-                </p>
+                {hasChangeRate ? (
+                  <p
+                    className={`text-sm flex items-center justify-end gap-1 ${
+                      changeRate >= 0 ? 'text-red-500' : 'text-blue-500'
+                    }`}
+                  >
+                    {changeRate >= 0 ? (
+                      <TrendingUp size={14} />
+                    ) : (
+                      <TrendingDown size={14} />
+                    )}
+                    {changeRate >= 0 ? '+' : ''}
+                    {changeRate.toFixed(2)}%
+                  </p>
+                ) : (
+                  <p className="text-sm text-gray-400">-</p>
+                )}
               </div>
               <div className="bg-orange-100 text-orange-600 px-2 py-1 rounded-lg text-sm font-medium">
                 {stockData.score}점

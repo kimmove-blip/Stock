@@ -67,12 +67,12 @@ _kis_client = None
 
 
 def get_kis():
-    """KIS 클라이언트 가져오기"""
+    """KIS 클라이언트 가져오기 (시세 조회 전용 - 실전투자 URL 사용)"""
     global _kis_client
     if _kis_client is None:
         try:
-            from api.services.kis_client import get_kis_client
-            _kis_client = get_kis_client()
+            from api.services.kis_client import get_kis_client_for_prices
+            _kis_client = get_kis_client_for_prices()
         except Exception as e:
             print(f"KIS 클라이언트 초기화 실패: {e}")
             _kis_client = "error"

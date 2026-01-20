@@ -450,9 +450,9 @@ async def get_stock_detail(code: str):
     stock_name = get_stock_name(code)
 
     try:
-        # 1. KIS API로 실시간 시세 조회 시도
-        from api.services.kis_client import KISClient
-        kis = KISClient()
+        # 1. KIS API로 실시간 시세 조회 시도 (실전투자 URL 사용)
+        from api.services.kis_client import get_kis_client_for_prices
+        kis = get_kis_client_for_prices()
         kis_data = kis.get_current_price(code)
 
         if kis_data:

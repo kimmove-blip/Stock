@@ -79,11 +79,13 @@ async def get_top100(
         if current_price is not None:
             current_price = int(current_price)
 
-        # 등락률 처리
-        change_rate = stock.get('change_rate') or stock.get('등락률') or stock.get('change_pct')
-
-        # indicators에서 RSI, MACD 추출
+        # indicators에서 RSI, MACD, change_pct 추출
         indicators = stock.get('indicators', {})
+
+        # 등락률 처리 (JSON에 있는 change_pct 사용)
+        change_rate = stock.get('change_pct') or indicators.get('change_pct')
+        if change_rate is not None:
+            change_rate = round(float(change_rate), 2)
         rsi = stock.get('rsi') or stock.get('RSI') or indicators.get('rsi')
         macd = stock.get('macd_signal') or indicators.get('macd')
 
