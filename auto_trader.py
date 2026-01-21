@@ -662,7 +662,8 @@ class AutoTrader:
                     trade_reason=", ".join(sell_reasons),
                     status="executed" if not self.dry_run else "dry_run",
                     profit_loss=realized_profit,
-                    profit_rate=realized_rate
+                    profit_rate=realized_rate,
+                    user_id=self.user_id
                 )
 
                 # 보유 종목에서 제거
@@ -789,7 +790,8 @@ class AutoTrader:
                     price=current_price,
                     order_no=result.get("order_no"),
                     trade_reason=f"점수 {item.get('score')}점",
-                    status="executed" if not self.dry_run else "dry_run"
+                    status="executed" if not self.dry_run else "dry_run",
+                    user_id=self.user_id
                 )
 
                 # 보유 종목 추가
@@ -991,7 +993,8 @@ class AutoTrader:
                     price=exec_price,
                     order_no=result.get("order_no"),
                     trade_reason=f"제안승인 (점수 {suggestion.get('score')}점) - {order_desc}",
-                    status="pending" if is_limit_order else ("executed" if not self.dry_run else "dry_run")
+                    status="pending" if is_limit_order else ("executed" if not self.dry_run else "dry_run"),
+                    user_id=self.user_id
                 )
 
                 # 시장가 주문은 바로 체결 → 보유 종목 추가
@@ -1774,7 +1777,8 @@ class AutoTrader:
                     price=current_price,
                     order_no=result.get("order_no"),
                     trade_reason=f"장중스크리닝 {score}점",
-                    status="executed" if not self.dry_run else "dry_run"
+                    status="executed" if not self.dry_run else "dry_run",
+                    user_id=self.user_id
                 )
 
                 # 알림

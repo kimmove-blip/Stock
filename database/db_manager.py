@@ -468,13 +468,13 @@ class DatabaseManager:
 
     # ==================== 알림 기록 ====================
 
-    def add_alert_history(self, user_id, stock_code, alert_type, message=None):
+    def add_alert_history(self, user_id, stock_code, alert_type, message=None, stock_name=None):
         """알림 기록 추가"""
         with self.get_connection() as conn:
             try:
                 conn.execute(
-                    "INSERT INTO alert_history (user_id, stock_code, alert_type, message) VALUES (?, ?, ?, ?)",
-                    (user_id, stock_code, alert_type, message)
+                    "INSERT INTO alert_history (user_id, stock_code, stock_name, alert_type, message) VALUES (?, ?, ?, ?, ?)",
+                    (user_id, stock_code, stock_name, alert_type, message)
                 )
                 conn.commit()
                 return True
@@ -494,10 +494,16 @@ class DatabaseManager:
         """사용자의 최근 알림 기록 조회"""
         with self.get_connection() as conn:
             cursor = conn.execute(
-                "SELECT stock_code, alert_type, message, created_at FROM alert_history WHERE user_id = ? AND created_at >= datetime('now', ? || ' days') ORDER BY created_at DESC",
+                "SELECT id, stock_code, stock_name, alert_type, message, datetime(created_at, '+9 hours') as created_at FROM alert_history WHERE user_id = ? AND created_at >= datetime('now', ? || ' days') ORDER BY created_at DESC",
                 (user_id, -days)
             )
             return [dict(row) for row in cursor.fetchall()]
+
+    def delete_alert(self, user_id, alert_id):
+        """알림 개별 삭제"""
+        with self.get_connection() as conn:
+            conn.execute("DELETE FROM alert_history WHERE id = ? AND user_id = ?", (alert_id, user_id))
+            conn.commit()
 
     def clear_alert_history(self, user_id):
         """사용자의 모든 알림 기록 삭제"""
