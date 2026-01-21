@@ -21,6 +21,7 @@ router = APIRouter()
 class AlertItem(BaseModel):
     """알림 항목"""
     stock_code: str
+    stock_name: Optional[str] = None
     alert_type: str
     message: Optional[str] = None
     created_at: str
@@ -44,6 +45,7 @@ async def get_alert_history(
     items = [
         AlertItem(
             stock_code=alert['stock_code'],
+            stock_name=alert.get('stock_name'),
             alert_type=alert['alert_type'],
             message=alert.get('message'),
             created_at=str(alert['created_at'])
