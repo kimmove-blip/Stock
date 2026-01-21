@@ -149,9 +149,16 @@ class KISClient:
                             self._token_expires_at = expires_at
                             # 메모리 캐시에도 저장
                             _memory_token_cache[cache_key] = cached
+                            print(f"[KIS] 토큰 캐시 로드 성공: {cache_key}")
                             return True
-        except Exception:
-            pass
+                        else:
+                            print(f"[KIS] 토큰 캐시 만료: {cache_key}, expires={expires_at}")
+                    else:
+                        print(f"[KIS] 캐시 키 없음: {cache_key}, 기존 키: {list(all_cache.keys())}")
+            else:
+                print(f"[KIS] 캐시 파일 없음: {MULTI_TOKEN_CACHE_FILE}")
+        except Exception as e:
+            print(f"[KIS] 캐시 로드 에러: {e}")
 
         return False
 
@@ -469,11 +476,23 @@ class KISClient:
                 print(f"잔고 조회 오류: {data.get('msg1', '')}")
                 return None
 
-            output1 = data.get("output1", [])  # 보유종목
-            output2 = data.get("output2", [])  # 계좌 요약
+            output1 = data.get("output1", [])
+            output2 = data.get("output2", [])
+
+            # 모의투자는 output1/output2가 실전과 반대 (2026-01-21 발견)
+            # output 내용을 보고 자동 판단: pdno(종목코드)가 있으면 보유종목, dnca_tot_amt(예수금)가 있으면 잔고요약
+            holdings_output = output1
+            summary_output = output2
+
+            if output1 and isinstance(output1, list) and len(output1) > 0:
+                first_item = output1[0]
+                # output1에 dnca_tot_amt가 있으면 잔고요약 → 모의투자이므로 swap
+                if "dnca_tot_amt" in first_item:
+                    holdings_output = output2
+                    summary_output = output1
 
             holdings = []
-            for item in output1:
+            for item in holdings_output:
                 holdings.append({
                     "stock_code": item.get("pdno", ""),
                     "stock_name": item.get("prdt_name", ""),
@@ -486,8 +505,8 @@ class KISClient:
                 })
 
             summary = {}
-            if output2:
-                s = output2[0]
+            if summary_output:
+                s = summary_output[0] if isinstance(summary_output, list) else summary_output
                 summary = {
                     "total_eval_amount": int(s.get("scts_evlu_amt", 0)),  # 주식 평가금액
                     "total_profit_loss": int(s.get("evlu_pfls_smtl_amt", 0)),

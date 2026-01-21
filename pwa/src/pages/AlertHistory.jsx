@@ -156,7 +156,7 @@ export default function AlertHistory() {
                       </span>
                     </div>
                     <p className="font-semibold text-gray-800 mt-1">
-                      {alert.stock_code}
+                      {alert.stock_name || alert.stock_code}
                     </p>
                     {alert.message && (
                       <p className="text-sm text-gray-600 mt-1 line-clamp-2">

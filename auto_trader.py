@@ -68,17 +68,21 @@ class TelegramNotifier:
         self.user_id = user_id  # 푸시 알림용
 
     def _save_to_db(self, stock_code: str, stock_name: str, alert_type: str, message: str):
-        """알림 기록을 DB에 저장"""
+        """알림 기록을 DB에 저장 (한국 시간)"""
         if not self.user_id:
             return
         try:
             from database.db_manager import DatabaseManager
+            from datetime import datetime, timezone, timedelta
             db = DatabaseManager()
+            # 한국 시간 (UTC+9)
+            kst = timezone(timedelta(hours=9))
+            now_kst = datetime.now(kst).strftime('%Y-%m-%d %H:%M:%S')
             with db.get_connection() as conn:
                 conn.execute("""
-                    INSERT INTO alert_history (user_id, stock_code, stock_name, alert_type, message)
-                    VALUES (?, ?, ?, ?, ?)
-                """, (self.user_id, stock_code, stock_name, alert_type, message))
+                    INSERT INTO alert_history (user_id, stock_code, stock_name, alert_type, message, created_at)
+                    VALUES (?, ?, ?, ?, ?, ?)
+                """, (self.user_id, stock_code, stock_name, alert_type, message, now_kst))
                 conn.commit()
         except Exception as e:
             print(f"알림 기록 저장 실패: {e}")
@@ -675,12 +679,12 @@ class AutoTrader:
                 reason_str = sell_reasons[0] if sell_reasons else "조건 충족"
                 if "손절" in reason_str:
                     self.notifier.notify_stop_loss(
-                        stock_name, item.get("current_price", 0), profit_rate
+                        stock_name, item.get("current_price", 0), profit_rate, stock_code
                     )
                 else:
                     self.notifier.notify_sell(
                         stock_name, item.get("current_price", 0),
-                        quantity, profit_rate, reason_str
+                        quantity, profit_rate, reason_str, stock_code
                     )
 
                 self.stats["sell_orders"].append(result)
@@ -718,6 +722,14 @@ class AutoTrader:
             if current_price <= 0:
                 print(f"  {stock_name}: 가격 조회 실패")
                 continue
+
+            # === 당일 상한가 체크 (시장가 주문 불가) ===
+            prev_close = item.get("current_price", current_price)
+            if prev_close > 0:
+                today_change_pct = (current_price - prev_close) / prev_close * 100
+                if today_change_pct >= 29:
+                    print(f"  {stock_name}: 당일 상한가 근접 ({today_change_pct:+.1f}%) - 시장가 주문 불가")
+                    continue
 
             # === 시초가 갭 전략 평가 ===
             prev_close = item.get("current_price", current_price)  # 전일 종가 (분석 시점 가격)
@@ -798,7 +810,7 @@ class AutoTrader:
                         self.logger.update_virtual_balance_on_buy(buy_amount + buy_commission)
 
                 # 알림
-                self.notifier.notify_buy(stock_name, current_price, quantity)
+                self.notifier.notify_buy(stock_name, current_price, quantity, stock_code)
 
                 self.stats["buy_orders"].append(result)
                 self.risk_manager.increment_trade_count()
@@ -1446,30 +1458,86 @@ class AutoTrader:
             print("  계좌 잔고 조회 실패")
             return {"status": "error", "reason": "balance_fetch_failed"}
 
-        total_assets = balance.get("total_assets", 0)
-        available_cash = balance.get("available_cash", 0)
-        max_buy_amt = balance.get("max_buy_amount", available_cash)
-        current_holdings = balance.get("holdings", [])
-        holdings = [h for h in current_holdings if h.get("quantity", 0) > 0]
+        all_holdings = balance.get("holdings", [])
+        holdings = [h for h in all_holdings if h.get("quantity", 0) > 0]
+        summary = balance.get("summary", {})
+        # 예수금: d2_cash_balance (실제 자산 기준)
+        d2_cash = summary.get("d2_cash_balance", 0) or summary.get("cash_balance", 0)
+        # 주문가능금액: max_buy_amt (미체결 제외)
+        max_buy_amt = summary.get("max_buy_amt", 0) or d2_cash
+        # 총자산: 평가금액 + d2 예수금
+        total_eval = summary.get("total_eval_amount", 0)
+        total_assets = total_eval + d2_cash
 
-        print(f"  총 자산: {total_assets:,}원")
-        print(f"  주문 가능: {max_buy_amt:,}원")
+        print(f"  예수금(D+2): {d2_cash:,}원")
+        print(f"  주문가능금액: {max_buy_amt:,}원")
         print(f"  보유 종목: {len(holdings)}개")
 
-        # 보유 종목 수 체크
-        remaining_slots = self.risk_manager.limits.max_holdings - len(holdings)
+        # 2. 보유 종목 매도 체크 (래치 전략: 40점 미만, 20일선 이탈, 손절)
+        sell_count = 0
+        if holdings:
+            print(f"\n[2] 보유 종목 매도 체크 중... (래치 전략)")
+
+            # 현재가, 점수, 20일선 조회
+            current_prices = {}
+            current_signals = {}
+            current_scores = {}
+            buy_dates = {}
+            sma20_values = {}
+
+            for h in holdings:
+                stock_code = h["stock_code"]
+                current_prices[stock_code] = h.get("current_price", 0)
+                current_signals[stock_code] = self.get_current_signals(stock_code, [])
+                current_scores[stock_code] = self.get_current_score(stock_code, [])
+                sma20_values[stock_code] = self.get_sma20(stock_code)
+
+                buy_date = self.logger.get_buy_date(stock_code)
+                if buy_date:
+                    buy_dates[stock_code] = buy_date
+
+            # 매도 대상 선정 (래치 전략: 40점 미만 또는 20일선 이탈)
+            sell_list = self.risk_manager.evaluate_holdings(
+                holdings=holdings,
+                current_prices=current_prices,
+                current_signals=current_signals,
+                buy_dates=buy_dates,
+                current_scores=current_scores,
+                sma20_values=sma20_values
+            )
+
+            if sell_list:
+                print(f"  매도 대상: {len(sell_list)}개")
+                for item in sell_list:
+                    print(f"    - {item['stock_name']}: {', '.join(item['sell_reasons'])}")
+
+                # 매도 실행
+                if not self.dry_run:
+                    self.execute_sell_orders(sell_list)
+                    sell_count = len(sell_list)
+                else:
+                    print("  [DRY-RUN] 실제 매도 실행 안함")
+            else:
+                print("  매도 대상 없음")
+
+        # 보유 종목 수 체크 (매도 후 업데이트)
+        remaining_slots = self.risk_manager.limits.max_holdings - len(holdings) + sell_count
         if remaining_slots <= 0:
             print(f"  최대 보유 종목 수 도달 ({self.risk_manager.limits.max_holdings}개)")
-            return {"status": "skipped", "reason": "max_holdings_reached"}
+            return {"status": "completed", "sell_count": sell_count, "buy_count": 0}
 
-        # 2. 전종목 스크리닝 (strict 모드)
-        print(f"\n[2] 전종목 스크리닝 중 (strict 모드)...")
-        screener = MarketScreener(max_workers=10)
+        # 3. 전종목 스크리닝 (strict 모드) - ScreeningConfig 기준 사용
+        from config import ScreeningConfig
+        print(f"\n[3] 전종목 스크리닝 중 (strict 모드)...")
+        print(f"  시총: {ScreeningConfig.MIN_MARKET_CAP/1e8:.0f}억 ~ {ScreeningConfig.MAX_MARKET_CAP/1e8:.0f}억")
+        print(f"  거래대금: {ScreeningConfig.MIN_TRADING_AMOUNT/1e8:.0f}억 이상")
+        screener = MarketScreener(max_workers=ScreeningConfig.MAX_WORKERS)
         top_stocks, stats = screener.run_full_screening(
-            top_n=100,
-            mode="strict",  # 변별력 강화 버전 사용
-            min_marcap=50_000_000_000,  # 시총 500억 이상
-            min_amount=1_000_000_000,   # 거래대금 10억 이상
+            top_n=ScreeningConfig.TOP_N,
+            mode="strict",
+            min_marcap=ScreeningConfig.MIN_MARKET_CAP,
+            max_marcap=ScreeningConfig.MAX_MARKET_CAP,
+            min_amount=ScreeningConfig.MIN_TRADING_AMOUNT,
         )
 
         if not top_stocks:
@@ -1478,30 +1546,149 @@ class AutoTrader:
 
         print(f"  스크리닝 완료: {len(top_stocks)}개 종목")
 
-        # 3. 매수 후보 필터링 (min_score 이상)
-        print(f"\n[3] 매수 후보 필터링 중 (점수 >= {min_score})...")
+        # JSON 파일에 스크리닝 결과 저장 (진단 페이지 점수 동기화용)
+        try:
+            from config import OUTPUT_DIR
+            import json
+            import numpy as np
+
+            def convert_value(v):
+                """numpy 타입을 Python 기본 타입으로 변환"""
+                if isinstance(v, (np.integer, np.int64, np.int32)):
+                    return int(v)
+                elif isinstance(v, (np.floating, np.float64, np.float32)):
+                    return round(float(v), 4)
+                elif isinstance(v, float):
+                    return round(v, 4)
+                return v
+
+            today_str = now.strftime('%Y%m%d')
+            json_path = OUTPUT_DIR / f"top100_{today_str}.json"
+
+            # 기존 파일이 있으면 로드
+            existing_data = {}
+            if json_path.exists():
+                with open(json_path, 'r', encoding='utf-8') as f:
+                    existing_data = json.load(f)
+
+            # 전종목 점수 (all_scores) 업데이트
+            all_scores = stats.get('all_scores', {})
+            # 기존 all_scores와 병합 (새로운 점수로 덮어쓰기)
+            existing_all_scores = existing_data.get('screening_stats', {}).get('all_scores', {})
+            existing_all_scores.update(all_scores)
+
+            # stocks 리스트 생성
+            stocks_list = []
+            for r in top_stocks:
+                stock = {
+                    "rank": r.get("rank", 0),
+                    "code": r.get("code"),
+                    "name": r.get("name"),
+                    "score": r.get("score"),
+                    "signals": r.get("signals", []),
+                    "close": int(r.get("close", 0)),
+                    "change_pct": round(r.get("change_pct", 0), 2),
+                    "marcap": int(r.get("marcap", 0)),
+                    "amount": int(r.get("amount", 0)),
+                }
+                if "indicators" in r:
+                    stock["indicators"] = {
+                        k: convert_value(v) for k, v in r["indicators"].items()
+                    }
+                stocks_list.append(stock)
+
+            # 저장할 데이터
+            save_data = {
+                "date": today_str,
+                "updated_at": now.strftime('%Y-%m-%d %H:%M:%S'),
+                "mode": "intraday_strict",
+                "stocks": stocks_list,
+                "screening_stats": {
+                    **stats,
+                    "all_scores": existing_all_scores
+                }
+            }
+
+            with open(json_path, 'w', encoding='utf-8') as f:
+                json.dump(save_data, f, ensure_ascii=False, indent=2)
+
+            print(f"  JSON 저장 완료: {json_path.name}")
+        except Exception as e:
+            print(f"  JSON 저장 실패: {e}")
+
+        # 4. 매수 후보 필터링 (점수 + 거래량 + 연속성 조건)
+        print(f"\n[4] 매수 후보 필터링 중 (점수 >= {min_score}, 거래량/연속성 조건 적용)...")
+
+        # 시간대별 거래량 보정 계수
+        now = datetime.now()
+        hour = now.hour
+        if hour < 10:
+            volume_multiplier = 4.0  # 9시~10시
+        elif hour < 11:
+            volume_multiplier = 2.5  # 10시~11시
+        elif hour < 14:
+            volume_multiplier = 1.5  # 11시~14시
+        else:
+            volume_multiplier = 1.0  # 14시 이후
+        print(f"  시간대 거래량 보정: x{volume_multiplier}")
+
+        # 이전 스크리닝 결과 로드 (10분 전 점수 확인용)
+        prev_scores = {}
+        try:
+            intraday_files = sorted(OUTPUT_DIR.glob("intraday_*.json"), reverse=True)
+            if len(intraday_files) >= 2:
+                # 가장 최근 파일은 방금 저장한 것이므로, 두 번째 파일이 이전 스크리닝
+                with open(intraday_files[1], 'r', encoding='utf-8') as f:
+                    prev_data = json.load(f)
+                    for s in prev_data.get("stocks", []):
+                        prev_scores[s.get("code")] = s.get("score", 0)
+                print(f"  이전 스크리닝 로드: {intraday_files[1].name} ({len(prev_scores)}종목)")
+        except Exception as e:
+            print(f"  이전 스크리닝 로드 실패: {e}")
+
         candidates = []
         for stock in top_stocks:
-            if stock.get("score", 0) >= min_score:
-                # auto_trader 형식으로 변환
-                candidates.append({
-                    "stock_code": stock.get("code"),
-                    "stock_name": stock.get("name"),
-                    "score": stock.get("score"),
-                    "signals": stock.get("signals", []),
-                    "current_price": int(stock.get("close", 0)),
-                    "volume_ratio": stock.get("indicators", {}).get("volume_ratio", 1.0),
-                    "change_pct": stock.get("change_pct", 0),
-                })
+            score = stock.get("score", 0)
+            code = stock.get("code")
+            name = stock.get("name")
+            volume_ratio = stock.get("indicators", {}).get("volume_ratio", 1.0)
 
-        print(f"  {min_score}점 이상 종목: {len(candidates)}개")
+            # 점수 조건
+            if score < min_score:
+                continue
+
+            # 거래량 조건 (시간대 보정 적용, 보정 후 1.5배 이상)
+            adjusted_volume = volume_ratio * volume_multiplier
+            if adjusted_volume < 1.5:
+                print(f"  [{name}] 거래량 부족 (원본 {volume_ratio:.1f}배, 보정 {adjusted_volume:.1f}배) - 제외")
+                continue
+
+            # 75점 이상 ~ 80점 미만: 이전 스크리닝에서도 75점 이상이어야 함
+            if min_score <= score < 80:
+                prev_score = prev_scores.get(code, 0)
+                if prev_score < min_score:
+                    print(f"  [{name}] 점수 {score}점, 이전 {prev_score}점 - 연속성 부족")
+                    continue
+
+            # auto_trader 형식으로 변환
+            candidates.append({
+                "stock_code": code,
+                "stock_name": name,
+                "score": score,
+                "signals": stock.get("signals", []),
+                "current_price": int(stock.get("close", 0)),
+                "volume_ratio": volume_ratio,
+                "change_pct": stock.get("change_pct", 0),
+            })
+
+        print(f"  최종 {min_score}점 이상 후보: {len(candidates)}개")
 
         if not candidates:
             print("  매수 조건 충족 종목 없음")
             return {"status": "completed", "buy_count": 0}
 
-        # 4. 당일 블랙리스트 및 보유 종목 필터링
-        print("\n[4] 블랙리스트 및 보유 종목 필터링 중...")
+        # 5. 당일 블랙리스트 및 보유 종목 필터링
+        print("\n[5] 블랙리스트 및 보유 종목 필터링 중...")
         holding_codes = {h.get("stock_code") for h in holdings}
         today_blacklist = self.logger.get_today_traded_stocks(self.user_id)
 
@@ -1531,8 +1718,8 @@ class AutoTrader:
         if not filtered_candidates:
             return {"status": "completed", "buy_count": 0}
 
-        # 5. 매수 실행
-        print("\n[5] 매수 주문 실행 중...")
+        # 6. 매수 실행
+        print("\n[6] 매수 주문 실행 중...")
         investment_per_stock = self.risk_manager.calculate_investment_amount(total_assets)
         actual_investment = min(investment_per_stock, max_buy_amt // len(filtered_candidates))
         print(f"  종목당 투자금: {actual_investment:,}원")
@@ -1548,6 +1735,14 @@ class AutoTrader:
             live_price = self.executor.get_current_price(stock_code)
             if live_price and live_price > 0:
                 current_price = live_price
+
+            # 당일 상한가 체크 (시장가 주문 불가)
+            prev_close = candidate.get("current_price", current_price)
+            if prev_close > 0:
+                today_change_pct = (current_price - prev_close) / prev_close * 100
+                if today_change_pct >= 29:
+                    print(f"  {stock_name}: 당일 상한가 근접 ({today_change_pct:+.1f}%) - 시장가 주문 불가")
+                    continue
 
             quantity = actual_investment // current_price
             if quantity <= 0:
@@ -1588,11 +1783,12 @@ class AutoTrader:
                 print(f"  매수 완료!")
 
         print("\n" + "=" * 60)
-        print(f"  장중 스크리닝 완료: 매수 {buy_count}건")
+        print(f"  장중 스크리닝 완료: 매도 {sell_count}건, 매수 {buy_count}건")
         print("=" * 60)
 
         return {
             "status": "completed",
+            "sell_count": sell_count,
             "buy_count": buy_count,
             "screened_stocks": len(top_stocks),
             "candidates": len(candidates),
