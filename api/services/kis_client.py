@@ -370,6 +370,100 @@ class KISClient:
 
         return results
 
+    def get_investor_trend(self, stock_code: str, days: int = 5) -> Optional[Dict]:
+        """
+        투자자별 매매동향 조회 (기관/외국인 수급)
+
+        Args:
+            stock_code: 종목코드 (6자리)
+            days: 조회 일수 (기본 5일)
+
+        Returns:
+            {
+                'foreign_net': 외국인 순매수량 (최근 N일 합계),
+                'institution_net': 기관 순매수량 (최근 N일 합계),
+                'individual_net': 개인 순매수량,
+                'foreign_ratio': 외국인 보유 비율,
+                'daily': [일별 상세 데이터]
+            }
+        """
+        url = f"{self.BASE_URL}/uapi/domestic-stock/v1/quotations/inquire-investor"
+
+        # FHKST01010900: 주식 투자자별 매매동향
+        headers = self._get_headers("FHKST01010900")
+        params = {
+            "FID_COND_MRKT_DIV_CODE": "J",
+            "FID_INPUT_ISCD": stock_code
+        }
+
+        try:
+            res = requests.get(url, headers=headers, params=params, timeout=10)
+            res.raise_for_status()
+            data = res.json()
+
+            if data.get("rt_cd") != "0":
+                print(f"투자자 동향 조회 오류: {data.get('msg1', '')}")
+                return None
+
+            output = data.get("output", [])
+
+            if not output:
+                return None
+
+            # 최근 N일 데이터 집계
+            foreign_net = 0
+            institution_net = 0
+            individual_net = 0
+            daily_data = []
+
+            for i, item in enumerate(output[:days]):
+                # 외국인 순매수량 (빈 문자열 처리)
+                frgn_ntby_str = item.get("frgn_ntby_qty", "0") or "0"
+                frgn_ntby = int(frgn_ntby_str) if frgn_ntby_str.lstrip('-').isdigit() else 0
+                # 기관 순매수량 (기관 = 금융투자 + 보험 + 투신 + 은행 + 기타금융 + 연기금 등)
+                orgn_ntby_str = item.get("orgn_ntby_qty", "0") or "0"
+                orgn_ntby = int(orgn_ntby_str) if orgn_ntby_str.lstrip('-').isdigit() else 0
+                # 개인 순매수량
+                prsn_ntby_str = item.get("prsn_ntby_qty", "0") or "0"
+                prsn_ntby = int(prsn_ntby_str) if prsn_ntby_str.lstrip('-').isdigit() else 0
+
+                foreign_net += frgn_ntby
+                institution_net += orgn_ntby
+                individual_net += prsn_ntby
+
+                # 거래대금 파싱 (빈 문자열 처리)
+                frgn_tr_str = item.get("frgn_ntby_tr_pbmn", "0") or "0"
+                frgn_tr = int(frgn_tr_str) if frgn_tr_str.lstrip('-').isdigit() else 0
+
+                daily_data.append({
+                    "date": item.get("stck_bsop_date", ""),
+                    "foreign_net": frgn_ntby,
+                    "institution_net": orgn_ntby,
+                    "individual_net": prsn_ntby,
+                    "foreign_total": frgn_tr,  # 거래대금
+                })
+
+            # 외국인 보유비율 (첫 번째 데이터에서)
+            frgn_rt_str = output[0].get("frgn_hldn_rt", "0") or "0" if output else "0"
+            try:
+                foreign_ratio = float(frgn_rt_str)
+            except ValueError:
+                foreign_ratio = 0
+
+            return {
+                "stock_code": stock_code,
+                "foreign_net": foreign_net,
+                "institution_net": institution_net,
+                "individual_net": individual_net,
+                "foreign_ratio": foreign_ratio,
+                "days": days,
+                "daily": daily_data
+            }
+
+        except requests.exceptions.RequestException as e:
+            print(f"투자자 동향 조회 실패 [{stock_code}]: {str(e)}")
+            return None
+
     def get_daily_price(self, stock_code: str, period: str = "D", count: int = 30) -> Optional[List[Dict]]:
         """
         주식 일별 시세 조회
@@ -421,13 +515,172 @@ class KISClient:
             print(f"일별 시세 조회 실패 [{stock_code}]: {str(e)}")
             return None
 
-    def get_account_balance(self, _retry: bool = False) -> Optional[Dict]:
+    def get_minute_chart(self, stock_code: str, target_date: str = None, time_unit: str = "1") -> Optional[List[Dict]]:
+        """
+        주식 분봉 데이터 조회
+
+        Args:
+            stock_code: 종목코드 (6자리)
+            target_date: 조회 날짜 (YYYYMMDD 형식, None이면 오늘)
+            time_unit: 분봉 단위 ("1": 1분, "5": 5분, "10": 10분, "30": 30분, "60": 60분)
+
+        Returns:
+            분봉 데이터 리스트 (시간 오름차순)
+            [
+                {
+                    'time': '090500',      # 시간 (HHMMSS)
+                    'open': 50000,         # 시가
+                    'high': 50100,         # 고가
+                    'low': 49900,          # 저가
+                    'close': 50050,        # 종가
+                    'volume': 12345,       # 거래량
+                    'cum_volume': 123456,  # 누적거래량
+                },
+                ...
+            ]
+        """
+        # 주식당일분봉조회 API
+        url = f"{self.BASE_URL}/uapi/domestic-stock/v1/quotations/inquire-time-itemchartprice"
+
+        headers = self._get_headers("FHKST03010200")
+
+        if target_date is None:
+            target_date = datetime.now().strftime("%Y%m%d")
+
+        params = {
+            "FID_ETC_CLS_CODE": "",
+            "FID_COND_MRKT_DIV_CODE": "J",
+            "FID_INPUT_ISCD": stock_code,
+            "FID_INPUT_HOUR_1": "153000",  # 조회 종료 시간 (장 마감)
+            "FID_PW_DATA_INCU_YN": "Y",    # 과거 데이터 포함 여부
+        }
+
+        try:
+            all_data = []
+            last_time = "153000"
+
+            # 페이지네이션 (분봉 데이터가 많을 수 있음)
+            for _ in range(10):  # 최대 10번 반복
+                params["FID_INPUT_HOUR_1"] = last_time
+
+                res = requests.get(url, headers=headers, params=params, timeout=10)
+                res.raise_for_status()
+                data = res.json()
+
+                if data.get("rt_cd") != "0":
+                    if all_data:
+                        break
+                    return None
+
+                output2 = data.get("output2", [])
+                if not output2:
+                    break
+
+                for item in output2:
+                    stck_cntg_hour = item.get("stck_cntg_hour", "")
+                    if not stck_cntg_hour:
+                        continue
+
+                    all_data.append({
+                        "time": stck_cntg_hour,
+                        "open": int(item.get("stck_oprc", 0)),
+                        "high": int(item.get("stck_hgpr", 0)),
+                        "low": int(item.get("stck_lwpr", 0)),
+                        "close": int(item.get("stck_prpr", 0)),
+                        "volume": int(item.get("cntg_vol", 0)),
+                        "cum_volume": int(item.get("acml_vol", 0)),
+                        "trading_value": int(item.get("acml_tr_pbmn", 0)),
+                    })
+
+                    last_time = stck_cntg_hour
+
+                # 다음 페이지가 없으면 종료
+                if len(output2) < 30:
+                    break
+
+                time.sleep(0.1)  # API 속도 제한
+
+            # 시간순 정렬 (오름차순)
+            all_data.sort(key=lambda x: x["time"])
+
+            return all_data
+
+        except requests.exceptions.RequestException as e:
+            print(f"분봉 조회 실패 [{stock_code}]: {str(e)}")
+            return None
+
+    def get_minute_chart_by_date(self, stock_code: str, target_date: str, start_time: str = "090000") -> Optional[List[Dict]]:
+        """
+        특정 날짜의 분봉 데이터 조회 (주식일별분봉조회)
+
+        Args:
+            stock_code: 종목코드 (6자리)
+            target_date: 조회 날짜 (YYYYMMDD 형식)
+            start_time: 조회 시작 시간 (HHMMSS 형식, 기본 090000)
+
+        Returns:
+            분봉 데이터 리스트
+        """
+        # 주식일별분봉조회 API - TR ID: FHKST03010230
+        url = f"{self.BASE_URL}/uapi/domestic-stock/v1/quotations/inquire-time-dailychartprice"
+
+        headers = self._get_headers("FHKST03010230")
+
+        params = {
+            "FID_COND_MRKT_DIV_CODE": "J",
+            "FID_INPUT_ISCD": stock_code,
+            "FID_INPUT_DATE_1": target_date,
+            "FID_INPUT_HOUR_1": start_time,
+            "FID_PW_DATA_INCU_YN": "Y",
+        }
+
+        try:
+            res = requests.get(url, headers=headers, params=params, timeout=10)
+            res.raise_for_status()
+            data = res.json()
+
+            if data.get("rt_cd") != "0":
+                return None
+
+            output2 = data.get("output2", [])
+            if not output2:
+                return None
+
+            result = []
+            for item in output2:
+                stck_cntg_hour = item.get("stck_cntg_hour", "")
+                if not stck_cntg_hour:
+                    continue
+
+                result.append({
+                    "date": item.get("stck_bsop_date", target_date),
+                    "time": stck_cntg_hour,
+                    "open": int(item.get("stck_oprc", 0)),
+                    "high": int(item.get("stck_hgpr", 0)),
+                    "low": int(item.get("stck_lwpr", 0)),
+                    "close": int(item.get("stck_prpr", 0)),
+                    "volume": int(item.get("cntg_vol", 0)),
+                    "cum_volume": int(item.get("acml_vol", 0)),
+                })
+
+            # 시간순 정렬
+            result.sort(key=lambda x: x["time"])
+            return result
+
+        except requests.exceptions.RequestException as e:
+            print(f"일별 분봉 조회 실패 [{stock_code}] {target_date}: {str(e)}")
+            return None
+
+    def get_account_balance(self, _retry: bool = False, _retry_count: int = 0) -> Optional[Dict]:
         """
         계좌 잔고 조회
 
         Returns:
             계좌 잔고 정보
         """
+        import time
+        MAX_RETRIES = 3
+
         if not self.account_no:
             raise ValueError("계좌번호가 설정되지 않았습니다.")
 
@@ -452,17 +705,25 @@ class KISClient:
         try:
             res = requests.get(url, headers=headers, params=params, timeout=10)
 
-            # 토큰 만료 에러 확인 (HTTP 500이어도 응답 본문 확인)
+            # 500 에러 처리
             if res.status_code == 500:
                 try:
                     err_data = res.json()
-                    if err_data.get("msg_cd") == "EGW00123":  # 토큰 만료
+                    # 토큰 만료
+                    if err_data.get("msg_cd") == "EGW00123":
                         if not _retry:
                             print("[잔고조회] 토큰 만료 - 새 토큰 발급 후 재시도")
                             self._invalidate_token()
-                            return self.get_account_balance(_retry=True)
+                            return self.get_account_balance(_retry=True, _retry_count=0)
                 except:
                     pass
+
+                # 일반 500 에러 - 재시도
+                if _retry_count < MAX_RETRIES:
+                    wait_time = (_retry_count + 1) * 2
+                    print(f"[잔고조회] 서버 오류(500), {wait_time}초 후 재시도 ({_retry_count + 1}/{MAX_RETRIES})")
+                    time.sleep(wait_time)
+                    return self.get_account_balance(_retry=_retry, _retry_count=_retry_count + 1)
 
             res.raise_for_status()
             data = res.json()
@@ -527,7 +788,13 @@ class KISClient:
             }
 
         except requests.exceptions.RequestException as e:
-            print(f"잔고 조회 실패: {str(e)}")
+            # 타임아웃이나 연결 에러 - 재시도
+            if _retry_count < MAX_RETRIES:
+                wait_time = (_retry_count + 1) * 2
+                print(f"[잔고조회] 네트워크 오류, {wait_time}초 후 재시도 ({_retry_count + 1}/{MAX_RETRIES}): {str(e)}")
+                time.sleep(wait_time)
+                return self.get_account_balance(_retry=_retry, _retry_count=_retry_count + 1)
+            print(f"잔고 조회 실패 (재시도 {MAX_RETRIES}회 후): {str(e)}")
             return None
 
     def _get_max_buy_amount(self) -> Optional[int]:
