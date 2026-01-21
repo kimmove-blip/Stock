@@ -179,20 +179,65 @@ class MarketScreener:
                     "change_pct": result["change_pct"],
                 }
             else:
-                result = self.tech_analyst.analyze_full(df)
+                # 변별력 강화 버전 사용 (래치 전략)
+                result = self.tech_analyst.analyze_trend_following_strict(df)
                 if result is None:
                     return None
+
+                indicators = result["indicators"]
+
+                # 선정 이유 생성
+                reasons = []
+                if indicators.get('sma20_slope', 0) > 3:
+                    reasons.append(f"20일선 급등 ({indicators.get('sma20_slope', 0):.1f}%)")
+                elif indicators.get('sma20_slope', 0) > 1.5:
+                    reasons.append(f"20일선 상승 ({indicators.get('sma20_slope', 0):.1f}%)")
+
+                if 'BREAKOUT_60D_HIGH' in result['signals']:
+                    reasons.append("60일 신고가 돌파")
+                elif 'NEAR_60D_HIGH' in result['signals']:
+                    reasons.append("60일 고가 근접")
+
+                rsi = indicators.get('rsi', 0)
+                if 60 <= rsi <= 75:
+                    reasons.append(f"RSI 적정 ({rsi:.0f})")
+                elif rsi > 80:
+                    reasons.append(f"RSI 강세 ({rsi:.0f})")
+
+                vol_ratio = indicators.get('volume_ratio', 0)
+                if vol_ratio >= 5:
+                    reasons.append(f"거래량 폭발 ({vol_ratio:.1f}배)")
+                elif vol_ratio >= 3:
+                    reasons.append(f"거래량 급증 ({vol_ratio:.1f}배)")
+
+                trading_value = indicators.get('trading_value_억', 0)
+                if trading_value >= 500:
+                    reasons.append(f"거래대금 {trading_value:.0f}억")
+                elif trading_value >= 100:
+                    reasons.append(f"거래대금 {trading_value:.0f}억")
+
                 return {
                     "code": code,
                     "name": name,
                     "market": stock_info.get("Market", ""),
                     "score": result["score"],
                     "signals": result["signals"],
-                    "patterns": result["patterns"],
-                    "indicators": result["indicators"],
-                    "close": result["indicators"].get("close", 0),
-                    "volume": result["indicators"].get("volume", 0),
-                    "change_pct": result["indicators"].get("change_pct", 0),
+                    "patterns": result.get("patterns", []),
+                    "indicators": indicators,
+                    "close": indicators.get("close", 0),
+                    "volume": indicators.get("volume", 0),
+                    "change_pct": indicators.get("change_pct", 0),
+                    # 변별력 강화 지표
+                    "trend_score": indicators.get("trend_score", 0),
+                    "momentum_score": indicators.get("momentum_score", 0),
+                    "volume_score": indicators.get("volume_score", 0),
+                    "sma20_slope": indicators.get("sma20_slope", 0),
+                    "rsi": indicators.get("rsi", 0),
+                    "volume_ratio": indicators.get("volume_ratio", 0),
+                    "trading_value_억": indicators.get("trading_value_억", 0),
+                    "high_60d_pct": indicators.get("high_60d_pct", 0),
+                    "ma_status": indicators.get("ma_status", ""),
+                    "selection_reasons": reasons,
                 }
         except Exception as e:
             # 에러 발생시 조용히 무시
@@ -270,9 +315,9 @@ class MarketScreener:
         self,
         top_n=100,
         mode="quick",
-        min_marcap=50_000_000_000,
-        max_marcap=None,
-        min_amount=1_000_000_000,
+        min_marcap=30_000_000_000,
+        max_marcap=1_000_000_000_000,
+        min_amount=300_000_000,
         max_price=None,
     ):
         """
@@ -302,6 +347,9 @@ class MarketScreener:
         # 4. 기술적 스크리닝
         results = self.screen_all(mode=mode)
         stats['valid_analyzed'] = len(results)
+
+        # 전종목 점수 저장 (code -> score 매핑)
+        stats['all_scores'] = {r['code']: r.get('score', 0) for r in results}
 
         # 5. 상위 종목 추출
         top_stocks = self.get_top_stocks(results, top_n=top_n)
