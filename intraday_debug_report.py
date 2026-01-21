@@ -3,13 +3,14 @@
 장중 스크리닝 상세 디버그 리포트
 - 10분마다 실행하여 푸시알림으로 리포트 전송
 - 왜 샀는지, 왜 안 샀는지, 왜 팔았는지 상세 분석
+- V2(현재), V4 두 가지 스코어링 비교 표시
 """
 
 import sys
 import os
 import json
 import argparse
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -19,6 +20,8 @@ from market_screener import MarketScreener
 from trading.trade_logger import TradeLogger
 from api.routers.push import send_push_to_user
 from database.db_manager import DatabaseManager
+from scoring.scoring_v4 import calculate_score_v4
+import FinanceDataReader as fdr
 
 
 def get_account_balance(user_id: int):
@@ -83,6 +86,22 @@ def get_today_traded_stocks(user_id: int):
     """오늘 거래한 종목 목록"""
     logger = TradeLogger()
     return logger.get_today_traded_stocks(user_id)
+
+
+def calculate_v4_score(code: str) -> dict:
+    """V4 점수 계산"""
+    try:
+        end_date = datetime.now().strftime('%Y-%m-%d')
+        start_date = (datetime.now() - timedelta(days=150)).strftime('%Y-%m-%d')
+        df = fdr.DataReader(code, start_date, end_date)
+        if df is None or len(df) < 60:
+            return {'score': 0, 'signals': []}
+        result = calculate_score_v4(df)
+        if result:
+            return {'score': result.get('score', 0), 'signals': result.get('signals', [])}
+    except:
+        pass
+    return {'score': 0, 'signals': []}
 
 
 def run_debug_report(user_id: int = 7, send_push: bool = True):
@@ -244,17 +263,27 @@ def run_debug_report(user_id: int = 7, send_push: bool = True):
     holding_codes = {h.get("stock_code") for h in holdings}
     remaining_slots = max_holdings - len(holdings)
 
-    # 9. 80점 이상 종목 분석
+    # 9. 80점 이상 종목 분석 (V2 + V4 비교)
     stocks_80plus = [s for s in top_stocks if s.get("score", 0) >= 80]
     stocks_75to79 = [s for s in top_stocks if 75 <= s.get("score", 0) < 80]
 
-    report_lines.append(f"=== 80점 이상: {len(stocks_80plus)}종목 ===")
+    # V4 점수 계산 (상위 종목만)
+    v4_scores = {}
+    print("V4 점수 계산 중...")
+    for stock in (stocks_80plus + stocks_75to79)[:30]:
+        code = stock.get("code")
+        v4_result = calculate_v4_score(code)
+        v4_scores[code] = v4_result.get('score', 0)
+    print(f"V4 계산 완료: {len(v4_scores)}종목")
+
+    report_lines.append(f"=== 80점 이상: {len(stocks_80plus)}종목 (V2/V4) ===")
 
     buy_candidates = []
     for stock in stocks_80plus[:10]:  # 최대 10개 분석
         code = stock.get("code")
         name = stock.get("name")
-        score = stock.get("score", 0)
+        score = stock.get("score", 0)  # V2 점수
+        v4_score = v4_scores.get(code, 0)  # V4 점수
         volume_ratio = stock.get("indicators", {}).get("volume_ratio", 1.0)
         adjusted_volume = volume_ratio * volume_multiplier
         change_pct = stock.get("change_pct", 0)
@@ -294,24 +323,25 @@ def run_debug_report(user_id: int = 7, send_push: bool = True):
             can_buy = False
 
         if can_buy:
-            buy_candidates.append(stock)
+            buy_candidates.append({**stock, 'v4_score': v4_score})
             status = "매수가능"
         else:
             status = ", ".join(reasons)
 
-        report_lines.append(f"  {name}({code}): {score}점 -> {status}")
+        report_lines.append(f"  {name}: V2={score} V4={v4_score} -> {status}")
 
     if not stocks_80plus:
         report_lines.append("  (없음)")
     report_lines.append("")
 
-    # 10. 75~79점 종목 분석 (연속성 체크)
-    report_lines.append(f"=== 75~79점: {len(stocks_75to79)}종목 ===")
+    # 10. 75~79점 종목 분석 (연속성 체크, V2 + V4)
+    report_lines.append(f"=== 75~79점: {len(stocks_75to79)}종목 (V2/V4) ===")
 
     for stock in stocks_75to79[:10]:
         code = stock.get("code")
         name = stock.get("name")
-        score = stock.get("score", 0)
+        score = stock.get("score", 0)  # V2 점수
+        v4_score = v4_scores.get(code, 0)  # V4 점수
         prev_score = prev_scores.get(code, 0)
         volume_ratio = stock.get("indicators", {}).get("volume_ratio", 1.0)
         adjusted_volume = volume_ratio * volume_multiplier
@@ -346,14 +376,14 @@ def run_debug_report(user_id: int = 7, send_push: bool = True):
             can_buy = False
 
         if can_buy and min_buy_score <= 75:
-            buy_candidates.append(stock)
+            buy_candidates.append({**stock, 'v4_score': v4_score})
             status = f"매수가능(이전{prev_score}점)"
         elif can_buy:
             status = f"점수미달(설정{min_buy_score}점)"
         else:
             status = ", ".join(reasons)
 
-        report_lines.append(f"  {name}: {score}점(이전{prev_score}점) -> {status}")
+        report_lines.append(f"  {name}: V2={score} V4={v4_score} (이전{prev_score}) -> {status}")
 
     if not stocks_75to79:
         report_lines.append("  (없음)")
@@ -384,7 +414,7 @@ def run_debug_report(user_id: int = 7, send_push: bool = True):
     if send_push:
         # 푸시는 500자 제한이므로 요약본 전송
         push_summary = []
-        push_summary.append(f"[{now.strftime('%H:%M')}] 장중 스크리닝")
+        push_summary.append(f"[{now.strftime('%H:%M')}] 장중 스크리닝 (V2/V4)")
         push_summary.append(f"80+: {len(stocks_80plus)}종목 / 75~79: {len(stocks_75to79)}종목")
         push_summary.append(f"보유: {len(holdings)}/{max_holdings} / 예수금: {max_buy_amt:,}원")
         push_summary.append(f"매수가능: {len(buy_candidates)}종목")
@@ -393,8 +423,9 @@ def run_debug_report(user_id: int = 7, send_push: bool = True):
             push_summary.append("")
             for c in buy_candidates[:3]:
                 name = c.get("name")
-                score = c.get("score")
-                push_summary.append(f"  {name}: {score}점")
+                v2_score = c.get("score", 0)
+                v4_score = c.get("v4_score", 0)
+                push_summary.append(f"  {name}: V2={v2_score} V4={v4_score}")
             if len(buy_candidates) > 3:
                 push_summary.append(f"  외 {len(buy_candidates)-3}종목")
 
@@ -440,15 +471,15 @@ def run_debug_report(user_id: int = 7, send_push: bool = True):
                 "volume_multiplier": volume_multiplier,
             },
             "buy_candidates": [
-                {"code": c.get("code"), "name": c.get("name"), "score": c.get("score")}
+                {"code": c.get("code"), "name": c.get("name"), "v2_score": c.get("score"), "v4_score": c.get("v4_score", 0)}
                 for c in buy_candidates
             ],
             "stocks_80plus": [
-                {"code": s.get("code"), "name": s.get("name"), "score": s.get("score"), "volume_ratio": s.get("indicators", {}).get("volume_ratio", 1.0)}
+                {"code": s.get("code"), "name": s.get("name"), "v2_score": s.get("score"), "v4_score": v4_scores.get(s.get("code"), 0), "volume_ratio": s.get("indicators", {}).get("volume_ratio", 1.0)}
                 for s in stocks_80plus[:20]
             ],
             "stocks_75to79": [
-                {"code": s.get("code"), "name": s.get("name"), "score": s.get("score"), "prev_score": prev_scores.get(s.get("code"), 0)}
+                {"code": s.get("code"), "name": s.get("name"), "v2_score": s.get("score"), "v4_score": v4_scores.get(s.get("code"), 0), "prev_score": prev_scores.get(s.get("code"), 0)}
                 for s in stocks_75to79[:20]
             ],
             "holdings": [

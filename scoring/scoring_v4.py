@@ -276,13 +276,13 @@ def calculate_score_v4(df: pd.DataFrame, investor_data: Optional[Dict] = None) -
                 sma20_slope = (curr_sma20 - sma20_5d_ago) / sma20_5d_ago * 100
                 result['indicators']['sma20_slope'] = sma20_slope
 
-                if sma20_slope >= 3.0:
+                if sma20_slope >= 1.0:
                     trend_score += 15
                     result['signals'].append('SLOPE_VERY_STEEP')
-                elif sma20_slope >= 1.5:
+                elif sma20_slope >= 0.5:
                     trend_score += 10
                     result['signals'].append('SLOPE_STEEP')
-                elif sma20_slope >= 0.5:
+                elif sma20_slope >= 0:
                     trend_score += 5
                     result['signals'].append('SLOPE_RISING')
 
@@ -428,15 +428,15 @@ def calculate_score_v4(df: pd.DataFrame, investor_data: Optional[Dict] = None) -
             vol_ratio = curr['Volume'] / vol_ma
             result['indicators']['volume_ratio'] = vol_ratio
 
-            if vol_ratio >= 5.0:
+            if vol_ratio >= 2.5:
                 supply_score += 12
-                result['signals'].append('VOLUME_5X')
-            elif vol_ratio >= 3.0:
-                supply_score += 8
-                result['signals'].append('VOLUME_3X')
+                result['signals'].append('VOLUME_2.5X')
             elif vol_ratio >= 2.0:
-                supply_score += 4
+                supply_score += 8
                 result['signals'].append('VOLUME_2X')
+            elif vol_ratio >= 1.5:
+                supply_score += 4
+                result['signals'].append('VOLUME_1.5X')
 
         # 거래대금 (최대 10점)
         if trading_value >= 50_000_000_000:
