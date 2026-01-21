@@ -1,13 +1,14 @@
-import { useEffect } from 'react';
+import { useEffect, useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useNavigate } from 'react-router-dom';
-import { Bell, Trash2, AlertTriangle, TrendingDown, ChevronRight } from 'lucide-react';
+import { Bell, Trash2, AlertTriangle, TrendingDown, ChevronRight, X, FileText } from 'lucide-react';
 import { alertsAPI } from '../api/client';
 import Loading from '../components/Loading';
 
 export default function AlertHistory() {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
+  const [expandedId, setExpandedId] = useState(null);
 
   // 페이지 진입 시 알림을 읽음으로 표시
   useEffect(() => {
@@ -33,6 +34,18 @@ export default function AlertHistory() {
     },
   });
 
+  const deleteMutation = useMutation({
+    mutationFn: (id) => alertsAPI.delete(id),
+    onSuccess: () => {
+      queryClient.invalidateQueries(['alerts']);
+    },
+  });
+
+  const handleDelete = (e, id) => {
+    e.stopPropagation();
+    deleteMutation.mutate(id);
+  };
+
   const handleClear = () => {
     if (confirm('모든 알림 기록을 삭제하시겠습니까?')) {
       clearMutation.mutate();
@@ -40,7 +53,17 @@ export default function AlertHistory() {
   };
 
   // 알림 타입별 아이콘 및 색상
-  const getAlertStyle = (alertType) => {
+  const getAlertStyle = (alertType, stockCode) => {
+    // 리포트/제안 타입 (REPORT_ 또는 SUGGEST_로 시작)
+    if (stockCode?.startsWith('REPORT') || stockCode?.startsWith('SUGGEST')) {
+      return {
+        icon: FileText,
+        bgColor: 'bg-purple-100',
+        textColor: 'text-purple-600',
+        borderColor: 'border-purple-200',
+        isReport: true,
+      };
+    }
     if (alertType.includes('하락') || alertType.includes('손실')) {
       return {
         icon: TrendingDown,
@@ -133,13 +156,24 @@ export default function AlertHistory() {
       ) : (
         <div className="space-y-3">
           {alerts.map((alert, idx) => {
-            const style = getAlertStyle(alert.alert_type);
+            const style = getAlertStyle(alert.alert_type, alert.stock_code);
             const Icon = style.icon;
+            const isExpanded = expandedId === alert.id;
+
+            const handleClick = () => {
+              if (style.isReport) {
+                // 리포트는 펼치기/접기
+                setExpandedId(isExpanded ? null : alert.id);
+              } else {
+                // 일반 알림은 종목 상세로 이동
+                navigate(`/stock/${alert.stock_code}`);
+              }
+            };
 
             return (
               <div
-                key={idx}
-                onClick={() => navigate(`/stock/${alert.stock_code}`)}
+                key={alert.id || idx}
+                onClick={handleClick}
                 className={`bg-white rounded-xl p-4 shadow-sm border ${style.borderColor} cursor-pointer hover:shadow-md transition-shadow`}
               >
                 <div className="flex items-start gap-3">
@@ -159,12 +193,26 @@ export default function AlertHistory() {
                       {alert.stock_name || alert.stock_code}
                     </p>
                     {alert.message && (
-                      <p className="text-sm text-gray-600 mt-1 line-clamp-2">
-                        {alert.message.replace(/<[^>]*>/g, '').substring(0, 100)}
+                      <p className={`text-sm text-gray-600 mt-1 ${isExpanded ? 'whitespace-pre-wrap' : 'line-clamp-2'}`}>
+                        {isExpanded
+                          ? alert.message.replace(/<[^>]*>/g, '')
+                          : alert.message.replace(/<[^>]*>/g, '').substring(0, 100)
+                        }
+                      </p>
+                    )}
+                    {style.isReport && (
+                      <p className="text-xs text-purple-500 mt-2">
+                        {isExpanded ? '▲ 접기' : '▼ 펼쳐서 보기'}
                       </p>
                     )}
                   </div>
-                  <ChevronRight size={20} className="text-gray-300 flex-shrink-0" />
+                  <button
+                    onClick={(e) => handleDelete(e, alert.id)}
+                    disabled={deleteMutation.isPending}
+                    className="p-1 hover:bg-gray-100 rounded-full transition-colors flex-shrink-0"
+                  >
+                    <X size={18} className="text-gray-400 hover:text-red-500" />
+                  </button>
                 </div>
               </div>
             );
