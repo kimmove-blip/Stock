@@ -93,14 +93,35 @@ export default function RealtimePicks() {
     }
   }, [hasSeenAnimation]);
 
-  // 실시간 시세 조회 함수
+  // 하이브리드 시세 조회 함수 (캐시 우선 → 실시간)
   const fetchRealtimePrices = useCallback(async (codes) => {
     if (!codes || codes.length === 0) return;
 
     try {
       setIsRefreshing(true);
-      const response = await realtimeAPI.prices(codes);
 
+      // 1단계: 캐시된 가격 먼저 조회 (빠름)
+      try {
+        const cachedResponse = await realtimeAPI.cachedPrices(codes);
+        if (cachedResponse.data?.prices?.length > 0) {
+          const priceMap = {};
+          cachedResponse.data.prices.forEach((p) => {
+            priceMap[p.stock_code] = {
+              current_price: p.current_price,
+              change: p.change,
+              change_rate: p.change_rate,
+              volume: p.volume,
+            };
+          });
+          setRealtimePrices(priceMap);
+          setLastUpdate(new Date(cachedResponse.data.cache_updated_at || Date.now()));
+        }
+      } catch (cacheError) {
+        console.log('캐시 조회 실패, 실시간 조회로 대체');
+      }
+
+      // 2단계: 실시간 시세 조회 (캐시 덮어쓰기)
+      const response = await realtimeAPI.prices(codes);
       if (response.data?.prices) {
         const priceMap = {};
         response.data.prices.forEach((p) => {
@@ -115,7 +136,7 @@ export default function RealtimePicks() {
         setLastUpdate(new Date());
       }
     } catch (error) {
-      console.error('실시간 시세 조회 실패:', error);
+      console.error('시세 조회 실패:', error);
     } finally {
       setIsRefreshing(false);
     }

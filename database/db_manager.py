@@ -99,7 +99,24 @@ class DatabaseManager:
                     FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE SET NULL
                 );
 
+                -- 현재가 캐시 테이블
+                CREATE TABLE IF NOT EXISTS price_cache (
+                    stock_code TEXT PRIMARY KEY,
+                    stock_name TEXT,
+                    current_price INTEGER,
+                    change INTEGER,
+                    change_rate REAL,
+                    volume INTEGER,
+                    trading_value INTEGER,
+                    open_price INTEGER,
+                    high_price INTEGER,
+                    low_price INTEGER,
+                    prev_close INTEGER,
+                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                );
+
                 -- 인덱스
+                CREATE INDEX IF NOT EXISTS idx_price_cache_updated ON price_cache(updated_at);
                 CREATE INDEX IF NOT EXISTS idx_watchlists_user ON watchlists(user_id);
                 CREATE INDEX IF NOT EXISTS idx_portfolios_user ON portfolios(user_id);
                 CREATE INDEX IF NOT EXISTS idx_users_username ON users(username);
@@ -697,3 +714,92 @@ class DatabaseManager:
                 (1 if enabled else 0, user_id)
             )
             conn.commit()
+
+    # ==================== 현재가 캐시 ====================
+
+    def upsert_price_cache(self, stock_code, stock_name, current_price, change, change_rate,
+                           volume, trading_value, open_price, high_price, low_price, prev_close):
+        """현재가 캐시 업데이트 (있으면 갱신, 없으면 삽입)"""
+        with self.get_connection() as conn:
+            conn.execute("""
+                INSERT INTO price_cache (stock_code, stock_name, current_price, change, change_rate,
+                    volume, trading_value, open_price, high_price, low_price, prev_close, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+                ON CONFLICT(stock_code) DO UPDATE SET
+                    stock_name = excluded.stock_name,
+                    current_price = excluded.current_price,
+                    change = excluded.change,
+                    change_rate = excluded.change_rate,
+                    volume = excluded.volume,
+                    trading_value = excluded.trading_value,
+                    open_price = excluded.open_price,
+                    high_price = excluded.high_price,
+                    low_price = excluded.low_price,
+                    prev_close = excluded.prev_close,
+                    updated_at = CURRENT_TIMESTAMP
+            """, (stock_code, stock_name, current_price, change, change_rate,
+                  volume, trading_value, open_price, high_price, low_price, prev_close))
+            conn.commit()
+
+    def bulk_upsert_price_cache(self, prices):
+        """현재가 캐시 일괄 업데이트"""
+        with self.get_connection() as conn:
+            for p in prices:
+                conn.execute("""
+                    INSERT INTO price_cache (stock_code, stock_name, current_price, change, change_rate,
+                        volume, trading_value, open_price, high_price, low_price, prev_close, updated_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+                    ON CONFLICT(stock_code) DO UPDATE SET
+                        stock_name = excluded.stock_name,
+                        current_price = excluded.current_price,
+                        change = excluded.change,
+                        change_rate = excluded.change_rate,
+                        volume = excluded.volume,
+                        trading_value = excluded.trading_value,
+                        open_price = excluded.open_price,
+                        high_price = excluded.high_price,
+                        low_price = excluded.low_price,
+                        prev_close = excluded.prev_close,
+                        updated_at = CURRENT_TIMESTAMP
+                """, (p.get('stock_code'), p.get('stock_name'), p.get('current_price'),
+                      p.get('change'), p.get('change_rate'), p.get('volume'),
+                      p.get('trading_value'), p.get('open_price'), p.get('high_price'),
+                      p.get('low_price'), p.get('prev_close')))
+            conn.commit()
+
+    def get_cached_prices(self, stock_codes=None):
+        """캐시된 현재가 조회"""
+        with self.get_connection() as conn:
+            if stock_codes:
+                placeholders = ','.join('?' * len(stock_codes))
+                cursor = conn.execute(
+                    f"SELECT * FROM price_cache WHERE stock_code IN ({placeholders})",
+                    stock_codes
+                )
+            else:
+                cursor = conn.execute("SELECT * FROM price_cache")
+            return [dict(row) for row in cursor.fetchall()]
+
+    def get_cached_price(self, stock_code):
+        """단일 종목 캐시된 현재가 조회"""
+        with self.get_connection() as conn:
+            cursor = conn.execute(
+                "SELECT * FROM price_cache WHERE stock_code = ?", (stock_code,)
+            )
+            row = cursor.fetchone()
+            return dict(row) if row else None
+
+    def get_price_cache_updated_at(self):
+        """캐시 마지막 업데이트 시간"""
+        with self.get_connection() as conn:
+            cursor = conn.execute(
+                "SELECT MAX(updated_at) as last_updated FROM price_cache"
+            )
+            row = cursor.fetchone()
+            return row['last_updated'] if row else None
+
+    def get_price_cache_count(self):
+        """캐시된 종목 수"""
+        with self.get_connection() as conn:
+            cursor = conn.execute("SELECT COUNT(*) as count FROM price_cache")
+            return cursor.fetchone()['count']
