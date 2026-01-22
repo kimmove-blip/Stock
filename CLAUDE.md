@@ -240,6 +240,38 @@ except Exception as e:
 
 ---
 
+## PDF 생성 시 폰트 주의사항
+
+### TTC 폰트 문제
+- **TTC (TrueType Collection)** 파일은 여러 폰트를 하나의 파일에 묶은 형식
+- WeasyPrint에서 TTC 파일 사용 시 `TTLibFileIsCollectionError` 발생
+- 예: `NotoSansCJK.ttc` 파일 → "specify a font number between 0 and 4" 에러
+
+### 해결 방법
+- **TTC 대신 TTF 또는 OTF 사용**
+- 사용 가능한 폰트 (fonts/ 디렉토리):
+  - `NanumBarunpenR.ttf` (일반)
+  - `NanumBarunpenB.ttf` (볼드)
+  - `NotoSansCJKkr-Regular.otf`
+
+### PDF 라이브러리별 권장사항
+| 라이브러리 | 권장 폰트 | 비고 |
+|-----------|----------|------|
+| ReportLab | NanumBarunpen.ttf | TTFont 등록 필요 |
+| WeasyPrint | NotoSansCJKkr.otf | TTC 사용 불가 |
+| fpdf2 | NanumBarunpen.ttf | add_font() 사용 |
+
+### 예시 코드 (ReportLab)
+```python
+from reportlab.pdfbase import pdfmetrics
+from reportlab.pdfbase.ttfonts import TTFont
+
+pdfmetrics.registerFont(TTFont('NanumBarunpen', '/home/kimhc/Stock/fonts/NanumBarunpenR.ttf'))
+pdfmetrics.registerFont(TTFont('NanumBarunpenB', '/home/kimhc/Stock/fonts/NanumBarunpenB.ttf'))
+```
+
+---
+
 ## 주의사항
 
 1. **항상 `/home/kimhc/Stock` 디렉토리 기준**
