@@ -4,8 +4,8 @@
 버전별 점수 계산 로직:
 - V1: 종합 기술적 분석 (과매도 가점, 역발상)
 - V2: 추세 추종 강화 (역배열 과락, 20일선 기울기)
-- V3: 간소화 버전 (래치 전략 강화)
-- V4: Hybrid Sniper (VCP, OBV 다이버전스)
+- V3: 세력 매집 스나이퍼 (OBV 다이버전스, 매집봉, Spring, VCP)
+- V4: Hybrid Sniper (VCP, OBV 다이버전스, 수급)
 """
 
 from .scoring_v1 import calculate_score_v1
@@ -84,8 +84,8 @@ def list_versions():
     descriptions = {
         'v1': '종합 기술적 분석 (과매도 가점, 역발상)',
         'v2': '추세 추종 강화 (역배열 과락, 20일선 기울기) [현재 운영]',
-        'v3': '간소화 버전 (래치 전략 강화)',
-        'v4': 'Hybrid Sniper (VCP, OBV 다이버전스)',
+        'v3': '세력 매집 스나이퍼 (OBV 다이버전스, 매집봉, Spring, VCP)',
+        'v4': 'Hybrid Sniper (VCP, OBV 다이버전스, 수급)',
     }
 
     for version in SCORING_FUNCTIONS.keys():
