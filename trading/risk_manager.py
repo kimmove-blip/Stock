@@ -11,7 +11,7 @@ from dataclasses import dataclass
 @dataclass
 class TradingLimits:
     """거래 한도 설정"""
-    max_position_pct: float = 0.05       # 종목당 최대 포지션 비율 (5%)
+    max_per_stock: int = 200000          # 종목당 최대 투자금액 (원)
     stop_loss_pct: float = -0.07         # 손절 비율 (-7%)
     take_profit_pct: float = None        # 익절 비율 (None=비활성화, 신호 기반 매도)
     max_daily_trades: int = 10           # 일일 최대 거래 횟수
@@ -141,14 +141,12 @@ class RiskManager:
 
     def calculate_position_size(
         self,
-        total_assets: int,
         current_price: int
     ) -> int:
         """
         포지션 크기 계산
 
         Args:
-            total_assets: 총 자산
             current_price: 현재가
 
         Returns:
@@ -157,22 +155,17 @@ class RiskManager:
         if current_price <= 0:
             return 0
 
-        max_investment = int(total_assets * self.limits.max_position_pct)
-        quantity = max_investment // current_price
-
+        quantity = self.limits.max_per_stock // current_price
         return quantity
 
-    def calculate_investment_amount(self, total_assets: int) -> int:
+    def calculate_investment_amount(self) -> int:
         """
-        종목당 투자 금액 계산
-
-        Args:
-            total_assets: 총 자산
+        종목당 투자 금액 반환
 
         Returns:
-            종목당 투자 금액
+            종목당 최대 투자 금액
         """
-        return int(total_assets * self.limits.max_position_pct)
+        return self.limits.max_per_stock
 
     def validate_buy_signal(
         self,

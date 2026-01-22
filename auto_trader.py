@@ -201,24 +201,21 @@ class AutoTrader:
         self.logger = TradeLogger()
         self.executor = OrderExecutor(self.kis_client)
 
-        # 사용자 설정에서 stock_ratio 가져오기 (DB 설정 > config 설정)
+        # 사용자 설정에서 max_per_stock 가져오기 (DB 설정 > config 설정)
         user_settings = self.logger.get_auto_trade_settings(user_id) if user_id else None
-        max_position_pct = self.config.MAX_POSITION_PCT  # 기본값 (config에서)
+        max_per_stock = self.config.MAX_PER_STOCK  # 기본값 (config에서)
         stop_loss_pct = self.config.STOP_LOSS_PCT
         max_holdings = self.config.MAX_HOLDINGS
         max_daily_trades = self.config.MAX_DAILY_TRADES
         max_hold_days = self.config.MAX_HOLD_DAYS
         min_buy_score = self.config.MIN_BUY_SCORE
-
-        # min_hold_score(매도 점수) 기본값
         min_hold_score = self.config.MIN_HOLD_SCORE
 
         if user_settings:
             # 사용자 설정이 있으면 해당 값 사용
-            stock_ratio = user_settings.get('stock_ratio')
-            if stock_ratio and stock_ratio > 0:
-                max_position_pct = stock_ratio / 100  # 10% -> 0.1
-                print(f"[AutoTrader] 사용자 {user_id} stock_ratio: {stock_ratio}% -> max_position_pct: {max_position_pct}")
+            if user_settings.get('max_per_stock'):
+                max_per_stock = user_settings['max_per_stock']
+                print(f"[AutoTrader] 사용자 {user_id} max_per_stock: {max_per_stock:,}원")
 
             if user_settings.get('stop_loss_rate'):
                 stop_loss_pct = -abs(user_settings['stop_loss_rate']) / 100
@@ -235,20 +232,19 @@ class AutoTrader:
             if user_settings.get('min_buy_score'):
                 min_buy_score = user_settings['min_buy_score']
 
-            # 버그 수정: sell_score 사용자 설정 반영
             if user_settings.get('sell_score') is not None:
                 min_hold_score = user_settings['sell_score']
                 print(f"[AutoTrader] 사용자 {user_id} sell_score: {min_hold_score}점 (매도 기준)")
 
         self.risk_manager = RiskManager(TradingLimits(
-            max_position_pct=max_position_pct,
+            max_per_stock=max_per_stock,
             stop_loss_pct=stop_loss_pct,
             take_profit_pct=self.config.TAKE_PROFIT_PCT,
             max_daily_trades=max_daily_trades,
             max_holdings=max_holdings,
             max_hold_days=max_hold_days,
             min_buy_score=min_buy_score,
-            min_hold_score=min_hold_score,  # 사용자 설정 반영
+            min_hold_score=min_hold_score,
             min_volume_ratio=self.config.MIN_VOLUME_RATIO,
         ))
         self.suggestion_manager = BuySuggestionManager(user_id=user_id)
@@ -1096,7 +1092,7 @@ class AutoTrader:
         # 미체결 주문 조회 (제안 생성 시 중복 체크용)
         self._pending_orders = self.executor.get_pending_orders()
         self._total_assets = total_assets
-        self._investment_per_stock = self.risk_manager.calculate_investment_amount(total_assets)
+        self._investment_per_stock = self.risk_manager.calculate_investment_amount()
         if self._pending_orders:
             print(f"  미체결 주문: {len(self._pending_orders)}건")
 
@@ -1150,7 +1146,7 @@ class AutoTrader:
 
         # 5. 승인된 매수 제안 실행 (추천 매수가 이하일 때)
         print("\n[5] 승인된 제안 매수 실행 중...")
-        investment_per_stock = self.risk_manager.calculate_investment_amount(total_assets)
+        investment_per_stock = self.risk_manager.calculate_investment_amount()
         # 실제 주문금액은 min(종목당 투자금, 주문가능금액)
         actual_investment = min(investment_per_stock, max_buy_amt)
         print(f"  종목당 투자금: {investment_per_stock:,}원, 주문가능: {max_buy_amt:,}원 → 실제: {actual_investment:,}원")
@@ -1374,7 +1370,7 @@ class AutoTrader:
 
         # 5. 매수 실행
         if filtered_candidates:
-            investment_per_stock = self.risk_manager.calculate_investment_amount(total_assets)
+            investment_per_stock = self.risk_manager.calculate_investment_amount()
             # 실제 주문금액은 min(종목당 투자금, 주문가능금액)
             actual_investment = min(investment_per_stock, max_buy_amt)
             print(f"\n[5] 매수 주문 실행 중...")
@@ -1723,7 +1719,7 @@ class AutoTrader:
 
         # 6. 매수 실행
         print("\n[6] 매수 주문 실행 중...")
-        investment_per_stock = self.risk_manager.calculate_investment_amount(total_assets)
+        investment_per_stock = self.risk_manager.calculate_investment_amount()
         actual_investment = min(investment_per_stock, max_buy_amt // len(filtered_candidates))
         print(f"  종목당 투자금: {actual_investment:,}원")
 

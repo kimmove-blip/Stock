@@ -16,7 +16,7 @@ OUTPUT_DIR.mkdir(exist_ok=True)
 
 class ScreeningConfig:
     """스크리닝 설정"""
-    MODE = "quick"  # "quick" 또는 "full"
+    MODE = "full"  # 무조건 full 모드 사용
     TOP_N = 100  # 상위 N개 종목 선정
     MAX_WORKERS = 10  # 병렬 처리 워커 수
     MIN_MARKET_CAP = 30_000_000_000  # 최소 시가총액 (300억)
@@ -102,20 +102,51 @@ class AutoTraderConfig:
     # 투자 모드 (True: 모의투자, False: 실전투자)
     IS_VIRTUAL = True
 
+    # 모의투자 초기 자금 (1억원)
+    VIRTUAL_INITIAL_CASH = 100_000_000
+
+    # 매매 모드 ("auto": 자동매매, "semi-auto": 반자동 매수제안)
+    TRADE_MODE = "auto"
+
+    # 매수 제안 설정 (semi-auto 모드용)
+    SUGGESTION_EXPIRE_HOURS = 24    # 매수 제안 만료 시간 (시간)
+    MAX_PENDING_SUGGESTIONS = 10    # 최대 대기 제안 수
+    TARGET_PROFIT_PCT = 0.20        # 목표 수익률 (+20%)
+    SUGGESTED_STOP_LOSS_PCT = -0.1# 제안 손절률 (-10%)
+    BUY_BAND_PCT = 0.03             # 매수 밴드 (±3%)
+
     # 매매 규칙
-    MIN_BUY_SCORE = 85# 최소 매수 점수
+    MIN_BUY_SCORE = 80# 최소 매수 점수
     MIN_VOLUME_RATIO = 1.0          # 최소 거래량 비율 (20일 평균 대비)
 
     # 포지션 관리
-    MAX_POSITION_PCT = 0.05# 종목당 최대 포지션 비율 (5%)
-    MAX_HOLDINGS = 20# 최대 보유 종목 수
-    MAX_DAILY_TRADES = 30# 일일 최대 거래 횟수
+    MAX_PER_STOCK = 200000  # 종목당 최대 투자금액 (원)
+    MAX_HOLDINGS = 20       # 최대 보유 종목 수
+    MAX_DAILY_TRADES = 30   # 일일 최대 거래 횟수
 
     # 손절/매도
     STOP_LOSS_PCT = -0.1# 손절 비율 (-7%)
     TAKE_PROFIT_PCT = None          # 익절 비활성화 (신호 기반 매도)
-    MIN_HOLD_SCORE = 45# 최소 보유 점수 (이하 시 매도)
+    MIN_HOLD_SCORE = 40  # 래치 전략: 40점 미만 시 극단적 모멘텀 붕괴로 매도
     MAX_HOLD_DAYS = 10# 최대 보유 기간 (일)
+
+    # 수수료/세금 (비율)
+    COMMISSION_RATE = 0.00015       # 매매 수수료 0.015% (매수/매도 각각)
+    TAX_RATE_KOSPI = 0.0033         # KOSPI 세금 0.33% (증권거래세 0.18% + 농특세 0.15%)
+    TAX_RATE_KOSDAQ = 0.0018        # KOSDAQ 세금 0.18% (증권거래세만)
+
+    # 시초가 갭 전략 설정
+    GAP_STRATEGY_ENABLED = True     # 갭 전략 활성화 여부
+    LIMIT_UP_THRESHOLD = 25.0       # 상한가 판정 기준 (등락률 25% 이상)
+
+    # 상한가 종목 갭 조건
+    LIMIT_UP_GAP_MIN = 5.0          # 상한가 종목: 최소 갭 5%
+    LIMIT_UP_GAP_MAX = 15.0         # 상한가 종목: 최대 갭 15%
+
+    # 일반 종목 갭 조건
+    NORMAL_GAP_MIN = 3.0            # 일반 종목: 최소 갭 3% (황금구간 시작)
+    NORMAL_GAP_IDEAL_MAX = 8.0      # 일반 종목: 이상적 갭 상한 8%
+    NORMAL_GAP_MAX = 10.0           # 일반 종목: 최대 갭 10% (초과시 스킵)
 
     # 신뢰도 높은 매수 신호 (이 신호들 중 하나 이상 포함 시 매수)
     STRONG_BUY_SIGNALS = [
