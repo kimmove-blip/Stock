@@ -309,14 +309,14 @@ def run_backtest(days: int = 5, top_n: int = 100, engines: list = None, max_work
     Args:
         days: 백테스트 기간 (거래일 수)
         top_n: 각 엔진별 상위 종목 수
-        engines: 테스트할 엔진 리스트 (기본: v1, v2, v4)
+        engines: 테스트할 엔진 리스트 (기본: v1, v2, v3, v4)
         max_workers: 병렬 처리 워커 수
 
     Returns:
         DataFrame: 백테스트 결과
     """
     if engines is None:
-        engines = ['v1', 'v2', 'v4']
+        engines = ['v1', 'v2', 'v3', 'v4']
 
     print("\n" + "="*70)
     print("  V1/V2/V4 스크리닝 엔진 백테스트")
@@ -595,8 +595,8 @@ def main():
     parser = argparse.ArgumentParser(description='V1/V2/V4 스크리닝 엔진 백테스트')
     parser.add_argument('--days', type=int, default=5, help='백테스트 기간 (거래일 수)')
     parser.add_argument('--top', type=int, default=100, help='각 엔진별 상위 종목 수')
-    parser.add_argument('--engines', nargs='+', default=['v1', 'v2', 'v4'],
-                        help='테스트할 엔진 (v1, v2, v4)')
+    parser.add_argument('--engines', nargs='+', default=['v1', 'v2', 'v3', 'v4'],
+                        help='테스트할 엔진 (v1, v2, v3, v4)')
     parser.add_argument('--workers', type=int, default=10, help='병렬 처리 워커 수')
     parser.add_argument('--output', type=str, default=None,
                         help='출력 파일 경로 (기본: output/backtest_v1_v2_v4_5days_YYYYMMDD.xlsx)')
