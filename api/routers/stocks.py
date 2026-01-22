@@ -441,104 +441,125 @@ def get_stock_name(code: str) -> str:
 
 @router.get("/{code}", response_model=StockDetail)
 async def get_stock_detail(code: str):
-    """종목 상세 정보 - KIS API 우선, FDR 보조 (5분 캐싱)"""
-    # 캐시 확인
+    """종목 상세 정보 - DB캐시 우선, KIS API 보조, FDR 폴백 (5분 캐싱)"""
+    # 메모리 캐시 확인
     cached = get_cached_stock_detail(code)
     if cached:
         return cached
 
     stock_name = get_stock_name(code)
 
+    # 1. DB 캐시에서 가격 조회 (네이버 금융 API로 5분마다 업데이트됨)
+    kis_data = None
     try:
-        # 1. KIS API로 실시간 시세 조회 시도 (실전투자 URL 사용)
-        from api.services.kis_client import get_kis_client_for_prices
-        kis = get_kis_client_for_prices()
-        kis_data = kis.get_current_price(code)
+        from database.db_manager import DatabaseManager
+        db = DatabaseManager()
+        cached_price = db.get_cached_price(code)
+        if cached_price and cached_price.get('current_price'):
+            kis_data = {
+                'stock_code': code,
+                'stock_name': cached_price.get('stock_name') or stock_name,
+                'current_price': cached_price.get('current_price', 0),
+                'change': cached_price.get('change', 0),
+                'change_rate': cached_price.get('change_rate', 0),
+                'volume': cached_price.get('volume', 0),
+                'market_cap': 0,  # 캐시에 없음
+            }
+    except Exception as cache_err:
+        print(f"DB 캐시 조회 오류: {cache_err}")
 
-        if kis_data:
-            # 시가총액: KIS는 억 단위로 반환, 원 단위로 변환
-            market_cap = kis_data.get('market_cap', 0)
-            if market_cap:
-                market_cap = market_cap * 100000000  # 억 -> 원
+    # 2. 캐시 미스 시 KIS API로 실시간 시세 조회 (실전투자 URL 사용)
+    if not kis_data:
+        try:
+            from api.services.kis_client import get_kis_client_for_prices
+            kis = get_kis_client_for_prices()
+            kis_data = kis.get_current_price(code)
+        except Exception as kis_err:
+            print(f"KIS API 오류: {kis_err}")
 
-            # KIS에서 종목명이 있으면 사용, 없으면 로컬 데이터 사용
-            name = kis_data.get('stock_name') or stock_name
+    # 3. 가격 데이터가 있으면 (DB캐시 또는 KIS API) 상세 정보 구성
+    if kis_data:
+        # 시가총액: KIS는 억 단위로 반환, 원 단위로 변환
+        market_cap = kis_data.get('market_cap', 0)
+        if market_cap:
+            market_cap = market_cap * 100000000  # 억 -> 원
 
-            # 이동평균/RSI/MACD/피보나치는 FDR에서 계산
-            ma5, ma20, ma60, rsi, macd, macd_signal = None, None, None, None, None, None
-            bb_mid, bb_upper, bb_lower = None, None, None
-            try:
-                libs = get_stock_libs()
-                if libs:
-                    get_ohlcv = libs['get_ohlcv']
-                    ohlcv = get_ohlcv(code, 90)  # 90일 (60거래일 확보용)
-                    if ohlcv is not None and not ohlcv.empty:
-                        close = ohlcv['종가']
-                        ma5 = round(close.tail(5).mean(), 0) if len(ohlcv) >= 5 else None
-                        ma20 = round(close.tail(20).mean(), 0) if len(ohlcv) >= 20 else None
-                        ma60 = round(close.tail(60).mean(), 0) if len(ohlcv) >= 60 else None
-                        # RSI 계산
-                        if len(ohlcv) >= 14:
-                            delta = close.diff()
-                            gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
-                            loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
-                            rs = gain / loss
-                            rsi_series = 100 - (100 / (1 + rs))
-                            rsi = round(rsi_series.iloc[-1], 2)
-                        # MACD 계산
-                        if len(ohlcv) >= 26:
-                            ema12 = close.ewm(span=12, adjust=False).mean()
-                            ema26 = close.ewm(span=26, adjust=False).mean()
-                            macd_line = ema12 - ema26
-                            signal_line = macd_line.ewm(span=9, adjust=False).mean()
-                            macd = round(macd_line.iloc[-1], 2)
-                            macd_signal = round(signal_line.iloc[-1], 2)
-                        # 피보나치 61.8% 되돌림 (추천 매수가용)
-                        if len(ohlcv) >= 60:
-                            high60 = ohlcv['고가'].tail(60).max()
-                            low60 = ohlcv['저가'].tail(60).min()
-                            bb_mid = round(high60 - (high60 - low60) * 0.618, 0)  # 피보나치 61.8%
-                            bb_upper = round(high60, 0)  # 60일 고점
-                            bb_lower = round(low60, 0)   # 60일 저점
-            except Exception as ma_err:
-                print(f"이동평균 계산 오류: {ma_err}")
+        # KIS에서 종목명이 있으면 사용, 없으면 로컬 데이터 사용
+        name = kis_data.get('stock_name') or stock_name
 
-            # 시장 구분 조회 (KOSPI/KOSDAQ) - 캐시 사용
-            market_type = None
-            try:
-                krx = get_krx_listing()
-                if krx is not None:
-                    stock_info = krx[krx['Code'] == code]
-                    if not stock_info.empty and 'Market' in stock_info.columns:
-                        market_type = stock_info.iloc[0]['Market']
-            except Exception:
-                pass
+        # 이동평균/RSI/MACD/피보나치는 FDR에서 계산
+        ma5, ma20, ma60, rsi, macd, macd_signal = None, None, None, None, None, None
+        bb_mid, bb_upper, bb_lower = None, None, None
+        try:
+            libs = get_stock_libs()
+            if libs:
+                get_ohlcv = libs['get_ohlcv']
+                ohlcv = get_ohlcv(code, 90)  # 90일 (60거래일 확보용)
+                if ohlcv is not None and not ohlcv.empty:
+                    close = ohlcv['종가']
+                    ma5 = round(close.tail(5).mean(), 0) if len(ohlcv) >= 5 else None
+                    ma20 = round(close.tail(20).mean(), 0) if len(ohlcv) >= 20 else None
+                    ma60 = round(close.tail(60).mean(), 0) if len(ohlcv) >= 60 else None
+                    # RSI 계산
+                    if len(ohlcv) >= 14:
+                        delta = close.diff()
+                        gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
+                        loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
+                        rs = gain / loss
+                        rsi_series = 100 - (100 / (1 + rs))
+                        rsi = round(rsi_series.iloc[-1], 2)
+                    # MACD 계산
+                    if len(ohlcv) >= 26:
+                        ema12 = close.ewm(span=12, adjust=False).mean()
+                        ema26 = close.ewm(span=26, adjust=False).mean()
+                        macd_line = ema12 - ema26
+                        signal_line = macd_line.ewm(span=9, adjust=False).mean()
+                        macd = round(macd_line.iloc[-1], 2)
+                        macd_signal = round(signal_line.iloc[-1], 2)
+                    # 피보나치 61.8% 되돌림 (추천 매수가용)
+                    if len(ohlcv) >= 60:
+                        high60 = ohlcv['고가'].tail(60).max()
+                        low60 = ohlcv['저가'].tail(60).min()
+                        bb_mid = round(high60 - (high60 - low60) * 0.618, 0)  # 피보나치 61.8%
+                        bb_upper = round(high60, 0)  # 60일 고점
+                        bb_lower = round(low60, 0)   # 60일 저점
+        except Exception as ma_err:
+            print(f"이동평균 계산 오류: {ma_err}")
 
-            result = StockDetail(
-                code=code,
-                name=name,
-                market=market_type,
-                current_price=kis_data.get('current_price', 0),
-                change=kis_data.get('change', 0),
-                change_rate=kis_data.get('change_rate', 0),
-                volume=kis_data.get('volume', 0),
-                market_cap=market_cap,
-                ma5=ma5,
-                ma20=ma20,
-                ma60=ma60,
-                rsi=rsi,
-                macd=macd,
-                macd_signal=macd_signal,
-                bb_mid=bb_mid,
-                bb_upper=bb_upper,
-                bb_lower=bb_lower
-            )
-            set_stock_detail_cache(code, result)
-            return result
-    except Exception as kis_err:
-        print(f"KIS API 오류: {kis_err}")
+        # 시장 구분 조회 (KOSPI/KOSDAQ) - 캐시 사용
+        market_type = None
+        try:
+            krx = get_krx_listing()
+            if krx is not None:
+                stock_info = krx[krx['Code'] == code]
+                if not stock_info.empty and 'Market' in stock_info.columns:
+                    market_type = stock_info.iloc[0]['Market']
+        except Exception:
+            pass
 
-    # 2. FDR로 폴백
+        result = StockDetail(
+            code=code,
+            name=name,
+            market=market_type,
+            current_price=kis_data.get('current_price', 0),
+            change=kis_data.get('change', 0),
+            change_rate=kis_data.get('change_rate', 0),
+            volume=kis_data.get('volume', 0),
+            market_cap=market_cap,
+            ma5=ma5,
+            ma20=ma20,
+            ma60=ma60,
+            rsi=rsi,
+            macd=macd,
+            macd_signal=macd_signal,
+            bb_mid=bb_mid,
+            bb_upper=bb_upper,
+            bb_lower=bb_lower
+        )
+        set_stock_detail_cache(code, result)
+        return result
+
+    # 4. DB캐시와 KIS 모두 실패 시 FDR로 폴백
     libs = get_stock_libs()
     if not libs:
         raise HTTPException(status_code=503, detail="주식 데이터 서비스 이용 불가")
@@ -772,16 +793,16 @@ async def analyze_stock(code: str):
             '거래량': 'Volume'
         })
 
-        # 기술적 분석
+        # 기술적 분석 (변별력 강화 버전 사용)
         from technical_analyst import TechnicalAnalyst
         analyst = TechnicalAnalyst()
-        result = analyst.analyze_full(ohlcv)
+        result = analyst.analyze_trend_following_strict(ohlcv)
 
         if result is None:
-            # fallback: 기본 analyze 사용
-            score_tuple = analyst.analyze(ohlcv)
-            score = score_tuple[0] if isinstance(score_tuple, tuple) else 50
-            result = {'score': score, 'indicators': {}, 'signals': []}
+            # fallback: 기존 analyze_full 사용
+            result = analyst.analyze_full(ohlcv)
+            if result is None:
+                result = {'score': 50, 'indicators': {}, 'signals': []}
 
         score = result.get('score', 50)
         indicators = result.get('indicators', {})
