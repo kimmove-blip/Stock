@@ -262,3 +262,133 @@ async def get_top100_realtime_prices():
     except Exception as e:
         print(f"[Realtime Error] {e}")
         raise HTTPException(status_code=500, detail="시세 조회 중 오류가 발생했습니다")
+
+
+# ==================== 캐시된 현재가 API (하이브리드) ====================
+
+class CachedPrice(BaseModel):
+    """캐시된 가격 응답 모델"""
+    stock_code: str
+    stock_name: Optional[str] = None
+    current_price: Optional[int] = None
+    change: Optional[int] = None
+    change_rate: Optional[float] = None
+    volume: Optional[int] = None
+    trading_value: Optional[int] = None
+    open_price: Optional[int] = None
+    high_price: Optional[int] = None
+    low_price: Optional[int] = None
+    prev_close: Optional[int] = None
+    updated_at: Optional[str] = None
+
+
+class CachedPriceResponse(BaseModel):
+    """캐시된 가격 목록 응답"""
+    prices: List[CachedPrice]
+    cache_updated_at: Optional[str] = None
+    cache_count: int = 0
+
+
+@router.get("/cached/price/{stock_code}", response_model=CachedPrice)
+async def get_cached_price(stock_code: str):
+    """
+    단일 종목 캐시된 현재가 조회 (DB 캐시)
+
+    - **stock_code**: 종목코드 (6자리)
+    """
+    from database.db_manager import DatabaseManager
+    db = DatabaseManager()
+
+    cached = db.get_cached_price(stock_code)
+    if not cached:
+        raise HTTPException(status_code=404, detail=f"종목 {stock_code}의 캐시된 시세가 없습니다")
+
+    return CachedPrice(**cached)
+
+
+@router.post("/cached/prices", response_model=CachedPriceResponse)
+async def get_cached_prices(stock_codes: List[str]):
+    """
+    여러 종목 캐시된 현재가 조회 (DB 캐시)
+
+    - **stock_codes**: 종목코드 리스트
+    """
+    from database.db_manager import DatabaseManager
+    db = DatabaseManager()
+
+    cached_list = db.get_cached_prices(stock_codes)
+    last_updated = db.get_price_cache_updated_at()
+    cache_count = db.get_price_cache_count()
+
+    return CachedPriceResponse(
+        prices=[CachedPrice(**p) for p in cached_list],
+        cache_updated_at=last_updated,
+        cache_count=cache_count
+    )
+
+
+@router.get("/cached/status")
+async def get_cache_status():
+    """
+    현재가 캐시 상태 조회
+    """
+    from database.db_manager import DatabaseManager
+    db = DatabaseManager()
+
+    last_updated = db.get_price_cache_updated_at()
+    count = db.get_price_cache_count()
+
+    return {
+        "cache_count": count,
+        "last_updated": last_updated,
+        "status": "ok" if count > 0 else "empty"
+    }
+
+
+@router.get("/hybrid/prices", response_model=CachedPriceResponse)
+async def get_hybrid_prices(codes: str = Query(..., description="쉼표로 구분된 종목코드")):
+    """
+    하이브리드 현재가 조회
+
+    1. 캐시된 가격 먼저 반환 (빠름)
+    2. 캐시 미스 종목은 실시간 조회 후 캐시 저장
+
+    - **codes**: 쉼표로 구분된 종목코드 (예: 005930,000660,035720)
+    """
+    from database.db_manager import DatabaseManager
+    db = DatabaseManager()
+
+    stock_codes = [c.strip() for c in codes.split(',') if c.strip()]
+    if len(stock_codes) > 100:
+        raise HTTPException(status_code=400, detail="최대 100개 종목까지 조회 가능")
+
+    # 캐시에서 조회
+    cached_list = db.get_cached_prices(stock_codes)
+    cached_codes = {p['stock_code'] for p in cached_list}
+
+    # 캐시 미스 종목
+    missing_codes = [c for c in stock_codes if c not in cached_codes]
+
+    # 캐시 미스 종목 실시간 조회
+    if missing_codes:
+        kis = get_kis()
+        if kis:
+            try:
+                new_prices = kis.get_multiple_prices(missing_codes)
+                if new_prices:
+                    # 캐시에 저장
+                    db.bulk_upsert_price_cache(new_prices)
+                    # 결과에 추가
+                    for p in new_prices:
+                        cached_list.append(p)
+            except Exception as e:
+                print(f"[Hybrid] 실시간 조회 실패: {e}")
+
+    last_updated = db.get_price_cache_updated_at()
+    cache_count = db.get_price_cache_count()
+
+    return CachedPriceResponse(
+        prices=[CachedPrice(**p) for p in cached_list],
+        cache_updated_at=last_updated,
+        cache_count=cache_count
+    )

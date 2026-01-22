@@ -84,6 +84,12 @@ export const realtimeAPI = {
   prices: (codes) => api.post('/realtime/prices', codes),
   // TOP100 종목 실시간 시세
   top100Prices: () => api.get('/realtime/top100-prices'),
+  // 캐시된 현재가 (DB)
+  cachedPrice: (code) => api.get(`/realtime/cached/price/${code}`),
+  cachedPrices: (codes) => api.post('/realtime/cached/prices', codes),
+  cacheStatus: () => api.get('/realtime/cached/status'),
+  // 하이브리드: 캐시 우선 + 미스시 실시간 조회
+  hybridPrices: (codes) => api.get(`/realtime/hybrid/prices?codes=${codes.join(',')}`),
 };
 
 // 가치주 API
@@ -158,6 +164,8 @@ export const adminAPI = {
 export const alertsAPI = {
   // 알림 기록 조회
   list: (days = 30) => api.get(`/alerts?days=${days}`),
+  // 알림 개별 삭제
+  delete: (id) => api.delete(`/alerts/${id}`),
   // 알림 기록 전체 삭제
   clear: () => api.delete('/alerts/clear'),
 };
