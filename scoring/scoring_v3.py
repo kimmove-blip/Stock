@@ -1,5 +1,5 @@
 """
-V3 점수 계산 로직 - 세력 매집 스나이퍼 (Smart Money Accumulation)
+V3 점수 계산 로직 - 사일런트 바이어 (Silent Buyer)
 
 철학: "가격은 속여도 거래량은 속일 수 없다"
       세력이 숨어서 매집하는 흔적을 포착
@@ -364,7 +364,7 @@ def detect_pullback_volume_dryup(df: pd.DataFrame) -> Dict:
 
 def calculate_score_v3(df: pd.DataFrame) -> Optional[Dict]:
     """
-    V3 점수 계산 (세력 매집 스나이퍼)
+    V3 점수 계산 (사일런트 바이어 - Silent Buyer)
 
     Args:
         df: OHLCV 데이터프레임 (최소 60일)
