@@ -19,11 +19,17 @@ warnings.filterwarnings("ignore")
 
 class MarketScreener:
     """전종목 스크리닝 시스템"""
-    def __init__(self, max_workers=10):
+    def __init__(self, max_workers=10, scoring_version="v2", fetch_investor_data=False):
         self.tech_analyst = TechnicalAnalyst()
         self.max_workers = max_workers
         self.all_stocks = None
         self.filtered_stocks = None
+        self.scoring_version = scoring_version
+        self.fetch_investor_data = fetch_investor_data  # 네이버 수급 데이터 조회 여부
+
+        # 스코어링 함수 로드
+        from scoring import SCORING_FUNCTIONS
+        self.scoring_func = SCORING_FUNCTIONS.get(scoring_version)
     def load_all_stocks(self):
         """KRX 전체 종목 로딩"""
         print("[1/5] KRX 전체 종목 로딩 중...")
@@ -179,12 +185,17 @@ class MarketScreener:
                     "change_pct": result["change_pct"],
                 }
             else:
-                # 변별력 강화 버전 사용 (래치 전략)
-                result = self.tech_analyst.analyze_trend_following_strict(df)
+                # 스코어링 엔진 버전에 따라 다른 함수 사용
+                if self.scoring_func:
+                    result = self.scoring_func(df)
+                else:
+                    # 기본: 변별력 강화 버전 (래치 전략)
+                    result = self.tech_analyst.analyze_trend_following_strict(df)
+
                 if result is None:
                     return None
 
-                indicators = result["indicators"]
+                indicators = result.get("indicators", {})
 
                 # 선정 이유 생성
                 reasons = []
@@ -216,6 +227,13 @@ class MarketScreener:
                 elif trading_value >= 100:
                     reasons.append(f"거래대금 {trading_value:.0f}억")
 
+                # 점수 추출 (v4는 result 최상위, v1-v3는 indicators 내부)
+                trend_score = result.get("trend_score") or indicators.get("trend_score", 0)
+                momentum_score = result.get("momentum_score") or indicators.get("momentum_score", 0)
+                # v4는 supply_score, v1-v3는 volume_score
+                volume_score = result.get("supply_score") or result.get("volume_score") or indicators.get("volume_score", 0)
+                pattern_score = result.get("pattern_score") or indicators.get("pattern_score", 0)
+
                 return {
                     "code": code,
                     "name": name,
@@ -227,10 +245,12 @@ class MarketScreener:
                     "close": indicators.get("close", 0),
                     "volume": indicators.get("volume", 0),
                     "change_pct": indicators.get("change_pct", 0),
-                    # 변별력 강화 지표
-                    "trend_score": indicators.get("trend_score", 0),
-                    "momentum_score": indicators.get("momentum_score", 0),
-                    "volume_score": indicators.get("volume_score", 0),
+                    # 개별 점수 (v1-v4 공통)
+                    "trend_score": trend_score,
+                    "momentum_score": momentum_score,
+                    "volume_score": volume_score,  # v4에서는 supply_score
+                    "pattern_score": pattern_score,  # v4 전용
+                    # 지표
                     "sma20_slope": indicators.get("sma20_slope", 0),
                     "rsi": indicators.get("rsi", 0),
                     "volume_ratio": indicators.get("volume_ratio", 0),
@@ -238,6 +258,8 @@ class MarketScreener:
                     "high_60d_pct": indicators.get("high_60d_pct", 0),
                     "ma_status": indicators.get("ma_status", ""),
                     "selection_reasons": reasons,
+                    # 버전 정보
+                    "scoring_version": result.get("version", "v2"),
                 }
         except Exception as e:
             # 에러 발생시 조용히 무시
@@ -264,12 +286,18 @@ class MarketScreener:
                 executor.submit(self._analyze_single_stock, stock, mode): stock
                 for stock in stocks_to_analyze
             }
-            # 완료된 작업 수집
+            # 완료된 작업 수집 (타임아웃 30초)
             for future in as_completed(future_to_stock):
                 completed += 1
-                result = future.result()
-                if result is not None:
-                    results.append(result)
+                stock = future_to_stock[future]
+                try:
+                    result = future.result(timeout=30)
+                    if result is not None:
+                        results.append(result)
+                except TimeoutError:
+                    print(f"    ⚠ 타임아웃: {stock.get('Name', stock.get('Code'))} (30초 초과)")
+                except Exception as e:
+                    print(f"    ⚠ 오류: {stock.get('Name', stock.get('Code'))} - {e}")
                 # 진행 상황 출력
                 if completed % progress_interval == 0 or completed == total:
                     elapsed = time.time() - start_time
@@ -311,6 +339,87 @@ class MarketScreener:
         top_stocks = sorted_results[:top_n]
         print(f"    → {len(top_stocks)}개 종목 선정 완료")
         return top_stocks
+
+    def enrich_with_investor_data(self, results, max_stocks=200):
+        """
+        상위 종목에 네이버 금융 수급 데이터 추가 (V4 전용)
+
+        Args:
+            results: 스크리닝 결과 리스트
+            max_stocks: 수급 데이터 조회할 최대 종목 수
+
+        Returns:
+            수급 데이터가 추가된 결과 리스트
+        """
+        if self.scoring_version != 'v4':
+            return results
+
+        if not self.fetch_investor_data:
+            return results
+
+        print(f"    → 상위 {min(len(results), max_stocks)}개 종목 수급 데이터 조회 중...")
+
+        try:
+            from naver_investor import get_investor_trends_batch
+            from scoring.scoring_v4 import calculate_score_v4
+
+            # 상위 종목 코드 추출
+            codes = [r['code'] for r in results[:max_stocks]]
+
+            # 일괄 조회
+            start_time = time.time()
+            investor_data = get_investor_trends_batch(codes, days=5, max_workers=self.max_workers)
+            elapsed = time.time() - start_time
+            print(f"    → 수급 데이터 조회 완료: {len(investor_data)}개 ({elapsed:.1f}초)")
+
+            # 결과에 수급 데이터 추가 및 V4 재점수화
+            enriched_count = 0
+            for r in results[:max_stocks]:
+                code = r['code']
+                if code in investor_data:
+                    inv = investor_data[code]
+
+                    # 수급 데이터를 indicators에 추가
+                    r['indicators']['foreign_net_5d'] = inv['foreign_net']
+                    r['indicators']['institution_net_5d'] = inv['institution_net']
+                    r['indicators']['foreign_hold_ratio'] = inv['foreign_hold_ratio']
+                    r['indicators']['consecutive_foreign_buy'] = inv['consecutive_foreign_buy']
+
+                    # 수급 점수 재계산 (최대 8점 추가)
+                    supply_bonus = 0
+                    total_inst_foreign = inv['foreign_net'] + inv['institution_net']
+
+                    if total_inst_foreign > 0:
+                        supply_bonus += 5
+                        if 'INST_FOREIGN_BUY' not in r['signals']:
+                            r['signals'].append('INST_FOREIGN_BUY')
+                    elif total_inst_foreign < 0:
+                        supply_bonus -= 3
+                        if 'INST_FOREIGN_SELL' not in r['signals']:
+                            r['signals'].append('INST_FOREIGN_SELL')
+
+                    if inv['consecutive_foreign_buy'] >= 3:
+                        supply_bonus += 3
+                        if 'FOREIGN_CONSECUTIVE_BUY' not in r['signals']:
+                            r['signals'].append('FOREIGN_CONSECUTIVE_BUY')
+
+                    # 점수 업데이트
+                    if supply_bonus != 0:
+                        old_score = r['score']
+                        # volume_score는 v4에서 supply_score
+                        old_supply = r.get('volume_score', 0) or 0
+                        new_supply = min(30, max(-8, old_supply + supply_bonus))
+                        r['volume_score'] = new_supply
+                        r['score'] = max(0, min(100, old_score + supply_bonus))
+
+                    enriched_count += 1
+
+            print(f"    → {enriched_count}개 종목 수급 데이터 반영 완료")
+
+        except Exception as e:
+            print(f"    → 수급 데이터 조회 실패: {e}")
+
+        return results
     def run_full_screening(
         self,
         top_n=100,
@@ -350,6 +459,15 @@ class MarketScreener:
 
         # 전종목 점수 저장 (code -> score 매핑)
         stats['all_scores'] = {r['code']: r.get('score', 0) for r in results}
+
+        # 4.5 수급 데이터 추가 (V4 + fetch_investor_data 옵션)
+        if self.scoring_version == 'v4' and self.fetch_investor_data:
+            # 1차 정렬 후 상위 종목에만 수급 데이터 조회
+            sorted_results = sorted(results, key=lambda x: -x['score'])
+            results = self.enrich_with_investor_data(sorted_results, max_stocks=top_n * 2)
+            stats['investor_data_fetched'] = True
+        else:
+            stats['investor_data_fetched'] = False
 
         # 5. 상위 종목 추출
         top_stocks = self.get_top_stocks(results, top_n=top_n)
