@@ -17,7 +17,7 @@ OUTPUT_DIR.mkdir(exist_ok=True)
 class ScreeningConfig:
     """스크리닝 설정"""
     MODE = "full"  # 무조건 full 모드 사용
-    TOP_N = 100  # 상위 N개 종목 선정
+    TOP_N = None  # None이면 전체 저장 (JSON)
     MAX_WORKERS = 5  # 병렬 처리 워커 수 (크론 환경 안정성)
     MIN_MARKET_CAP = 30_000_000_000  # 최소 시가총액 (300억)
     MAX_MARKET_CAP = 1_000_000_000_000  # 최대 시가총액 (1조) - 대형 우량주 제외

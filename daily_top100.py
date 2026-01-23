@@ -42,18 +42,37 @@ from streak_tracker import (
 from technical_analyst import apply_signal_reliability_weights
 
 
-def run_screening(mode="quick", top_n=100):
+def run_screening(mode="quick", top_n=100, scoring_version="v2", fetch_investor_data=False):
     """스크리닝 실행
     Returns: (results, stats) 튜플
+
+    Args:
+        mode: 'quick' 또는 'full'
+        top_n: 선정할 종목 수
+        scoring_version: 스크리닝 엔진 버전 (v1~v4)
+        fetch_investor_data: 네이버 수급 데이터 조회 여부 (v4 전용)
     """
+    version_names = {
+        'v1': '종합 기술적 분석',
+        'v2': '추세 추종 강화',
+        'v3': '래치 전략',
+        'v4': 'Hybrid Sniper'
+    }
     print("\n" + "=" * 70)
     print(f"  내일 관심 종목 {top_n}선 스크리닝")
     print(f"  실행시간: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     print(f"  모드: {'전체 분석' if mode == 'full' else '빠른 스크리닝'}")
+    print(f"  스크리닝 엔진: {scoring_version.upper()} ({version_names.get(scoring_version, '')})")
+    if fetch_investor_data and scoring_version == 'v4':
+        print(f"  수급 데이터: 네이버 금융 (기관/외국인)")
     print("=" * 70)
 
     # 스크리너 초기화
-    screener = MarketScreener(max_workers=ScreeningConfig.MAX_WORKERS)
+    screener = MarketScreener(
+        max_workers=ScreeningConfig.MAX_WORKERS,
+        scoring_version=scoring_version,
+        fetch_investor_data=fetch_investor_data
+    )
 
     # 스크리닝 실행 (통계도 함께 반환)
     results, stats = screener.run_full_screening(
@@ -62,8 +81,10 @@ def run_screening(mode="quick", top_n=100):
         min_marcap=ScreeningConfig.MIN_MARKET_CAP,
         max_marcap=ScreeningConfig.MAX_MARKET_CAP,
         min_amount=ScreeningConfig.MIN_TRADING_AMOUNT,
-        max_price=ScreeningConfig.MAX_PRICE,
     )
+
+    # 스크리닝 버전 저장
+    stats['scoring_version'] = scoring_version
 
     return results, stats
 
@@ -92,6 +113,10 @@ def categorize_results(results):
 def save_results(results, top_n=100, yesterday_df=None, yesterday_summary=None, stats=None, apply_improvements=True):
     """결과 저장 (Excel 2시트, JSON, CSV, PDF)
 
+    파일명 형식: top100_{version}_{date}.{ext}
+    - v2는 기본값이므로 버전 생략: top100_20260123.pdf
+    - v1, v3, v4는 버전 포함: top100_v4_20260123.pdf
+
     Args:
         results: 스크리닝 결과
         top_n: 상위 N개 선정
@@ -100,6 +125,9 @@ def save_results(results, top_n=100, yesterday_df=None, yesterday_summary=None, 
         stats: 통계 정보
         apply_improvements: 신뢰도 개선 적용 여부
     """
+    # 스크리닝 버전 설정 (파일명에 반영)
+    scoring_version = stats.get('scoring_version', 'v2') if stats else 'v2'
+    OutputConfig.set_version(scoring_version)
     print("\n[저장] 결과 파일 생성 중...")
 
     # 상위 N개만 추출
@@ -154,10 +182,10 @@ def save_results(results, top_n=100, yesterday_df=None, yesterday_summary=None, 
     create_two_sheet_excel(top_results, yesterday_df, yesterday_summary, excel_path)
     print(f"    → Excel: {excel_path} (2개 시트)")
 
-    # 2. JSON 저장
+    # 2. JSON 저장 (전체 결과)
     json_path = OutputConfig.get_filepath("json")
-    save_json(top_results, json_path, stats=stats)
-    print(f"    → JSON: {json_path}")
+    save_json(results, json_path, stats=stats)  # 전체 저장
+    print(f"    → JSON: {json_path} ({len(results)}개 전체)")
 
     # 3. CSV 저장
     csv_path = OutputConfig.get_filepath("csv")
@@ -291,6 +319,12 @@ def save_json(results, filepath, stats=None):
             "volume": r.get("volume", 0),
             "signals": r.get("signals", []),
             "patterns": r.get("patterns", []),
+            # 개별 점수 (v1-v4)
+            "trend_score": r.get("trend_score"),
+            "momentum_score": r.get("momentum_score"),
+            "volume_score": r.get("volume_score"),
+            "pattern_score": r.get("pattern_score"),
+            "scoring_version": r.get("scoring_version"),
             # 연속 출현 및 순위 변동
             "streak": r.get("streak", 1),
             "rank_change": r.get("rank_change"),  # None이면 NEW
@@ -300,11 +334,19 @@ def save_json(results, filepath, stats=None):
             "classification": r.get("classification", ""),  # stable 또는 new
         }
 
-        # 지표 추가
+        # 지표 추가 (numpy 타입을 Python 기본 타입으로 변환)
         if "indicators" in r:
+            import numpy as np
+            def convert_value(v):
+                if isinstance(v, (np.integer, np.int64, np.int32)):
+                    return int(v)
+                elif isinstance(v, (np.floating, np.float64, np.float32)):
+                    return round(float(v), 4)
+                elif isinstance(v, float):
+                    return round(v, 4)
+                return v
             stock["indicators"] = {
-                k: round(v, 4) if isinstance(v, float) else v
-                for k, v in r["indicators"].items()
+                k: convert_value(v) for k, v in r["indicators"].items()
             }
 
         output["stocks"].append(stock)
@@ -455,6 +497,15 @@ def main():
     parser.add_argument(
         "--no-save", action="store_true", help="파일 저장 안함 (화면 출력만)"
     )
+    parser.add_argument(
+        "--version", "-v", type=str, default="v2",
+        choices=["v1", "v2", "v3", "v4"],
+        help="스크리닝 엔진 버전 (기본: v2)"
+    )
+    parser.add_argument(
+        "--investor", action="store_true",
+        help="네이버 금융 기관/외국인 수급 데이터 포함 (v4 전용)"
+    )
 
     args = parser.parse_args()
 
@@ -467,8 +518,8 @@ def main():
             sys.exit(0)
         return
 
-    # 일반 실행
-    mode = "full" if args.full else "quick"
+    # 일반 실행 (무조건 full 모드)
+    mode = "full"
 
     try:
         # 전날 결과 추적 (다음날 실적 기록)
@@ -491,7 +542,12 @@ def main():
         # 스크리닝 실행
         print("\n[2단계] 오늘의 스크리닝 실행")
         print("-" * 50)
-        results, stats = run_screening(mode=mode, top_n=args.top)
+        results, stats = run_screening(
+            mode=mode,
+            top_n=args.top,
+            scoring_version=args.version,
+            fetch_investor_data=args.investor
+        )
 
         if not results:
             print("\n[오류] 스크리닝 결과가 없습니다.")
