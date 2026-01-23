@@ -182,10 +182,10 @@ def save_results(results, top_n=100, yesterday_df=None, yesterday_summary=None, 
     create_two_sheet_excel(top_results, yesterday_df, yesterday_summary, excel_path)
     print(f"    → Excel: {excel_path} (2개 시트)")
 
-    # 2. JSON 저장 (전체 결과)
+    # 2. JSON 저장
     json_path = OutputConfig.get_filepath("json")
-    save_json(results, json_path, stats=stats)  # 전체 저장
-    print(f"    → JSON: {json_path} ({len(results)}개 전체)")
+    save_json(top_results, json_path, stats=stats)
+    print(f"    → JSON: {json_path}")
 
     # 3. CSV 저장
     csv_path = OutputConfig.get_filepath("csv")
