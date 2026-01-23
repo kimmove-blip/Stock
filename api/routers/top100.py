@@ -70,19 +70,35 @@ async def get_top100(
         print(f"[TOP100 Error] {e}")
         raise HTTPException(status_code=500, detail="데이터 파일 읽기 중 오류가 발생했습니다")
 
-    # 캐시된 현재가 로드 (하이브리드)
+    # 캐시된 현재가 로드 (장중에만 사용, 오늘 데이터만)
     cached_prices = {}
     try:
         from database.db_manager import DatabaseManager
         db = DatabaseManager()
         all_cached = db.get_cached_prices()
-        cached_prices = {p['stock_code']: p for p in all_cached}
+
+        # 오늘 날짜의 캐시만 사용 (장 시작 전/후 혼선 방지)
+        today_str = datetime.now().strftime('%Y-%m-%d')
+        for p in all_cached:
+            updated = p.get('updated_at', '')
+            # updated_at이 오늘 날짜인 경우만 사용
+            if updated and updated.startswith(today_str):
+                cached_prices[p['stock_code']] = p
     except Exception as e:
         print(f"[TOP100] 캐시 로드 실패: {e}")
 
     # 파일명에서 날짜 추출
     filename = os.path.basename(filepath)
     file_date = filename.replace('top100_', '').replace('.json', '')
+
+    # ========================================================
+    # [중요] 장 시작 전 등락률 0 처리 규칙
+    # - 07:00 ~ 09:00 사이에는 무조건 등락률(change_rate)을 0으로 표시
+    # - 이유: 전날 등락률이 오늘 데이터처럼 보이는 혼란 방지
+    # - 관련 문서: CLAUDE.md "장 시작 전 데이터 처리 규칙" 참조
+    # ========================================================
+    now = datetime.now()
+    is_before_market = 7 <= now.hour < 9  # 07:00 ~ 08:59
 
     # 데이터 형식 처리 (dict with 'stocks' key or list)
     if isinstance(raw_data, dict):
@@ -105,10 +121,13 @@ async def get_top100(
         # indicators에서 RSI, MACD, change_pct 추출
         indicators = stock.get('indicators', {})
 
-        # 등락률 처리 (캐시 → JSON 순서)
-        change_rate = cached.get('change_rate') or stock.get('change_pct') or indicators.get('change_pct')
-        if change_rate is not None:
-            change_rate = round(float(change_rate), 2)
+        # 등락률 처리 (장 시작 전에는 0으로 표시)
+        if is_before_market:
+            change_rate = 0.0
+        else:
+            change_rate = cached.get('change_rate') or stock.get('change_pct') or indicators.get('change_pct')
+            if change_rate is not None:
+                change_rate = round(float(change_rate), 2)
         rsi = stock.get('rsi') or stock.get('RSI') or indicators.get('rsi')
         macd = stock.get('macd_signal') or indicators.get('macd')
 

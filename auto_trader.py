@@ -1218,6 +1218,308 @@ class AutoTrader:
 
         return result
 
+    def run_greenlight(self) -> Dict:
+        """
+        Green Light 모드 실행 (AI 완전 자율 매매)
+
+        특징:
+        - LLM이 모든 매매 결정
+        - 종목당 투자금액 제한 없음
+        - 손절/익절 규칙 없음
+        - TOP 100 유니버스 내에서만 거래
+        - 모의투자 계좌 전용
+
+        Returns:
+            실행 결과 요약
+        """
+        from trading.llm_trader import LLMTrader
+
+        print("\n" + "=" * 60)
+        print("  GREEN LIGHT MODE - AI 자율 매매")
+        print(f"  실행 시각: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+        print("=" * 60)
+
+        # 1. 모의투자 확인 (필수)
+        is_mock = self.user_config.get('is_mock', True)
+        if not is_mock:
+            print("\n[ERROR] Green Light 모드는 모의투자에서만 사용 가능합니다.")
+            return {"status": "error", "message": "모의투자에서만 사용 가능합니다."}
+
+        # 2. LLM 설정 로드
+        print("\n[1] LLM 설정 로드 중...")
+        llm_settings = self.logger.get_llm_settings(self.user_id)
+        if not llm_settings or not llm_settings.get('llm_api_key'):
+            print("  LLM API 키가 설정되지 않았습니다.")
+            return {"status": "error", "message": "LLM API 키를 설정해주세요."}
+
+        provider = llm_settings.get('llm_provider', 'claude')
+        api_key = llm_settings.get('llm_api_key')
+        model = llm_settings.get('llm_model')
+        print(f"  Provider: {provider}, Model: {model or 'default'}")
+
+        # 3. LLM 트레이더 초기화
+        try:
+            llm_trader = LLMTrader(
+                provider=provider,
+                api_key=api_key,
+                model=model,
+                user_id=self.user_id
+            )
+        except Exception as e:
+            print(f"  LLM 초기화 실패: {e}")
+            return {"status": "error", "message": f"LLM 초기화 실패: {e}"}
+
+        # 4. 계좌 잔고 조회
+        print("\n[2] 계좌 잔고 조회 중...")
+        balance = self.executor.get_account_balance()
+        if not balance:
+            print("  계좌 잔고 조회 실패")
+            return {"status": "error", "message": "계좌 잔고 조회 실패"}
+
+        holdings = [h for h in balance.get('holdings', []) if h.get('quantity', 0) > 0]
+        summary = balance.get('summary', {})
+        cash = summary.get('max_buy_amt', 0) or summary.get('d2_cash_balance', 0) or summary.get('cash_balance', 0)
+        total_eval = summary.get('total_eval_amount', 0)
+        total_assets = total_eval + cash
+
+        print(f"  주문가능금액: {cash:,}원")
+        print(f"  총 자산: {total_assets:,}원")
+        print(f"  보유 종목: {len(holdings)}개")
+
+        # 5. TOP 100 분석 결과 로드
+        print("\n[3] TOP 100 분석 결과 로드 중...")
+        analysis_stocks = self.load_analysis_results()
+        if not analysis_stocks:
+            print("  분석 결과 없음")
+            return {"status": "error", "message": "분석 결과를 찾을 수 없습니다."}
+
+        top100 = [
+            {
+                'code': s.get('code'),
+                'name': s.get('name'),
+                'score': s.get('score', 0),
+                'price': s.get('price') or s.get('close', 0),
+                'close': s.get('close', 0),
+                'change_pct': s.get('change_pct', 0),  # 등락률 (상한가/하한가 판단용)
+                'volume': s.get('volume', 0),
+                'signals': s.get('signals', [])
+            }
+            for s in analysis_stocks[:100]
+        ]
+        top100_codes = [s['code'] for s in top100]
+        print(f"  TOP 100 종목 로드 완료")
+
+        # 6. 시장 정보 수집
+        print("\n[4] 시장 정보 수집 중...")
+        market_info = self._get_market_info()
+        print(f"  코스피: {market_info.get('kospi', {}).get('index', 0):,.0f} ({market_info.get('kospi', {}).get('change_pct', 0):+.2f}%)")
+        print(f"  코스닥: {market_info.get('kosdaq', {}).get('index', 0):,.0f} ({market_info.get('kosdaq', {}).get('change_pct', 0):+.2f}%)")
+
+        # 7. 과거 피드백 수집
+        print("\n[5] 과거 매매 피드백 수집 중...")
+        past_feedback = self.logger.get_greenlight_feedback(self.user_id, limit=20)
+        print(f"  과거 피드백: {len(past_feedback)}건")
+
+        # 8. 컨텍스트 빌드
+        print("\n[6] AI 컨텍스트 구성 중...")
+
+        # 보유종목에 당일 등락률 추가 (분석 결과에서 조회)
+        stock_change_map = {s.get('code'): s.get('change_pct', 0) for s in analysis_stocks}
+        enriched_holdings = []
+        for h in holdings:
+            h_copy = dict(h)
+            h_copy['change_pct'] = stock_change_map.get(h.get('stock_code'), 0)
+            enriched_holdings.append(h_copy)
+
+        portfolio = {
+            'cash': cash,
+            'total_assets': total_assets,
+            'holdings': enriched_holdings
+        }
+        context = llm_trader.build_context(
+            portfolio=portfolio,
+            top100=top100,
+            market_info=market_info,
+            past_feedback=past_feedback
+        )
+
+        # 9. AI 결정 요청
+        print("\n[7] AI에게 트레이딩 결정 요청 중...")
+        result = llm_trader.get_trading_decisions(context)
+
+        if result.get('error'):
+            print(f"  AI 호출 실패: {result.get('error')}")
+            return {"status": "error", "message": result.get('error')}
+
+        print(f"  시장 분석: {result.get('market_analysis', '')[:100]}")
+        print(f"  결정 수: {len(result.get('decisions', []))}개")
+
+        # 10. 결정 유효성 검증
+        decisions = result.get('decisions', [])
+        valid_decisions = llm_trader.validate_decisions(decisions, portfolio, top100_codes)
+        print(f"  유효 결정: {len(valid_decisions)}개")
+
+        # 11. 결정 실행
+        print("\n[8] 결정 실행 중...")
+        executed_orders = []
+
+        for d in valid_decisions:
+            action = d.get('action')
+            stock_code = d.get('stock_code')
+            stock_name = d.get('stock_name', '')
+            quantity = d.get('quantity', 0)
+            reason = d.get('reason', '')
+            confidence = d.get('confidence', 0.5)
+
+            print(f"\n  {action} {stock_name}({stock_code}) x {quantity}주")
+            print(f"  이유: {reason}")
+            print(f"  신뢰도: {confidence:.1%}")
+
+            if self.dry_run:
+                print("  [DRY-RUN] 실제 주문 건너뜀")
+                executed_orders.append({
+                    **d,
+                    'status': 'dry_run',
+                    'order_no': None
+                })
+                continue
+
+            try:
+                if action == 'BUY':
+                    order_result = self.executor.place_buy_order(
+                        stock_code=stock_code,
+                        quantity=quantity,
+                        price=0,  # 시장가
+                        order_type="market"
+                    )
+                elif action == 'SELL':
+                    order_result = self.executor.place_sell_order(
+                        stock_code=stock_code,
+                        quantity=quantity,
+                        price=0,  # 시장가
+                        order_type="market"
+                    )
+                else:
+                    continue
+
+                if order_result and order_result.get('order_no'):
+                    print(f"  주문 성공: {order_result.get('order_no')}")
+                    executed_orders.append({
+                        **d,
+                        'status': 'executed',
+                        'order_no': order_result.get('order_no')
+                    })
+
+                    # 거래 로그 기록
+                    side = 'buy' if action == 'BUY' else 'sell'
+                    self.logger.log_trade(
+                        user_id=self.user_id,
+                        stock_code=stock_code,
+                        stock_name=stock_name,
+                        side=side,
+                        quantity=quantity,
+                        price=0,
+                        order_no=order_result.get('order_no'),
+                        trade_reason=f"[GreenLight] {reason} (신뢰도:{confidence:.0%})",
+                        status='ordered'
+                    )
+                else:
+                    print(f"  주문 실패: {order_result}")
+                    executed_orders.append({
+                        **d,
+                        'status': 'failed',
+                        'error': str(order_result)
+                    })
+
+            except Exception as e:
+                print(f"  주문 오류: {e}")
+                executed_orders.append({
+                    **d,
+                    'status': 'error',
+                    'error': str(e)
+                })
+
+        # 12. 결정 이력 저장 (전체 프롬프트 포함)
+        print("\n[9] 결정 이력 저장 중...")
+        decision_id = self.logger.log_greenlight_decision(
+            user_id=self.user_id,
+            llm_provider=provider,
+            prompt_summary=result.get('full_prompt', result.get('prompt_summary', '')),  # 전체 프롬프트 저장
+            raw_response=result.get('raw_response', ''),
+            decisions=valid_decisions,
+            executed_orders=executed_orders,
+            portfolio_snapshot=portfolio,
+            market_context=market_info
+        )
+        print(f"  결정 ID: {decision_id}")
+
+        # 결과 요약
+        buy_count = sum(1 for d in executed_orders if d.get('action') == 'BUY' and d.get('status') == 'executed')
+        sell_count = sum(1 for d in executed_orders if d.get('action') == 'SELL' and d.get('status') == 'executed')
+
+        print("\n" + "=" * 60)
+        print(f"  GREEN LIGHT 실행 완료")
+        print(f"  매수: {buy_count}건, 매도: {sell_count}건")
+        print("=" * 60)
+
+        return {
+            "status": "completed",
+            "mode": "greenlight",
+            "decision_id": decision_id,
+            "market_analysis": result.get('market_analysis', ''),
+            "risk_assessment": result.get('risk_assessment', ''),
+            "buy_count": buy_count,
+            "sell_count": sell_count,
+            "decisions": valid_decisions,
+            "executed_orders": executed_orders,
+            "timestamp": datetime.now().isoformat()
+        }
+
+    def _get_market_info(self) -> Dict:
+        """시장 정보 (코스피/코스닥 지수) 조회"""
+        try:
+            import FinanceDataReader as fdr
+            from datetime import timedelta
+
+            today = datetime.now()
+            start_date = (today - timedelta(days=7)).strftime('%Y-%m-%d')
+            end_date = today.strftime('%Y-%m-%d')
+
+            # 코스피
+            kospi_df = fdr.DataReader('KS11', start_date, end_date)
+            if kospi_df is not None and len(kospi_df) >= 1:
+                kospi_close = kospi_df.iloc[-1]['Close']
+                if len(kospi_df) >= 2:
+                    kospi_prev = kospi_df.iloc[-2]['Close']
+                    kospi_change = (kospi_close - kospi_prev) / kospi_prev * 100
+                else:
+                    kospi_change = 0
+            else:
+                kospi_close, kospi_change = 0, 0
+
+            # 코스닥
+            kosdaq_df = fdr.DataReader('KQ11', start_date, end_date)
+            if kosdaq_df is not None and len(kosdaq_df) >= 1:
+                kosdaq_close = kosdaq_df.iloc[-1]['Close']
+                if len(kosdaq_df) >= 2:
+                    kosdaq_prev = kosdaq_df.iloc[-2]['Close']
+                    kosdaq_change = (kosdaq_close - kosdaq_prev) / kosdaq_prev * 100
+                else:
+                    kosdaq_change = 0
+            else:
+                kosdaq_close, kosdaq_change = 0, 0
+
+            return {
+                'kospi': {'index': kospi_close, 'change_pct': kospi_change},
+                'kosdaq': {'index': kosdaq_close, 'change_pct': kosdaq_change}
+            }
+        except Exception as e:
+            print(f"시장 정보 조회 실패: {e}")
+            return {
+                'kospi': {'index': 0, 'change_pct': 0},
+                'kosdaq': {'index': 0, 'change_pct': 0}
+            }
+
     def run(self) -> Dict:
         """
         자동매매 실행 (모드에 따라 auto/semi-auto 분기)
@@ -1246,6 +1548,8 @@ class AutoTrader:
                     trade_mode = 'auto'
                 elif db_mode == 'manual':
                     trade_mode = 'manual'
+                elif db_mode == 'greenlight':
+                    trade_mode = 'greenlight'
 
         # manual 모드면 실행 안함
         if trade_mode == 'manual':
@@ -1253,6 +1557,9 @@ class AutoTrader:
 
         if trade_mode == 'semi-auto':
             return self.run_semi_auto()
+
+        if trade_mode == 'greenlight':
+            return self.run_greenlight()
 
         # 기존 auto 모드
         print("\n" + "=" * 60)
@@ -1807,6 +2114,125 @@ class AutoTrader:
         return True
 
 
+def get_active_users() -> List[Dict]:
+    """
+    자동매매가 활성화된 모든 사용자 조회
+
+    Returns:
+        [{'user_id': int, 'trade_mode': str, 'is_mock': bool}, ...]
+    """
+    from trading.trade_logger import TradeLogger
+    logger = TradeLogger()
+
+    with logger._get_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT
+                ats.user_id,
+                ats.trade_mode,
+                aks.is_mock,
+                aks.account_number
+            FROM auto_trade_settings ats
+            JOIN api_key_settings aks ON ats.user_id = aks.user_id
+            WHERE ats.trading_enabled = 1
+              AND aks.app_key IS NOT NULL
+        """)
+        rows = cursor.fetchall()
+
+    return [dict(row) for row in rows]
+
+
+def run_for_all_users(dry_run: bool = False, min_score: int = 75):
+    """모든 활성화된 사용자에 대해 자동매매 실행"""
+    from trading.trade_logger import TradeLogger
+
+    print("\n" + "=" * 70)
+    print("  AUTO TRADER - 전체 사용자 실행 모드")
+    print(f"  실행 시각: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+    print("=" * 70)
+
+    users = get_active_users()
+    print(f"\n[1] 활성화된 사용자: {len(users)}명")
+
+    if not users:
+        print("  활성화된 사용자가 없습니다.")
+        return
+
+    for user in users:
+        print(f"  - user_id={user['user_id']}, mode={user['trade_mode']}, mock={user['is_mock']}")
+
+    results = []
+
+    for user in users:
+        user_id = user['user_id']
+        trade_mode = user['trade_mode']
+
+        print(f"\n{'='*60}")
+        print(f"[USER {user_id}] 처리 시작 (mode={trade_mode})")
+        print(f"{'='*60}")
+
+        try:
+            # 사용자별 설정 로드
+            logger = TradeLogger()
+            api_key_data = logger.get_api_key_settings(user_id)
+
+            if not api_key_data:
+                print(f"  API 키 없음 - 건너뜀")
+                continue
+
+            user_config = {
+                'app_key': api_key_data.get('app_key'),
+                'app_secret': api_key_data.get('app_secret'),
+                'account_number': api_key_data.get('account_number'),
+                'account_product_code': api_key_data.get('account_product_code', '01'),
+                'is_mock': bool(api_key_data.get('is_mock', True))
+            }
+
+            trader = AutoTrader(
+                dry_run=dry_run,
+                user_id=user_id,
+                user_config=user_config
+            )
+
+            # trade_mode에 따라 다른 실행
+            if trade_mode == 'greenlight':
+                result = trader.run_greenlight()
+            elif trade_mode in ('auto', 'semi'):
+                result = trader.run_intraday(min_score=min_score)
+            else:
+                print(f"  지원하지 않는 모드: {trade_mode}")
+                continue
+
+            results.append({
+                'user_id': user_id,
+                'trade_mode': trade_mode,
+                'result': result
+            })
+
+        except Exception as e:
+            print(f"  [ERROR] {e}")
+            import traceback
+            traceback.print_exc()
+            results.append({
+                'user_id': user_id,
+                'trade_mode': trade_mode,
+                'result': {'status': 'error', 'message': str(e)}
+            })
+
+    # 결과 요약
+    print("\n" + "=" * 70)
+    print("  실행 결과 요약")
+    print("=" * 70)
+
+    for r in results:
+        status = r['result'].get('status', 'unknown')
+        buy = r['result'].get('buy_count', 0)
+        sell = r['result'].get('sell_count', 0)
+        print(f"  user_id={r['user_id']}: {status} (매수:{buy}, 매도:{sell})")
+
+    print("=" * 70 + "\n")
+
+
 def main():
     parser = argparse.ArgumentParser(description="자동매매 시스템")
     parser.add_argument("--dry-run", action="store_true", help="테스트 실행 (실제 주문 X)")
@@ -1815,7 +2241,13 @@ def main():
     parser.add_argument("--intraday", action="store_true", help="장중 10분 스크리닝 모드")
     parser.add_argument("--min-score", type=int, default=75, help="장중 스크리닝 최소 점수 (기본: 75)")
     parser.add_argument("--user-id", type=int, help="사용자 ID (장중 스크리닝용)")
+    parser.add_argument("--all", action="store_true", help="모든 활성화된 사용자 실행")
     args = parser.parse_args()
+
+    # --all 옵션: 모든 활성화된 사용자 실행
+    if args.all:
+        run_for_all_users(dry_run=args.dry_run, min_score=args.min_score)
+        return
 
     # user_id가 지정되면 해당 사용자 설정 사용
     trader = AutoTrader(dry_run=args.dry_run, user_id=args.user_id)

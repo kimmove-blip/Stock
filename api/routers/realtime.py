@@ -89,6 +89,12 @@ async def get_realtime_price(stock_code: str):
     # 캐시 확인
     cached = get_cached_realtime(stock_code)
     if cached:
+        # [중요] 장 시작 전(07:00~09:00) 등락률 0 처리
+        now = datetime.now()
+        if 7 <= now.hour < 9:
+            cached = cached.copy()
+            cached['change_rate'] = 0.0
+            cached['change'] = 0
         return RealtimePrice(**cached)
 
     kis = get_kis()
@@ -106,6 +112,12 @@ async def get_realtime_price(stock_code: str):
                 status_code=404,
                 detail=f"종목 {stock_code}의 시세를 조회할 수 없습니다."
             )
+
+        # [중요] 장 시작 전(07:00~09:00) 등락률 0 처리
+        now = datetime.now()
+        if 7 <= now.hour < 9:
+            price_data['change_rate'] = 0.0
+            price_data['change'] = 0
 
         # 캐시 저장
         set_realtime_cache(stock_code, price_data)
@@ -161,6 +173,13 @@ async def get_multiple_realtime_prices(stock_codes: List[str]):
         # 캐시 + 새로 조회한 것 합치기
         all_prices = cached_prices + new_prices
 
+        # [중요] 장 시작 전(07:00~09:00) 등락률 0 처리
+        now = datetime.now()
+        if 7 <= now.hour < 9:
+            for p in all_prices:
+                p['change_rate'] = 0.0
+                p['change'] = 0
+
         return RealtimePriceList(
             prices=[RealtimePrice(**p) for p in all_prices],
             updated_at=datetime.now().isoformat()
@@ -191,11 +210,17 @@ async def get_top100_realtime_prices():
     output_dir = Path(__file__).parent.parent.parent / "output"
     today = datetime.now().strftime("%Y%m%d")
 
-    # 오늘 또는 최근 TOP100 파일 찾기
+    # 오늘 또는 최근 TOP100 파일 찾기 (top100_YYYYMMDD.json 형식만)
+    import re
     top100_file = output_dir / f"top100_{today}.json"
     if not top100_file.exists():
-        # 최근 파일 찾기
-        json_files = sorted(output_dir.glob("top100_*.json"), reverse=True)
+        # 최근 파일 찾기 (v4, strict, trend 등 제외)
+        pattern = re.compile(r'^top100_(\d{8})\.json$')
+        json_files = []
+        for f in output_dir.glob("top100_*.json"):
+            if pattern.match(f.name):
+                json_files.append(f)
+        json_files = sorted(json_files, reverse=True)
         if json_files:
             top100_file = json_files[0]
         else:
@@ -208,8 +233,14 @@ async def get_top100_realtime_prices():
         with open(top100_file, "r", encoding="utf-8") as f:
             top100_data = json.load(f)
 
+        # 데이터 형식 처리 (dict with 'stocks' key or list)
+        if isinstance(top100_data, dict):
+            stocks_list = top100_data.get('stocks', [])
+        else:
+            stocks_list = top100_data
+
         # 종목코드 추출
-        stock_codes = [item["code"] for item in top100_data if "code" in item]
+        stock_codes = [item["code"] for item in stocks_list if "code" in item]
 
         if not stock_codes:
             raise HTTPException(
@@ -245,6 +276,18 @@ async def get_top100_realtime_prices():
 
         # 캐시 + 새로 조회한 것 합치기
         all_prices = cached_prices + new_prices
+
+        # ========================================================
+        # [중요] 장 시작 전 등락률 0 처리 규칙
+        # - 07:00 ~ 09:00 사이에는 무조건 change_rate를 0으로
+        # - 관련 문서: CLAUDE.md "장 시작 전 데이터 처리 규칙" 참조
+        # ========================================================
+        now = datetime.now()
+        is_before_market = 7 <= now.hour < 9
+        if is_before_market:
+            for p in all_prices:
+                p['change_rate'] = 0.0
+                p['change'] = 0
 
         result = RealtimePriceList(
             prices=[RealtimePrice(**p) for p in all_prices],
@@ -303,6 +346,13 @@ async def get_cached_price(stock_code: str):
     if not cached:
         raise HTTPException(status_code=404, detail=f"종목 {stock_code}의 캐시된 시세가 없습니다")
 
+    # [중요] 장 시작 전(07:00~09:00) 등락률 0 처리
+    now = datetime.now()
+    if 7 <= now.hour < 9:
+        cached = cached.copy()
+        cached['change_rate'] = 0.0
+        cached['change'] = 0
+
     return CachedPrice(**cached)
 
 
@@ -319,6 +369,13 @@ async def get_cached_prices(stock_codes: List[str]):
     cached_list = db.get_cached_prices(stock_codes)
     last_updated = db.get_price_cache_updated_at()
     cache_count = db.get_price_cache_count()
+
+    # [중요] 장 시작 전(07:00~09:00) 등락률 0 처리
+    now = datetime.now()
+    if 7 <= now.hour < 9:
+        for p in cached_list:
+            p['change_rate'] = 0.0
+            p['change'] = 0
 
     return CachedPriceResponse(
         prices=[CachedPrice(**p) for p in cached_list],
@@ -386,6 +443,13 @@ async def get_hybrid_prices(codes: str = Query(..., description="쉼표로 구�
 
     last_updated = db.get_price_cache_updated_at()
     cache_count = db.get_price_cache_count()
+
+    # [중요] 장 시작 전(07:00~09:00) 등락률 0 처리
+    now = datetime.now()
+    if 7 <= now.hour < 9:
+        for p in cached_list:
+            p['change_rate'] = 0.0
+            p['change'] = 0
 
     return CachedPriceResponse(
         prices=[CachedPrice(**p) for p in cached_list],
