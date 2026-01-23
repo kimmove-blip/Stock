@@ -88,6 +88,23 @@ def get_daily_report_css():
         background: #f7fafc;
         border-radius: 8px;
     }
+    /* 페이지 나눔 방지 - 제목과 표가 같이 이동 */
+    .section {
+        page-break-inside: avoid;
+        break-inside: avoid;
+    }
+    h2 {
+        page-break-after: avoid;
+        break-after: avoid;
+    }
+    table {
+        page-break-inside: avoid;
+        break-inside: avoid;
+    }
+    .summary-box {
+        page-break-inside: avoid;
+        break-inside: avoid;
+    }
     """
     return base + extra
 
@@ -122,7 +139,15 @@ def generate_daily_report_html(user_id: int, report_date: str = None, save_snaps
     if not api_key_data:
         return None
 
-    user_name = api_key_data.get('name', f'사용자 {user_id}')
+    # 사용자 이름은 stock_data.db에서 조회
+    import sqlite3 as sqlite3_module
+    stock_db_path = Path(__file__).parent / "database" / "stock_data.db"
+    with sqlite3_module.connect(str(stock_db_path)) as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT name FROM users WHERE id = ?", (user_id,))
+        row = cursor.fetchone()
+        user_name = row[0] if row else f'사용자 {user_id}'
+
     is_mock = bool(api_key_data.get('is_mock', True))
     account_type = "모의투자" if is_mock else "실전투자"
     account_number = api_key_data.get('account_number', '')
@@ -138,9 +163,9 @@ def generate_daily_report_html(user_id: int, report_date: str = None, save_snaps
 
     # 오늘 거래 내역
     trades = logger.get_trade_history(user_id, start_date=report_date, end_date=report_date)
-    today_trades = trades
-    today_buys = [t for t in today_trades if t.get('order_type') == 'BUY']
-    today_sells = [t for t in today_trades if t.get('order_type') == 'SELL']
+    today_trades = [t for t in trades if t.get('status') == 'executed']  # 체결된 것만
+    today_buys = [t for t in today_trades if t.get('side') == 'buy']
+    today_sells = [t for t in today_trades if t.get('side') == 'sell']
 
     # 오늘 매수한 종목 코드
     today_bought_codes = {t.get('stock_code') for t in today_buys}
@@ -174,6 +199,9 @@ def generate_daily_report_html(user_id: int, report_date: str = None, save_snaps
         asset_diff_str = "-"
         asset_diff_cls = ""
 
+    # 오늘 실현손익 계산 (매도 거래에서)
+    realized_profit = sum((t.get('profit_loss') or 0) for t in today_sells)
+
     # 오늘 자산 스냅샷 저장
     if save_snapshot:
         logger.save_daily_performance(
@@ -194,10 +222,10 @@ def generate_daily_report_html(user_id: int, report_date: str = None, save_snaps
         <td><strong>{total_assets:,.0f}원</strong></td>
         <td>{prev_total_assets:,.0f}원</td>
         <td class="{asset_diff_cls}">{asset_diff_str}</td>
-        <td>D+2예수금 + 보유종목</td>
+        <td>현금 + 보유종목</td>
     </tr>
     <tr>
-        <td>D+2 예수금</td>
+        <td>현금</td>
         <td>{d2_cash:,.0f}원</td>
         <td>{prev_d2_cash:,.0f}원</td>
         <td>{format_change(d2_cash, prev_d2_cash)[0]}</td>
@@ -224,16 +252,23 @@ def generate_daily_report_html(user_id: int, report_date: str = None, save_snaps
         <td>-</td>
         <td></td>
     </tr>
+    <tr>
+        <td>오늘 실현손익</td>
+        <td class="{'profit' if realized_profit >= 0 else 'loss'}">{realized_profit:+,.0f}원</td>
+        <td>-</td>
+        <td>-</td>
+        <td>매도 시 확정</td>
+    </tr>
     """ if prev_total_assets else f"""
     <tr>
         <td>총 자산</td>
         <td><strong>{total_assets:,.0f}원</strong></td>
         <td>-</td>
         <td>-</td>
-        <td>D+2예수금 + 보유종목</td>
+        <td>현금 + 보유종목</td>
     </tr>
     <tr>
-        <td>D+2 예수금</td>
+        <td>현금</td>
         <td>{d2_cash:,.0f}원</td>
         <td>-</td>
         <td>-</td>
@@ -259,6 +294,13 @@ def generate_daily_report_html(user_id: int, report_date: str = None, save_snaps
         <td>-</td>
         <td>-</td>
         <td></td>
+    </tr>
+    <tr>
+        <td>오늘 실현손익</td>
+        <td class="{'profit' if realized_profit >= 0 else 'loss'}">{realized_profit:+,.0f}원</td>
+        <td>-</td>
+        <td>-</td>
+        <td>매도 시 확정</td>
     </tr>
     """
 
@@ -304,7 +346,9 @@ def generate_daily_report_html(user_id: int, report_date: str = None, save_snaps
         holdings_html = "<table class='holdings-table'>"
         holdings_html += "<tr><th>종목</th><th>수량</th><th>평단가</th><th>현재가</th><th>평가금액</th><th>손익</th><th>수익률</th></tr>"
         for h in sorted(holdings, key=lambda x: x.get('profit_rate', 0), reverse=True):
-            profit_cls = 'profit' if h.get('profit_rate', 0) >= 0 else 'loss'
+            profit_loss = h.get('profit_loss', 0) or 0
+            profit_rate = h.get('profit_rate', 0) or 0
+            profit_cls = 'profit' if profit_rate >= 0 else 'loss'
             badge = "<span class='badge-new'>NEW</span>" if h.get('stock_code') in today_bought_codes else ""
             holdings_html += f"""<tr>
                 <td>{h.get('stock_name', h.get('stock_code'))}{badge}</td>
@@ -312,8 +356,8 @@ def generate_daily_report_html(user_id: int, report_date: str = None, save_snaps
                 <td style='text-align:right'>{h.get('avg_price', 0):,}원</td>
                 <td style='text-align:right'>{h.get('current_price', 0):,}원</td>
                 <td style='text-align:right'>{h.get('eval_amount', 0):,}원</td>
-                <td style='text-align:right' class='{profit_cls}'>{h.get('profit_amount', 0):+,}원</td>
-                <td style='text-align:right' class='{profit_cls}'>{h.get('profit_rate', 0):+.2f}%</td>
+                <td style='text-align:right' class='{profit_cls}'>{profit_loss:+,}원</td>
+                <td style='text-align:right' class='{profit_cls}'>{profit_rate:+.2f}%</td>
             </tr>"""
         holdings_html += "</table>"
     else:
@@ -324,7 +368,7 @@ def generate_daily_report_html(user_id: int, report_date: str = None, save_snaps
     sell_count = len(today_sells)
     buy_total = sum(t.get('quantity', 0) * t.get('price', 0) for t in today_buys)
     sell_total = sum(t.get('quantity', 0) * t.get('price', 0) for t in today_sells)
-    realized_profit = sum(t.get('profit_amount', 0) for t in today_sells)
+    # realized_profit은 위에서 이미 계산됨
 
     # 전일대비 요약 박스
     if prev_total_assets:
@@ -375,24 +419,30 @@ def generate_daily_report_html(user_id: int, report_date: str = None, save_snaps
         <div class="header-info">
             <strong>보고일:</strong> {report_date} &nbsp;|&nbsp;
             <strong>계정:</strong> {user_name} &nbsp;|&nbsp;
-            <strong>계좌:</strong> {account_number} ({account_type})
+            <strong>계좌:</strong> 한국투자증권 {account_number} ({account_type})
         </div>
 
         {daily_summary_html}
 
-        <h2>계좌 현황</h2>
-        <table class="account-table">
-            <tr><th>항목</th><th>금액</th><th>전일</th><th>증감</th><th>비고</th></tr>
-            {account_rows}
-        </table>
+        <div class="section">
+            <h2>계좌 현황</h2>
+            <table class="account-table">
+                <tr><th>항목</th><th>금액</th><th>전일</th><th>증감</th><th>비고</th></tr>
+                {account_rows}
+            </table>
+        </div>
 
         {trade_summary_html}
 
-        <h2>오늘 거래 내역</h2>
-        {trades_html}
+        <div class="section">
+            <h2>오늘 거래 내역</h2>
+            {trades_html}
+        </div>
 
-        <h2>현재 보유 종목 ({len(holdings)}개)</h2>
-        {holdings_html}
+        <div class="section">
+            <h2>현재 보유 종목 ({len(holdings)}개)</h2>
+            {holdings_html}
+        </div>
 
         <div class="footer">
             <p style="text-align: center;">Generated by Kim's AI - Auto Trade System</p>
@@ -413,10 +463,19 @@ def generate_daily_report_pdf(user_id: int, output_path: str = None, report_date
         report_date = datetime.now().strftime("%Y-%m-%d")
 
     if output_path is None:
+        # 사용자 이름 조회
+        import sqlite3 as sqlite3_module
+        stock_db_path = Path(__file__).parent / "database" / "stock_data.db"
+        with sqlite3_module.connect(str(stock_db_path)) as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT name FROM users WHERE id = ?", (user_id,))
+            row = cursor.fetchone()
+            user_name = row[0] if row else f'user{user_id}'
+
         output_dir = Path(__file__).parent / "output"
         output_dir.mkdir(exist_ok=True)
         date_str = report_date.replace("-", "")
-        output_path = str(output_dir / f"daily_trade_report_{date_str}.pdf")
+        output_path = str(output_dir / f"daily_trade_report_{user_name}_{date_str}.pdf")
 
     html = generate_daily_report_html(user_id, report_date, save_snapshot=save_snapshot)
     if html is None:
