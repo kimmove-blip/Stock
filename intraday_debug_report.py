@@ -222,11 +222,11 @@ def run_debug_report(user_id: int = 7, send_push: bool = True):
 
         report_lines.append("")
 
-    # 5. 전종목 스크리닝
+    # 5. 전종목 스크리닝 (전체 결과 저장)
     print("전종목 스크리닝 중...")
     screener = MarketScreener(max_workers=ScreeningConfig.MAX_WORKERS)
     top_stocks, stats = screener.run_full_screening(
-        top_n=ScreeningConfig.TOP_N,
+        top_n=None,  # 전체 결과 저장
         mode="strict",
         min_marcap=ScreeningConfig.MIN_MARKET_CAP,
         max_marcap=ScreeningConfig.MAX_MARKET_CAP,
@@ -478,6 +478,10 @@ def run_debug_report(user_id: int = 7, send_push: bool = True):
             "stocks_75to79": [
                 {"code": s.get("code"), "name": s.get("name"), "v2_score": s.get("score"), "v4_score": v4_scores.get(s.get("code"), 0), "prev_score": prev_scores.get(s.get("code"), 0)}
                 for s in stocks_75to79[:20]
+            ],
+            "all_stocks": [
+                {"code": s.get("code"), "name": s.get("name"), "score": s.get("score"), "close": s.get("close", 0), "change_pct": round(s.get("change_pct", 0), 2)}
+                for s in top_stocks
             ],
             "holdings": [
                 {"code": h.get("stock_code"), "name": h.get("stock_name"), "profit_rate": h.get("profit_rate", 0)}
