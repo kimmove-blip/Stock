@@ -865,6 +865,303 @@ def analyze_volume_profile(df: pd.DataFrame, bins: int = 20) -> Dict:
 
 
 # ============================================================
+# Phase 6: 세력 매집 단계 및 엑시트 신호 감지 (신규)
+# ============================================================
+
+def detect_smart_money_stage(
+    df: pd.DataFrame,
+    wyckoff: Dict,
+    location: Dict,
+    investor_data: Optional[Dict] = None,
+) -> Dict:
+    """
+    세력(스마트머니) 자금 흐름 단계 분류
+
+    5단계 분류:
+    ┌─────────────────────────────────────────────────────────────────┐
+    │ Stage 1: EARLY_ACCUMULATION (초기 매집)                          │
+    │   - 와이코프 Phase A, 바닥권, 대량거래+하락정지                    │
+    │   - 신호: SC(매도 클라이맥스), AR(자동반등)                        │
+    │   - 투자 전략: 관망 또는 소량 진입                                 │
+    ├─────────────────────────────────────────────────────────────────┤
+    │ Stage 2: MID_ACCUMULATION (중기 매집)                            │
+    │   - 와이코프 Phase B, 박스권 형성, 거래량 점진 감소                 │
+    │   - 신호: TR_CONTRACTION, VOL_DRYUP, ST                          │
+    │   - 투자 전략: 분할 매수 시작                                     │
+    ├─────────────────────────────────────────────────────────────────┤
+    │ Stage 3: LATE_ACCUMULATION (매집 완료 임박)                       │
+    │   - 와이코프 Phase C, Spring/LPS 발생                             │
+    │   - 신호: SPRING, LPS, OBV 다이버전스                             │
+    │   - 투자 전략: 적극 매수 (최적 진입 시점)                          │
+    ├─────────────────────────────────────────────────────────────────┤
+    │ Stage 4: MARKUP (시세 분출)                                      │
+    │   - 와이코프 Phase D/E, 저항선 돌파, 거래량 급증                    │
+    │   - 신호: SOS(강세 신호), 정배열, 신고가                           │
+    │   - 투자 전략: 보유 유지, 추격 매수 주의                           │
+    ├─────────────────────────────────────────────────────────────────┤
+    │ Stage 5: DISTRIBUTION (분산/엑시트)                               │
+    │   - 고점권, 피뢰침 음봉, 대량 거래+하락                            │
+    │   - 신호: 윗꼬리, 기관/외국인 연속 순매도                          │
+    │   - 투자 전략: 익절/청산 검토                                     │
+    └─────────────────────────────────────────────────────────────────┘
+
+    Returns:
+        {
+            'stage': 1-5 또는 0(미확인),
+            'stage_name': str,
+            'stage_description': str,
+            'confidence': 0-100,
+            'action_hint': str,  # 투자 힌트
+            'progress_pct': 0-100,  # 매집 진행률 (Stage 1~3만 해당)
+        }
+    """
+    result = {
+        'stage': 0,
+        'stage_name': 'UNKNOWN',
+        'stage_description': '분석 데이터 부족',
+        'confidence': 0,
+        'action_hint': '추가 분석 필요',
+        'progress_pct': 0,
+    }
+
+    try:
+        if len(df) < 60:
+            return result
+
+        wyckoff_phase = wyckoff.get('phase')
+        events = wyckoff.get('events', [])
+        is_bottom = location.get('is_bottom_zone', False)
+        is_top = location.get('is_top_zone', False)
+
+        # 기관/외국인 수급 분석
+        inst_selling = False
+        foreign_selling = False
+        if investor_data:
+            inst_net = investor_data.get('institution_net', 0)
+            foreign_net = investor_data.get('foreign_net', 0)
+            inst_selling = inst_net < -50000  # 5만주 이상 순매도
+            foreign_selling = foreign_net < -50000
+
+        # Stage 5: DISTRIBUTION (분산/엑시트)
+        # 고점권 + (피뢰침 or 기관/외국인 동반 순매도)
+        distribution = detect_distribution_pattern(df)
+        if is_top and (distribution['detected'] or (inst_selling and foreign_selling)):
+            result['stage'] = 5
+            result['stage_name'] = 'DISTRIBUTION'
+            result['stage_description'] = '세력 분산(물량 털기) 국면 - 엑시트 진행 중'
+            result['confidence'] = 90 if distribution['detected'] else 70
+            result['action_hint'] = '보유 시 익절/청산 검토, 신규 진입 금지'
+            return result
+
+        # Stage 4: MARKUP (시세 분출)
+        # Phase D 또는 SOS 발생 또는 (Phase C + 고점 근처)
+        if wyckoff_phase == 'D' or 'SOS' in events:
+            result['stage'] = 4
+            result['stage_name'] = 'MARKUP'
+            result['stage_description'] = '시세 분출 국면 - 상승 추세 진행 중'
+            result['confidence'] = wyckoff.get('confidence', 70)
+            result['action_hint'] = '보유 유지, 추격 매수 주의 (고점 경계)'
+            return result
+
+        # Phase C 인데 고점 근처면 Markup 단계
+        if wyckoff_phase == 'C' and location.get('pct_from_high_60d', -100) >= -10:
+            result['stage'] = 4
+            result['stage_name'] = 'MARKUP'
+            result['stage_description'] = '시세 분출 초기 - 돌파 진행 중'
+            result['confidence'] = 60
+            result['action_hint'] = '돌파 확인 후 추가 매수 검토'
+            return result
+
+        # Stage 3: LATE_ACCUMULATION (매집 완료 임박)
+        if wyckoff_phase == 'C' or 'SPRING' in events or 'LPS' in events:
+            result['stage'] = 3
+            result['stage_name'] = 'LATE_ACCUMULATION'
+            result['stage_description'] = '매집 완료 임박 - 최적 진입 구간'
+            result['confidence'] = wyckoff.get('confidence', 70)
+            result['action_hint'] = '적극 매수 검토 (리스크 대비 수익 최적)'
+            result['progress_pct'] = 85
+            return result
+
+        # Stage 2: MID_ACCUMULATION (중기 매집)
+        if wyckoff_phase == 'B' or ('TR_CONTRACTION' in events and 'VOL_DRYUP' in events):
+            result['stage'] = 2
+            result['stage_name'] = 'MID_ACCUMULATION'
+            result['stage_description'] = '중기 매집 진행 - 박스권 물량 소화 중'
+            result['confidence'] = wyckoff.get('confidence', 50)
+            result['action_hint'] = '분할 매수 시작 검토 (하단 지지 확인)'
+            result['progress_pct'] = 50
+            return result
+
+        # Stage 1: EARLY_ACCUMULATION (초기 매집)
+        if wyckoff_phase == 'A' or ('SC' in events and 'AR' in events):
+            result['stage'] = 1
+            result['stage_name'] = 'EARLY_ACCUMULATION'
+            result['stage_description'] = '초기 매집 - 하락 정지 확인'
+            result['confidence'] = wyckoff.get('confidence', 30)
+            result['action_hint'] = '관망 또는 소량 진입 (추가 하락 가능)'
+            result['progress_pct'] = 20
+            return result
+
+        # 바닥권이지만 Phase 미확인
+        if is_bottom:
+            result['stage'] = 1
+            result['stage_name'] = 'POSSIBLE_ACCUMULATION'
+            result['stage_description'] = '바닥권 - 매집 가능성 있으나 확증 부족'
+            result['confidence'] = 30
+            result['action_hint'] = '와이코프 패턴 발생 대기'
+            result['progress_pct'] = 10
+            return result
+
+    except Exception:
+        pass
+
+    return result
+
+
+def detect_exit_signals(
+    df: pd.DataFrame,
+    location: Dict,
+    investor_data: Optional[Dict] = None,
+    short_data: Optional[Dict] = None,
+) -> Dict:
+    """
+    세력 엑시트(이탈) 경고 신호 감지
+
+    엑시트 신호 유형:
+    1. 분산 패턴: 고점권 피뢰침 음봉, 대량거래 윗꼬리
+    2. 수급 이탈: 기관+외국인 연속 순매도
+    3. 거래량 이상: 급등 후 거래량 급감 (세력 이탈 후 개미만 남음)
+    4. 기술적 이탈: 주요 지지선 이탈, 이평선 역배열 전환
+
+    Returns:
+        {
+            'exit_warning': bool,           # 엑시트 경고 여부
+            'warning_level': 'critical' | 'high' | 'medium' | 'low' | 'none',
+            'signals': [],                   # 감지된 엑시트 신호
+            'recommendation': str,           # 대응 권고
+            'days_since_peak': int,          # 고점 이후 경과일
+            'decline_from_peak': float,      # 고점 대비 하락률
+        }
+    """
+    result = {
+        'exit_warning': False,
+        'warning_level': 'none',
+        'signals': [],
+        'recommendation': '',
+        'days_since_peak': 0,
+        'decline_from_peak': 0,
+    }
+
+    try:
+        if len(df) < 20:
+            return result
+
+        curr_close = df.iloc[-1]['Close']
+        curr_volume = df.iloc[-1]['Volume']
+        vol_ma = df['Volume'].tail(20).mean()
+
+        # 고점 정보
+        high_60d = df['High'].tail(60).max()
+        high_60d_idx = df['High'].tail(60).idxmax()
+        days_since_peak = len(df) - df.index.get_loc(high_60d_idx) - 1 if high_60d_idx in df.index else 0
+        decline_from_peak = (curr_close / high_60d - 1) * 100
+
+        result['days_since_peak'] = days_since_peak
+        result['decline_from_peak'] = decline_from_peak
+
+        warning_score = 0  # 0-100
+
+        # 1. 분산 패턴 감지
+        distribution = detect_distribution_pattern(df)
+        if distribution['detected']:
+            if distribution['severity'] == 'high':
+                warning_score += 40
+                result['signals'].append('DISTRIBUTION_LIGHTNING_ROD')
+            elif distribution['severity'] == 'medium':
+                warning_score += 25
+                result['signals'].append('DISTRIBUTION_REJECTION')
+
+        # 2. 고점권 + 급락 시작
+        if location.get('is_top_zone') and decline_from_peak < -5:
+            warning_score += 20
+            result['signals'].append('TOP_ZONE_DECLINE')
+
+        # 3. 수급 이탈 (기관+외국인 동반 순매도)
+        if investor_data:
+            foreign_net = investor_data.get('foreign_net', 0)
+            inst_net = investor_data.get('institution_net', 0)
+            cons_foreign_sell = investor_data.get('consecutive_foreign_buy', 0)
+            cons_inst_sell = investor_data.get('consecutive_institution_buy', 0)
+
+            # 5일 합계 모두 순매도
+            if foreign_net < 0 and inst_net < 0:
+                warning_score += 15
+                result['signals'].append('FOREIGN_INST_BOTH_SELLING')
+
+            # 연속 순매도 일수 분석 (consecutive_buy가 0이면 매도 가능성)
+            daily_data = investor_data.get('daily', [])
+            consecutive_sell_days = 0
+            for d in daily_data:
+                if d.get('foreign_net', 0) < 0 and d.get('institution_net', 0) < 0:
+                    consecutive_sell_days += 1
+                else:
+                    break
+
+            if consecutive_sell_days >= 5:
+                warning_score += 25
+                result['signals'].append(f'CONSECUTIVE_SELL_{consecutive_sell_days}DAYS')
+            elif consecutive_sell_days >= 3:
+                warning_score += 15
+                result['signals'].append(f'CONSECUTIVE_SELL_{consecutive_sell_days}DAYS')
+
+        # 4. 거래량 이상 (고점 후 급감 - 세력 이탈)
+        if days_since_peak <= 10 and days_since_peak > 0:
+            # 고점 시점 거래량
+            peak_volume = df.loc[high_60d_idx, 'Volume'] if high_60d_idx in df.index else vol_ma
+            if curr_volume < peak_volume * 0.3:
+                warning_score += 15
+                result['signals'].append('VOLUME_COLLAPSE_AFTER_PEAK')
+
+        # 5. 이평선 역배열 전환 조짐
+        sma5 = ta.sma(df['Close'], length=5)
+        sma20 = ta.sma(df['Close'], length=20)
+        if sma5 is not None and sma20 is not None:
+            if sma5.iloc[-1] < sma20.iloc[-1] and sma5.iloc[-5] > sma20.iloc[-5]:
+                warning_score += 20
+                result['signals'].append('MA_DEATH_CROSS_FORMING')
+
+        # 6. 숏커버링 종료 후 하락 전환
+        if short_data:
+            balance_change = short_data.get('balance_change_pct', 0)
+            # 대차잔고가 급감했었는데 (숏커버링 완료) 이제 다시 증가 시작
+            if balance_change > 10:
+                warning_score += 15
+                result['signals'].append('SHORT_COVERING_ENDED')
+
+        # 경고 레벨 판정
+        if warning_score >= 60:
+            result['exit_warning'] = True
+            result['warning_level'] = 'critical'
+            result['recommendation'] = '즉시 청산 권고 - 복수의 강한 엑시트 신호 감지'
+        elif warning_score >= 40:
+            result['exit_warning'] = True
+            result['warning_level'] = 'high'
+            result['recommendation'] = '익절 검토 - 세력 이탈 징후 다수 감지'
+        elif warning_score >= 25:
+            result['exit_warning'] = True
+            result['warning_level'] = 'medium'
+            result['recommendation'] = '경계 필요 - 추가 하락 시 손절 준비'
+        elif warning_score >= 10:
+            result['warning_level'] = 'low'
+            result['recommendation'] = '모니터링 강화 - 이탈 조짐 관찰 중'
+
+    except Exception:
+        pass
+
+    return result
+
+
+# ============================================================
 # 기존 V3 패턴 (위치 필터 적용)
 # ============================================================
 
@@ -1142,6 +1439,8 @@ def calculate_score_v3_5(
             'location': 가격 위치 정보,
             'wyckoff': 와이코프 Phase 정보,
             'indicators': 지표 상세값,
+            'stage': 세력 매집 단계 정보 (신규),
+            'exit_warning': 엑시트 경고 정보 (신규),
             'version': 'v3.5'
         }
     """
@@ -1164,6 +1463,8 @@ def calculate_score_v3_5(
         'location': {},
         'wyckoff': {},
         'indicators': {},
+        'stage': {},           # 세력 매집 단계 정보
+        'exit_warning': {},    # 엑시트 경고 정보
         'version': 'v3.5'
     }
 
@@ -1353,6 +1654,14 @@ def calculate_score_v3_5(
 
         result['bonus_score'] = bonus_score
 
+        # ========== Phase 6: 세력 매집 단계 및 엑시트 신호 ==========
+        result['stage'] = detect_smart_money_stage(df, wyckoff, location, investor_data)
+        result['exit_warning'] = detect_exit_signals(df, location, investor_data, short_data)
+
+        # 엑시트 경고 시 시그널 추가
+        if result['exit_warning'].get('warning_level') in ('critical', 'high'):
+            result['signals'].append(f"EXIT_WARNING_{result['exit_warning']['warning_level'].upper()}")
+
         # ========== 최종 점수 계산 ==========
         total_score = (
             result['disclosure_score'] +
@@ -1457,5 +1766,23 @@ if __name__ == "__main__":
             print(f"위치: {result['location'].get('location', '-')}")
             print(f"패턴: {result['patterns']}")
             print(f"신호: {result['signals'][:10]}")  # 상위 10개만
+
+            # 세력 매집 단계
+            stage = result.get('stage', {})
+            if stage:
+                print(f"\n[세력 매집 단계]")
+                print(f"  단계: {stage.get('stage', 0)} ({stage.get('stage_name', '-')})")
+                print(f"  신뢰도: {stage.get('confidence', 0):.0f}%")
+                print(f"  설명: {stage.get('stage_description', '-')}")
+                print(f"  행동 힌트: {stage.get('action_hint', '-')}")
+
+            # 엑시트 경고
+            exit_warn = result.get('exit_warning', {})
+            if exit_warn and exit_warn.get('warning_level', 'none') != 'none':
+                print(f"\n[엑시트 경고]")
+                print(f"  레벨: {exit_warn.get('warning_level', '-')}")
+                print(f"  점수: {exit_warn.get('score', 0)}")
+                print(f"  신호: {exit_warn.get('signals', [])}")
+
             if result['disqualified']:
                 print(f"과락: {result['disqualify_reason']}")
