@@ -487,11 +487,16 @@ class DatabaseManager:
 
     def add_alert_history(self, user_id, stock_code, alert_type, message=None, stock_name=None):
         """알림 기록 추가"""
+        from datetime import datetime, timezone, timedelta
+        # 한국 시간 (UTC+9)
+        kst = timezone(timedelta(hours=9))
+        now_kst = datetime.now(kst).strftime('%Y-%m-%d %H:%M:%S')
+
         with self.get_connection() as conn:
             try:
                 conn.execute(
-                    "INSERT INTO alert_history (user_id, stock_code, stock_name, alert_type, message) VALUES (?, ?, ?, ?, ?)",
-                    (user_id, stock_code, stock_name, alert_type, message)
+                    "INSERT INTO alert_history (user_id, stock_code, stock_name, alert_type, message, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+                    (user_id, stock_code, stock_name, alert_type, message, now_kst)
                 )
                 conn.commit()
                 return True
@@ -499,11 +504,15 @@ class DatabaseManager:
                 return False  # 오늘 이미 알림 전송됨
 
     def was_alert_sent_today(self, user_id, stock_code, alert_type):
-        """오늘 해당 알림이 이미 전송되었는지 확인"""
+        """오늘 해당 알림이 이미 전송되었는지 확인 (KST 기준)"""
+        from datetime import datetime, timezone, timedelta
+        kst = timezone(timedelta(hours=9))
+        today_kst = datetime.now(kst).strftime('%Y-%m-%d')
+
         with self.get_connection() as conn:
             cursor = conn.execute(
-                "SELECT 1 FROM alert_history WHERE user_id = ? AND stock_code = ? AND alert_type = ? AND date(created_at) = date('now')",
-                (user_id, stock_code, alert_type)
+                "SELECT 1 FROM alert_history WHERE user_id = ? AND stock_code = ? AND alert_type = ? AND date(created_at) = ?",
+                (user_id, stock_code, alert_type, today_kst)
             )
             return cursor.fetchone() is not None
 
