@@ -286,30 +286,32 @@ class MarketScreener:
                 executor.submit(self._analyze_single_stock, stock, mode): stock
                 for stock in stocks_to_analyze
             }
-            # 완료된 작업 수집 (타임아웃 30초)
-            for future in as_completed(future_to_stock):
-                completed += 1
-                stock = future_to_stock[future]
-                try:
-                    result = future.result(timeout=30)
-                    if result is not None:
-                        results.append(result)
-                except TimeoutError:
-                    print(f"    ⚠ 타임아웃: {stock.get('Name', stock.get('Code'))} (30초 초과)")
-                except Exception as e:
-                    print(f"    ⚠ 오류: {stock.get('Name', stock.get('Code'))} - {e}")
-                # 진행 상황 출력
-                if completed % progress_interval == 0 or completed == total:
-                    elapsed = time.time() - start_time
-                    eta = (
-                        (elapsed / completed) * (total - completed)
-                        if completed > 0
-                        else 0
-                    )
-                    print(
-                        f"    → 진행: {completed:,}/{total:,} ({completed / total * 100:.1f}%) | "
-                        f"유효: {len(results):,} | ETA: {eta:.0f}초"
-                    )
+            # 완료된 작업 수집 (전체 타임아웃 3분)
+            try:
+                for future in as_completed(future_to_stock, timeout=180):
+                    completed += 1
+                    stock = future_to_stock[future]
+                    try:
+                        result = future.result(timeout=5)
+                        if result is not None:
+                            results.append(result)
+                    except Exception as e:
+                        print(f"    ⚠ 오류: {stock.get('Name', stock.get('Code'))} - {e}")
+                    # 진행 상황 출력
+                    if completed % progress_interval == 0 or completed == total:
+                        elapsed = time.time() - start_time
+                        eta = (
+                            (elapsed / completed) * (total - completed)
+                            if completed > 0
+                            else 0
+                        )
+                        print(
+                            f"    → 진행: {completed:,}/{total:,} ({completed / total * 100:.1f}%) | "
+                            f"유효: {len(results):,} | ETA: {eta:.0f}초"
+                        )
+            except TimeoutError:
+                pending = len(future_to_stock) - completed
+                print(f"    ⚠ 전체 타임아웃: {pending}개 종목 미완료 (3분 초과)")
         elapsed_total = time.time() - start_time
         print(
             f"    → 스크리닝 완료: {len(results):,}개 유효 종목 (소요시간: {elapsed_total:.1f}초)"
