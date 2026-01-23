@@ -286,9 +286,9 @@ class MarketScreener:
                 executor.submit(self._analyze_single_stock, stock, mode): stock
                 for stock in stocks_to_analyze
             }
-            # 완료된 작업 수집 (전체 타임아웃 3분)
+            # 완료된 작업 수집 (전체 타임아웃 4분)
             try:
-                for future in as_completed(future_to_stock, timeout=180):
+                for future in as_completed(future_to_stock, timeout=240):
                     completed += 1
                     stock = future_to_stock[future]
                     try:
@@ -311,7 +311,7 @@ class MarketScreener:
                         )
             except TimeoutError:
                 pending = len(future_to_stock) - completed
-                print(f"    ⚠ 전체 타임아웃: {pending}개 종목 미완료 (3분 초과)")
+                print(f"    ⚠ 전체 타임아웃: {pending}개 종목 미완료 (4분 초과)")
         elapsed_total = time.time() - start_time
         print(
             f"    → 스크리닝 완료: {len(results):,}개 유효 종목 (소요시간: {elapsed_total:.1f}초)"
