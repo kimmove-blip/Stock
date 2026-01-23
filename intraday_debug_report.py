@@ -445,7 +445,9 @@ def run_debug_report(user_id: int = 7, send_push: bool = True):
 
     # 13. JSON 파일로 상세 리포트 저장
     try:
-        report_path = OUTPUT_DIR / f"intraday_report_{now.strftime('%Y%m%d_%H%M')}.json"
+        intraday_dir = OUTPUT_DIR / "intraday"
+        intraday_dir.mkdir(exist_ok=True)
+        report_path = intraday_dir / f"intraday_report_{now.strftime('%Y%m%d_%H%M')}.json"
         report_data = {
             "timestamp": now.isoformat(),
             "user_id": user_id,
