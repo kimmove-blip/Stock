@@ -334,7 +334,7 @@ def run_debug_report(user_id: int = 7, send_push: bool = True):
         report_lines.append("  (없음)")
     report_lines.append("")
 
-    # 10. 75~79점 종목 분석 (연속성 체크, V2 + V4)
+    # 10. 75~79점 종목 분석 (V2 + V4)
     report_lines.append(f"=== 75~79점: {len(stocks_75to79)}종목 (V2/V4) ===")
 
     for stock in stocks_75to79[:10]:
@@ -349,11 +349,6 @@ def run_debug_report(user_id: int = 7, send_push: bool = True):
 
         reasons = []
         can_buy = True
-
-        # 연속성 체크
-        if prev_score < 75:
-            reasons.append(f"연속성부족(이전{prev_score}점)")
-            can_buy = False
 
         # 거래량 체크
         if adjusted_volume < 1.5:
@@ -370,20 +365,20 @@ def run_debug_report(user_id: int = 7, send_push: bool = True):
             reasons.append("당일거래")
             can_buy = False
 
-        # 상한가 체크
-        if change_pct >= 29:
+        # 상한가 체크 (25% 이상)
+        if change_pct >= 25:
             reasons.append(f"상한가({change_pct:+.1f}%)")
             can_buy = False
 
         if can_buy and min_buy_score <= 75:
             buy_candidates.append({**stock, 'v4_score': v4_score})
-            status = f"매수가능(이전{prev_score}점)"
+            status = "매수가능"
         elif can_buy:
             status = f"점수미달(설정{min_buy_score}점)"
         else:
             status = ", ".join(reasons)
 
-        report_lines.append(f"  {name}: V2={score} V4={v4_score} (이전{prev_score}) -> {status}")
+        report_lines.append(f"  {name}: V2={score} V4={v4_score} -> {status}")
 
     if not stocks_75to79:
         report_lines.append("  (없음)")
