@@ -18,7 +18,7 @@ class ScreeningConfig:
     """스크리닝 설정"""
     MODE = "full"  # 무조건 full 모드 사용
     TOP_N = 100  # 상위 N개 종목 선정
-    MAX_WORKERS = 10  # 병렬 처리 워커 수
+    MAX_WORKERS = 5  # 병렬 처리 워커 수 (크론 환경 안정성)
     MIN_MARKET_CAP = 30_000_000_000  # 최소 시가총액 (300억)
     MAX_MARKET_CAP = 1_000_000_000_000  # 최대 시가총액 (1조) - 대형 우량주 제외
     MIN_TRADING_AMOUNT = 300_000_000  # 최소 거래대금 (3억)
@@ -28,20 +28,29 @@ class ScreeningConfig:
 class OutputConfig:
     """출력 파일 설정"""
     DATE_FORMAT = "%Y%m%d"
+    _version = None  # 스크리닝 엔진 버전 (클래스 변수)
+
+    @classmethod
+    def set_version(cls, version):
+        """스크리닝 엔진 버전 설정"""
+        cls._version = version
 
     @classmethod
     def get_filepath(cls, file_type):
         """파일 타입별 경로 반환"""
         date_str = datetime.now().strftime(cls.DATE_FORMAT)
 
+        # 버전이 설정되어 있고 v2가 아니면 파일명에 버전 포함
+        version_suffix = f"_{cls._version}" if cls._version and cls._version != "v2" else ""
+
         extensions = {
-            "excel": f"top100_{date_str}.xlsx",
-            "json": f"top100_{date_str}.json",
-            "csv": f"top100_{date_str}.csv",
-            "pdf": f"top100_{date_str}.pdf",
+            "excel": f"top100{version_suffix}_{date_str}.xlsx",
+            "json": f"top100{version_suffix}_{date_str}.json",
+            "csv": f"top100{version_suffix}_{date_str}.csv",
+            "pdf": f"top100{version_suffix}_{date_str}.pdf",
         }
 
-        filename = extensions.get(file_type, f"top100_{date_str}.txt")
+        filename = extensions.get(file_type, f"top100{version_suffix}_{date_str}.txt")
         return OUTPUT_DIR / filename
 
 
