@@ -272,9 +272,45 @@ pdfmetrics.registerFont(TTFont('NanumBarunpenB', '/home/kimhc/Stock/fonts/NanumB
 
 ---
 
+## 장 시작 전 데이터 처리 규칙 (중요!)
+
+### 등락률 0 처리 규칙
+> **절대 규칙**: 07:00 ~ 09:00 (장 시작 전)에는 **모든 종목의 등락률(change_rate)을 0으로 표시**
+
+| 시간대 | 등락률 처리 |
+|--------|------------|
+| 00:00 ~ 06:59 | 전날 종가 기준 등락률 표시 가능 |
+| **07:00 ~ 08:59** | **무조건 0으로 표시** |
+| 09:00 ~ 15:30 | 실시간 등락률 표시 |
+| 15:30 ~ 23:59 | 당일 종가 기준 등락률 표시 |
+
+### 이유
+- 장 시작 전 TOP100 조회 시 전날 등락률이 오늘 데이터처럼 보이는 혼란 방지
+- 사용자가 07:00에 앱을 열었을 때 "한농화성 +29%" 같은 어제 데이터를 오늘 데이터로 오해하는 문제 해결
+
+### 관련 파일
+- `api/routers/top100.py`: `is_before_market` 플래그로 처리
+- `api/routers/realtime.py`: TOP100 실시간 시세 조회 시 동일 규칙 적용
+
+### 코드 예시
+```python
+from datetime import datetime
+
+now = datetime.now()
+is_before_market = 7 <= now.hour < 9  # 07:00 ~ 08:59
+
+if is_before_market:
+    change_rate = 0.0  # 무조건 0
+else:
+    change_rate = cached.get('change_rate') or stock.get('change_pct')
+```
+
+---
+
 ## 주의사항
 
 1. **항상 `/home/kimhc/Stock` 디렉토리 기준**
 2. **venv 활성화 필수**: `source venv/bin/activate`
 3. **서버 재시작**: 반드시 `restart_server.sh` 사용
 4. **PWA 빌드 후**: 브라우저 캐시 삭제 안내 필요
+5. **장 시작 전 등락률**: 07:00~09:00 사이에는 무조건 0으로 표시

@@ -251,12 +251,56 @@ class TradeLogger:
                 ("max_holdings", "INTEGER DEFAULT 10"),
                 ("max_daily_trades", "INTEGER DEFAULT 10"),
                 ("max_holding_days", "INTEGER DEFAULT 14"),
+                # Green Light 모드용 LLM 설정
+                ("llm_provider", "TEXT"),  # claude/openai/gemini
+                ("llm_api_key", "TEXT"),   # 암호화 저장
+                ("llm_model", "TEXT"),     # 사용할 모델명
             ]
             for col_name, col_type in new_columns:
                 try:
                     cursor.execute(f"ALTER TABLE auto_trade_settings ADD COLUMN {col_name} {col_type}")
                 except:
                     pass  # 이미 존재하는 컬럼
+
+            # Green Light AI 결정 이력 테이블
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS greenlight_decisions (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    user_id INTEGER,
+                    decision_time TEXT,
+                    llm_provider TEXT,
+                    prompt_summary TEXT,
+                    raw_response TEXT,
+                    decisions_json TEXT,
+                    executed_orders_json TEXT,
+                    portfolio_snapshot TEXT,
+                    market_context TEXT,
+                    created_at TEXT DEFAULT CURRENT_TIMESTAMP
+                )
+            """)
+
+            # Green Light AI 학습용 피드백 테이블
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS greenlight_feedback (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    user_id INTEGER,
+                    decision_id INTEGER,
+                    stock_code TEXT,
+                    action TEXT,
+                    entry_price INTEGER,
+                    exit_price INTEGER,
+                    profit_rate REAL,
+                    holding_days INTEGER,
+                    ai_confidence REAL,
+                    feedback_note TEXT,
+                    created_at TEXT DEFAULT CURRENT_TIMESTAMP
+                )
+            """)
+
+            # Green Light 인덱스
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_greenlight_decisions_user ON greenlight_decisions(user_id)")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_greenlight_feedback_user ON greenlight_feedback(user_id)")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_greenlight_feedback_decision ON greenlight_feedback(decision_id)")
 
             # user_id 컬럼 추가 (기존 테이블 호환 - 다중 사용자 지원)
             user_id_tables = [
@@ -1088,10 +1132,14 @@ class TradeLogger:
         app_secret: str,
         account_number: str,
         account_product_code: str = "01",
-        is_mock: bool = True
+        is_mock: bool = True,
+        max_retries: int = 3
     ) -> Dict:
         """
         실제/모의 증권 계좌 잔고 조회 (KIS API)
+
+        Args:
+            max_retries: 최대 재시도 횟수 (기본 3회)
 
         Returns:
             {
@@ -1100,41 +1148,60 @@ class TradeLogger:
                 'summary': { 'total_asset', 'total_purchase', 'total_evaluation', 'total_profit', 'profit_rate' }
             }
         """
-        try:
-            import sys
-            import os
-            sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-            from api.services.kis_client import KISClient
+        import time
+        import sys
+        import os
+        sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+        from api.services.kis_client import KISClient
 
-            # KIS 클라이언트 생성 (모의/실전 구분)
-            client = KISClient(
-                app_key=app_key,
-                app_secret=app_secret,
-                account_number=account_number,
-                account_product_code=account_product_code,
-                is_mock=is_mock
-            )
+        last_error = None
 
-            # 계좌 잔고 조회
-            balance_data = client.get_account_balance()
+        for attempt in range(max_retries):
+            try:
+                # KIS 클라이언트 생성 (모의/실전 구분)
+                client = KISClient(
+                    app_key=app_key,
+                    app_secret=app_secret,
+                    account_number=account_number,
+                    account_product_code=account_product_code,
+                    is_mock=is_mock
+                )
 
-            if not balance_data:
-                return {
-                    'balance': {'cash': 0},
-                    'holdings': [],
-                    'summary': {
-                        'total_asset': 0,
-                        'total_purchase': 0,
-                        'total_evaluation': 0,
-                        'total_profit': 0,
-                        'profit_rate': 0
+                # 계좌 잔고 조회
+                balance_data = client.get_account_balance()
+
+                if not balance_data:
+                    return {
+                        'balance': {'cash': 0},
+                        'holdings': [],
+                        'summary': {
+                            'total_asset': 0,
+                            'total_purchase': 0,
+                            'total_evaluation': 0,
+                            'total_profit': 0,
+                            'profit_rate': 0
+                        }
                     }
-                }
 
-            return balance_data
+                return balance_data
 
-        except Exception as e:
-            raise Exception(f"계좌 조회 실패: {str(e)}")
+            except Exception as e:
+                last_error = e
+                error_str = str(e)
+
+                # 500 에러 또는 일시적 오류인 경우 재시도
+                if "500" in error_str or "Server Error" in error_str or "timeout" in error_str.lower():
+                    if attempt < max_retries - 1:
+                        wait_time = (attempt + 1) * 2  # 2초, 4초, 6초...
+                        print(f"[KIS] 일시적 오류, {wait_time}초 후 재시도 ({attempt + 1}/{max_retries})")
+                        time.sleep(wait_time)
+                        continue
+
+                # 다른 에러는 바로 raise
+                raise Exception(f"계좌 조회 실패: {error_str}")
+
+        # 모든 재시도 실패
+        raise Exception(f"계좌 조회 실패 (재시도 {max_retries}회 후): {str(last_error)}")
 
     def place_order(
         self,
@@ -1411,17 +1478,32 @@ class TradeLogger:
             return None
 
     def save_auto_trade_settings(self, user_id: int, settings: Dict) -> bool:
-        """자동매매 설정 저장"""
+        """자동매매 설정 저장 (LLM 설정 포함)"""
         now = datetime.now()
 
         with self._get_connection() as conn:
             cursor = conn.cursor()
+
+            # 기존 LLM 설정 조회 (덮어쓰기 방지)
+            cursor.execute("""
+                SELECT llm_provider, llm_api_key, llm_model
+                FROM auto_trade_settings WHERE user_id = ?
+            """, (user_id,))
+            existing = cursor.fetchone()
+
+            # LLM 설정: 새 값이 있으면 사용, 없으면 기존 값 유지
+            llm_provider = settings.get('llm_provider') or (existing['llm_provider'] if existing else None)
+            llm_api_key = settings.get('llm_api_key') or (existing['llm_api_key'] if existing else None)
+            llm_model = settings.get('llm_model') or (existing['llm_model'] if existing else None)
+
             cursor.execute("""
                 INSERT OR REPLACE INTO auto_trade_settings (
                     user_id, trade_mode, max_per_stock,
                     stop_loss_rate, min_buy_score, sell_score,
-                    trading_enabled, initial_investment, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    trading_enabled, initial_investment,
+                    llm_provider, llm_api_key, llm_model,
+                    updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, (
                 user_id,
                 settings.get('trade_mode', 'manual'),
@@ -1431,6 +1513,9 @@ class TradeLogger:
                 settings.get('sell_score', 40),
                 1 if settings.get('trading_enabled', True) else 0,
                 settings.get('initial_investment', 0),
+                llm_provider,
+                llm_api_key,
+                llm_model,
                 now.isoformat()
             ))
             return cursor.rowcount > 0
@@ -1759,6 +1844,180 @@ class TradeLogger:
                     }
 
             return result
+
+    # ========== Green Light 모드 관련 메서드 ==========
+
+    def get_llm_settings(self, user_id: int) -> Optional[Dict]:
+        """LLM 설정 조회 (복호화)"""
+        if not user_id:
+            return None
+
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                SELECT llm_provider, llm_api_key, llm_model
+                FROM auto_trade_settings
+                WHERE user_id = ?
+            """, (user_id,))
+            row = cursor.fetchone()
+
+            if row and row['llm_api_key']:
+                return {
+                    'llm_provider': row['llm_provider'],
+                    'llm_api_key': decrypt_value(row['llm_api_key']),
+                    'llm_model': row['llm_model']
+                }
+            return None
+
+    def save_llm_settings(self, user_id: int, provider: str, api_key: str, model: str) -> bool:
+        """LLM 설정 저장 (암호화)"""
+        now = datetime.now()
+        encrypted_api_key = encrypt_value(api_key.strip()) if api_key else None
+
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            # 기존 설정이 있는지 확인
+            cursor.execute("SELECT id FROM auto_trade_settings WHERE user_id = ?", (user_id,))
+            existing = cursor.fetchone()
+
+            if existing:
+                cursor.execute("""
+                    UPDATE auto_trade_settings
+                    SET llm_provider = ?, llm_api_key = ?, llm_model = ?, updated_at = ?
+                    WHERE user_id = ?
+                """, (provider, encrypted_api_key, model, now.isoformat(), user_id))
+            else:
+                cursor.execute("""
+                    INSERT INTO auto_trade_settings (user_id, llm_provider, llm_api_key, llm_model, updated_at)
+                    VALUES (?, ?, ?, ?, ?)
+                """, (user_id, provider, encrypted_api_key, model, now.isoformat()))
+
+            return cursor.rowcount > 0
+
+    def log_greenlight_decision(
+        self,
+        user_id: int,
+        llm_provider: str,
+        prompt_summary: str,
+        raw_response: str,
+        decisions: List[Dict],
+        executed_orders: List[Dict],
+        portfolio_snapshot: Dict,
+        market_context: Dict
+    ) -> int:
+        """Green Light AI 결정 기록"""
+        now = datetime.now()
+
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                INSERT INTO greenlight_decisions (
+                    user_id, decision_time, llm_provider, prompt_summary,
+                    raw_response, decisions_json, executed_orders_json,
+                    portfolio_snapshot, market_context, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, (
+                user_id,
+                now.isoformat(),
+                llm_provider,
+                prompt_summary,
+                raw_response,
+                json.dumps(decisions, ensure_ascii=False),
+                json.dumps(executed_orders, ensure_ascii=False),
+                json.dumps(portfolio_snapshot, ensure_ascii=False),
+                json.dumps(market_context, ensure_ascii=False),
+                now.isoformat()
+            ))
+            return cursor.lastrowid
+
+    def get_greenlight_decisions(self, user_id: int, limit: int = 50) -> List[Dict]:
+        """Green Light AI 결정 이력 조회"""
+        if not user_id:
+            return []
+
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                SELECT * FROM greenlight_decisions
+                WHERE user_id = ?
+                ORDER BY created_at DESC
+                LIMIT ?
+            """, (user_id, limit))
+            rows = cursor.fetchall()
+
+            results = []
+            for row in rows:
+                item = dict(row)
+                # JSON 파싱
+                for field in ['decisions_json', 'executed_orders_json', 'portfolio_snapshot', 'market_context']:
+                    if item.get(field):
+                        try:
+                            item[field] = json.loads(item[field])
+                        except:
+                            pass
+                results.append(item)
+
+            return results
+
+    def record_greenlight_feedback(
+        self,
+        user_id: int,
+        decision_id: int,
+        stock_code: str,
+        action: str,
+        entry_price: int,
+        exit_price: int,
+        holding_days: int,
+        ai_confidence: float = None
+    ) -> int:
+        """Green Light 매매 결과 피드백 기록"""
+        now = datetime.now()
+        profit_rate = ((exit_price - entry_price) / entry_price * 100) if entry_price > 0 else 0
+        feedback_note = "좋은결정" if profit_rate > 0 else "나쁜결정"
+
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                INSERT INTO greenlight_feedback (
+                    user_id, decision_id, stock_code, action,
+                    entry_price, exit_price, profit_rate, holding_days,
+                    ai_confidence, feedback_note, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, (
+                user_id, decision_id, stock_code, action,
+                entry_price, exit_price, profit_rate, holding_days,
+                ai_confidence, feedback_note, now.isoformat()
+            ))
+            return cursor.lastrowid
+
+    def get_greenlight_feedback(self, user_id: int, limit: int = 20) -> List[Dict]:
+        """Green Light 과거 피드백 조회 (AI 학습용)"""
+        if not user_id:
+            return []
+
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                SELECT f.*, d.market_context
+                FROM greenlight_feedback f
+                LEFT JOIN greenlight_decisions d ON f.decision_id = d.id
+                WHERE f.user_id = ?
+                ORDER BY f.created_at DESC
+                LIMIT ?
+            """, (user_id, limit))
+            rows = cursor.fetchall()
+
+            results = []
+            for row in rows:
+                item = dict(row)
+                if item.get('market_context'):
+                    try:
+                        item['market_context'] = json.loads(item['market_context'])
+                    except:
+                        pass
+                results.append(item)
+
+            return results
 
 
 class BuySuggestionManager:
