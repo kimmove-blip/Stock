@@ -551,10 +551,10 @@ class TradeLogger:
             rows = cursor.fetchall()
             return [dict(row) for row in rows]
 
-    def get_today_trades(self) -> List[Dict]:
+    def get_today_trades(self, user_id: int = None) -> List[Dict]:
         """오늘 거래 내역 조회"""
         today = datetime.now().strftime("%Y-%m-%d")
-        return self.get_trade_history(start_date=today, end_date=today)
+        return self.get_trade_history(user_id=user_id, start_date=today, end_date=today)
 
     def get_trade_count_today(self) -> int:
         """오늘 거래 횟수"""
@@ -595,38 +595,59 @@ class TradeLogger:
 
     def save_daily_performance(
         self,
+        user_id: int,
         total_assets: int,
-        total_invested: int,
-        total_profit: int,
-        holdings_count: int
+        d2_cash: int,
+        holdings_value: int,
+        total_invested: int = 0,
+        total_profit: int = 0,
+        holdings_count: int = 0
     ):
         """
-        일별 성과 저장
+        일별 성과 저장 (일별 자산 스냅샷)
 
         Args:
-            total_assets: 총 자산
-            total_invested: 총 투자금액
-            total_profit: 총 손익
-            holdings_count: 보유 종목 수
+            user_id: 사용자 ID
+            total_assets: 총 자산 (D+2 예수금 + 보유종목 평가액)
+            d2_cash: D+2 예수금
+            holdings_value: 보유종목 평가액
+            total_invested: 총 투자금액 (선택)
+            total_profit: 총 손익 (선택)
+            holdings_count: 보유 종목 수 (선택)
         """
         today = datetime.now().strftime("%Y-%m-%d")
         profit_rate = total_profit / total_invested if total_invested > 0 else 0
 
         # 오늘 거래 횟수 계산
-        today_trades = self.get_today_trades()
+        today_trades = self.get_today_trades(user_id)
         buy_count = len([t for t in today_trades if t.get("side") == "buy" and t.get("status") == "executed"])
         sell_count = len([t for t in today_trades if t.get("side") == "sell" and t.get("status") == "executed"])
 
         with self._get_connection() as conn:
             cursor = conn.cursor()
+            # user_id + trade_date 조합으로 UPSERT
             cursor.execute("""
-                INSERT OR REPLACE INTO daily_performance (
-                    trade_date, total_assets, total_invested, total_profit,
-                    profit_rate, buy_count, sell_count, holdings_count
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                INSERT INTO daily_performance (
+                    user_id, trade_date, total_assets, d2_cash, holdings_value,
+                    total_invested, total_profit, profit_rate,
+                    buy_count, sell_count, holdings_count
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(user_id, trade_date) DO UPDATE SET
+                    total_assets = excluded.total_assets,
+                    d2_cash = excluded.d2_cash,
+                    holdings_value = excluded.holdings_value,
+                    total_invested = excluded.total_invested,
+                    total_profit = excluded.total_profit,
+                    profit_rate = excluded.profit_rate,
+                    buy_count = excluded.buy_count,
+                    sell_count = excluded.sell_count,
+                    holdings_count = excluded.holdings_count
             """, (
+                user_id,
                 today,
                 total_assets,
+                d2_cash,
+                holdings_value,
                 total_invested,
                 total_profit,
                 profit_rate,
@@ -634,6 +655,39 @@ class TradeLogger:
                 sell_count,
                 holdings_count
             ))
+
+    def get_previous_day_assets(self, user_id: int) -> Optional[Dict]:
+        """
+        전일 자산 조회
+
+        Args:
+            user_id: 사용자 ID
+
+        Returns:
+            전일 자산 정보 딕셔너리 또는 None
+            {
+                'trade_date': '2026-01-22',
+                'total_assets': 1000017,
+                'd2_cash': 1000017,
+                'holdings_value': 0
+            }
+        """
+        today = datetime.now().strftime("%Y-%m-%d")
+
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                SELECT trade_date, total_assets, d2_cash, holdings_value
+                FROM daily_performance
+                WHERE user_id = ? AND trade_date < ?
+                ORDER BY trade_date DESC
+                LIMIT 1
+            """, (user_id, today))
+            row = cursor.fetchone()
+
+            if row:
+                return dict(row)
+            return None
 
     def get_performance(
         self,
