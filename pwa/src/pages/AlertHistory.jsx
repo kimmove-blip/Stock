@@ -98,7 +98,10 @@ export default function AlertHistory() {
     const diff = now - date;
     const diffDays = Math.floor(diff / (1000 * 60 * 60 * 24));
 
-    if (diffDays === 0) {
+    // 미래 시간이거나 음수면 "방금 전"으로 표시 (UTC/KST 혼용 데이터 대응)
+    if (diff < 0 || diffDays < 0) {
+      return '방금 전';
+    } else if (diffDays === 0) {
       return `오늘 ${date.toLocaleTimeString('ko-KR', { hour: '2-digit', minute: '2-digit' })}`;
     } else if (diffDays === 1) {
       return `어제 ${date.toLocaleTimeString('ko-KR', { hour: '2-digit', minute: '2-digit' })}`;

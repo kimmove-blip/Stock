@@ -265,13 +265,16 @@ def check_portfolio_alerts():
                             push_success = True
                             print(f"[푸시] 전송 성공: {username} - {alert['name']} ({push_count}개 기기)")
 
-                    # 알림 기록 저장
+                    # 알림 기록 저장 (KST 시간으로)
                     if push_success:
+                        from datetime import timezone, timedelta as td
+                        kst = timezone(td(hours=9))
+                        now_kst = datetime.now(kst).strftime('%Y-%m-%d %H:%M:%S')
                         with db.get_connection() as conn:
                             conn.execute("""
-                                INSERT INTO alert_history (user_id, stock_code, stock_name, alert_type, message)
-                                VALUES (?, ?, ?, ?, ?)
-                            """, (user_id, alert['code'], alert['name'], alert['reason'], push_body))
+                                INSERT INTO alert_history (user_id, stock_code, stock_name, alert_type, message, created_at)
+                                VALUES (?, ?, ?, ?, ?, ?)
+                            """, (user_id, alert['code'], alert['name'], alert['reason'], push_body, now_kst))
                             conn.commit()
                     else:
                         print(f"[알림] 전송 실패: {username} - {alert['name']}")
