@@ -280,7 +280,8 @@ class MarketScreener:
         print(
             f"    → {total:,}개 종목 분석 중 (병렬 처리: {self.max_workers} workers)..."
         )
-        with ThreadPoolExecutor(max_workers=self.max_workers) as executor:
+        executor = ThreadPoolExecutor(max_workers=self.max_workers)
+        try:
             # 모든 작업 제출
             future_to_stock = {
                 executor.submit(self._analyze_single_stock, stock, mode): stock
@@ -312,6 +313,11 @@ class MarketScreener:
             except TimeoutError:
                 pending = len(future_to_stock) - completed
                 print(f"    ⚠ 전체 타임아웃: {pending}개 종목 미완료 (4분 초과)")
+                # 미완료 futures 취소
+                for future in future_to_stock:
+                    future.cancel()
+        finally:
+            executor.shutdown(wait=False, cancel_futures=True)
         elapsed_total = time.time() - start_time
         print(
             f"    → 스크리닝 완료: {len(results):,}개 유효 종목 (소요시간: {elapsed_total:.1f}초)"
