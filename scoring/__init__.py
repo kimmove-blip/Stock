@@ -7,6 +7,7 @@
 - V3: 사일런트 바이어 (OBV 다이버전스, 매집봉, Spring, VCP)
 - V3.5: 사일런트 바이어 발전형 (와이코프 Phase, 위치 필터, 숏커버링, 공시 확증)
 - V4: Hybrid Sniper (VCP, OBV 다이버전스, 수급)
+- V5: 장대양봉 (Long Bullish Candle) - 눌림목, BB수축, 이평선 밀집, OBV 다이버전스
 """
 
 from .scoring_v1 import calculate_score_v1
@@ -14,6 +15,7 @@ from .scoring_v2 import calculate_score_v2
 from .scoring_v3 import calculate_score_v3
 from .scoring_v3_5 import calculate_score_v3_5, calculate_score_v3_5_with_investor
 from .scoring_v4 import calculate_score_v4, calculate_score_v4_with_investor
+from .scoring_v5 import calculate_score_v5
 
 # 버전별 함수 매핑
 SCORING_FUNCTIONS = {
@@ -22,6 +24,7 @@ SCORING_FUNCTIONS = {
     'v3': calculate_score_v3,
     'v3.5': calculate_score_v3_5,
     'v4': calculate_score_v4,
+    'v5': calculate_score_v5,
 }
 
 # 기본 버전 (현재 운영 중)
