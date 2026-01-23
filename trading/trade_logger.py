@@ -2019,6 +2019,78 @@ class TradeLogger:
 
             return results
 
+    def add_buy_suggestion(
+        self,
+        user_id: int,
+        stock_code: str,
+        stock_name: str,
+        current_price: int,
+        quantity: int,
+        score: int,
+        reason: str = None,
+        signals: List[str] = None,
+        expire_hours: int = 24
+    ) -> int:
+        """
+        장중 스크리닝 매수 제안 추가 (semi-auto 모드용)
+
+        Args:
+            user_id: 사용자 ID
+            stock_code: 종목코드
+            stock_name: 종목명
+            current_price: 현재가
+            quantity: 수량
+            score: 점수
+            reason: 제안 사유
+            signals: 신호 리스트
+            expire_hours: 만료 시간 (시간)
+
+        Returns:
+            생성된 제안 ID
+        """
+        now = datetime.now()
+        expires_at = now + timedelta(hours=expire_hours)
+        signals_json = json.dumps(signals or [])
+
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+
+            # 동일 종목 + 동일 사용자 기존 pending 제안이 있으면 업데이트
+            cursor.execute("""
+                SELECT id FROM pending_buy_suggestions
+                WHERE stock_code = ? AND status = 'pending' AND user_id = ?
+            """, (stock_code, user_id))
+            existing = cursor.fetchone()
+
+            if existing:
+                cursor.execute("""
+                    UPDATE pending_buy_suggestions
+                    SET score = ?, current_price = ?, recommended_price = ?,
+                        signals = ?, updated_at = ?, expires_at = ?
+                    WHERE id = ?
+                """, (
+                    score, current_price, current_price,
+                    signals_json, now.isoformat(), expires_at.isoformat(),
+                    existing['id']
+                ))
+                conn.commit()
+                return existing['id']
+            else:
+                cursor.execute("""
+                    INSERT INTO pending_buy_suggestions (
+                        user_id, stock_code, stock_name, score,
+                        current_price, recommended_price,
+                        signals, status, created_at, updated_at, expires_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?)
+                """, (
+                    user_id, stock_code, stock_name, score,
+                    current_price, current_price,
+                    signals_json, now.isoformat(), now.isoformat(),
+                    expires_at.isoformat()
+                ))
+                conn.commit()
+                return cursor.lastrowid
+
 
 class BuySuggestionManager:
     """매수 제안 관리자 (semi-auto 모드용)"""
