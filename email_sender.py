@@ -66,8 +66,11 @@ class EmailSender:
             return False
 
         try:
-            # 이메일 메시지 생성
-            msg = MIMEMultipart('alternative')
+            # 이메일 메시지 생성 (첨부파일이 있으면 mixed, 없으면 alternative)
+            if attachments:
+                msg = MIMEMultipart('mixed')
+            else:
+                msg = MIMEMultipart('alternative')
             msg['Subject'] = subject
             msg['From'] = self.sender_email
             msg['To'] = ", ".join(self.recipient_emails)
@@ -97,18 +100,48 @@ class EmailSender:
 
     def _attach_file(self, msg, file_path):
         """파일 첨부"""
+        from email.header import Header
+        from email.utils import encode_rfc2231
+
         file_path = Path(file_path)
+        filename = file_path.name
 
         with open(file_path, 'rb') as f:
             part = MIMEBase('application', 'octet-stream')
             part.set_payload(f.read())
 
         encoders.encode_base64(part)
+
+        # 한글 파일명 인코딩 (RFC 2231)
+        encoded_filename = encode_rfc2231(filename, 'utf-8')
         part.add_header(
             'Content-Disposition',
-            f'attachment; filename="{file_path.name}"'
+            'attachment',
+            filename=('utf-8', '', filename)
         )
         msg.attach(part)
+
+
+def format_rank_change_email(rank_change):
+    """순위 변동을 이메일용 HTML로 포맷"""
+    if rank_change is None:
+        return '<span style="color:#38a169;font-weight:bold;">NEW</span>'
+    elif rank_change > 0:
+        return f'<span style="color:#c53030;">↑{rank_change}</span>'
+    elif rank_change < 0:
+        return f'<span style="color:#2b6cb0;">↓{abs(rank_change)}</span>'
+    else:
+        return '<span style="color:#718096;">-</span>'
+
+
+def format_streak_email(streak):
+    """연속 일수를 이메일용 HTML로 포맷"""
+    if streak >= 5:
+        return f'<span style="color:#c53030;font-weight:bold;">{streak}일 🔥</span>'
+    elif streak >= 3:
+        return f'<span style="color:#dd6b20;font-weight:bold;">{streak}일 ⭐</span>'
+    else:
+        return f'{streak}일'
 
 
 def create_email_body(results, date_str=None):
@@ -121,6 +154,11 @@ def create_email_body(results, date_str=None):
     # 상위 100개로 제한
     results = results[:100]
 
+    # 연속 출현 통계 계산
+    new_entries = sum(1 for r in results if r.get('rank_change') is None)
+    continued = len(results) - new_entries
+    streak_5plus = sum(1 for r in results if r.get('streak', 1) >= 5)
+
     # 상위 20개 종목 테이블 생성
     top_20 = results[:20]
     rows_html = ""
@@ -130,11 +168,17 @@ def create_email_body(results, date_str=None):
         change_color = '#c53030' if change >= 0 else '#2b6cb0'
         change_sign = '+' if change >= 0 else ''
 
+        # 순위 변동 및 연속 출현
+        rank_change_html = format_rank_change_email(r.get('rank_change'))
+        streak_html = format_streak_email(r.get('streak', 1))
+
         rows_html += f"""
         <tr>
             <td style="text-align:center;">{i}</td>
             <td style="text-align:center;">{r['code']}</td>
             <td>{r['name']}</td>
+            <td style="text-align:center;">{rank_change_html}</td>
+            <td style="text-align:center;">{streak_html}</td>
             <td style="text-align:center;">{r['market']}</td>
             <td style="text-align:center;font-weight:bold;">{r['score']}</td>
             <td style="text-align:right;">{r.get('close', 0):,.0f}</td>
@@ -232,12 +276,18 @@ def create_email_body(results, date_str=None):
             점수 범위: {min(r['score'] for r in results):.0f} ~ {max(r['score'] for r in results):.0f}점
         </div>
 
+        <div class="summary" style="background-color:#f0fff4;">
+            <strong>신뢰도 지표</strong><br>
+            신규 진입: {new_entries}개 | 연속 유지: <strong>{continued}개</strong> | 5일 이상 연속: <span style="color:#c53030;font-weight:bold;">{streak_5plus}개 🔥</span>
+        </div>
+
         <div class="criteria">
             <strong>선정 기준</strong>
             <ul>
                 <li>시가총액: 300억 ~ 1조원</li>
                 <li>거래대금: 3억원 이상</li>
-                <li>주가: 10만원 이하</li>
+                <li>주가: 1,000원 이상</li>
+                <li>제외: 관리종목, 투자경고/위험, 스팩, 우선주</li>
                 <li>분석 방법: 18개 기술적 지표 + 캔들패턴 종합</li>
             </ul>
         </div>
@@ -246,13 +296,15 @@ def create_email_body(results, date_str=None):
         <table>
             <thead>
                 <tr>
-                    <th style="width:50px;">순위</th>
-                    <th style="width:80px;">종목코드</th>
+                    <th style="width:40px;">순위</th>
+                    <th style="width:70px;">종목코드</th>
                     <th>종목명</th>
-                    <th style="width:80px;">시장</th>
-                    <th style="width:60px;">점수</th>
-                    <th style="width:100px;">현재가</th>
-                    <th style="width:80px;">등락률</th>
+                    <th style="width:50px;">변동</th>
+                    <th style="width:60px;">연속</th>
+                    <th style="width:60px;">시장</th>
+                    <th style="width:50px;">점수</th>
+                    <th style="width:80px;">현재가</th>
+                    <th style="width:70px;">등락률</th>
                 </tr>
             </thead>
             <tbody>

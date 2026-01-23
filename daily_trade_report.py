@@ -537,25 +537,131 @@ def save_all_users_snapshot():
     print("자산 스냅샷 저장 완료")
 
 
+def send_report_email(user_id: int, pdf_path: str):
+    """개별 사용자에게 보고서 이메일 발송"""
+    import sqlite3 as sqlite3_module
+    from email_sender import EmailSender
+
+    # 사용자 정보 조회
+    stock_db_path = Path(__file__).parent / "database" / "stock_data.db"
+    with sqlite3_module.connect(str(stock_db_path)) as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT name, email FROM users WHERE id = ?", (user_id,))
+        row = cursor.fetchone()
+        if not row:
+            print(f"  [{user_id}] 사용자 정보 없음")
+            return False
+        user_name, user_email = row
+
+    if not user_email:
+        print(f"  [{user_id}] {user_name}: 이메일 주소 없음")
+        return False
+
+    # 이메일 발송
+    sender = EmailSender()
+    if not sender.is_configured():
+        print(f"  [{user_id}] 이메일 설정 필요 (.env 파일)")
+        return False
+
+    # 수신자를 해당 사용자로 설정
+    sender.recipient_emails = [user_email]
+
+    date_str = datetime.now().strftime("%Y-%m-%d")
+    subject = f"[Kim's AI] 일일 자동매매 보고서 ({date_str})"
+
+    body_html = f"""
+    <html>
+    <body style="font-family: sans-serif;">
+        <h2>안녕하세요 {user_name}님,</h2>
+        <p>오늘의 자동매매 일일 보고서를 첨부합니다.</p>
+        <p>첨부된 PDF 파일을 확인해주세요.</p>
+        <br>
+        <p style="color: #666; font-size: 12px;">
+            본 메일은 Kim's AI 자동매매 시스템에서 자동 발송되었습니다.
+        </p>
+    </body>
+    </html>
+    """
+
+    try:
+        success = sender.send_report(subject, body_html, attachments=[pdf_path])
+        if success:
+            print(f"  [{user_id}] {user_name} ({user_email}): 이메일 발송 완료")
+        return success
+    except Exception as e:
+        print(f"  [{user_id}] {user_name}: 이메일 발송 실패 - {e}")
+        return False
+
+
+def generate_all_reports_and_email():
+    """모든 사용자 보고서 생성 및 이메일 발송"""
+    from trading.trade_logger import TradeLogger
+
+    logger = TradeLogger()
+
+    # API 키가 설정된 모든 사용자 조회
+    with logger._get_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT DISTINCT user_id FROM api_key_settings WHERE app_key IS NOT NULL")
+        users = [row['user_id'] for row in cursor.fetchall()]
+
+    print(f"일일 보고서 생성 시작 ({len(users)}명)")
+
+    for user_id in users:
+        try:
+            # 보고서 생성 (스냅샷 저장 포함)
+            pdf_path = generate_daily_report_pdf(user_id=user_id, save_snapshot=True)
+            if pdf_path:
+                # 이메일 발송
+                send_report_email(user_id, pdf_path)
+        except Exception as e:
+            print(f"  [{user_id}] 에러: {e}")
+
+    print("일일 보고서 생성 및 발송 완료")
+
+
 def main():
     parser = argparse.ArgumentParser(description='자동매매 일일 보고서 생성')
-    parser.add_argument('--user-id', type=int, default=7, help='사용자 ID (기본: 7=김브로)')
+    parser.add_argument('--user-id', type=int, help='사용자 ID')
     parser.add_argument('--date', type=str, help='보고서 날짜 (YYYY-MM-DD, 기본: 오늘)')
     parser.add_argument('--output', type=str, help='출력 파일 경로')
     parser.add_argument('--no-save', action='store_true', help='스냅샷 저장 안함')
     parser.add_argument('--snapshot-only', action='store_true', help='스냅샷만 저장 (보고서 생성 안함)')
+    parser.add_argument('--all', action='store_true', help='모든 사용자 보고서 생성')
+    parser.add_argument('--email', action='store_true', help='이메일 발송')
     args = parser.parse_args()
 
     if args.snapshot_only:
         save_all_users_snapshot()
         return
 
-    generate_daily_report_pdf(
-        user_id=args.user_id,
+    if args.all:
+        if args.email:
+            generate_all_reports_and_email()
+        else:
+            # 모든 사용자 보고서 생성 (이메일 없이)
+            from trading.trade_logger import TradeLogger
+            logger = TradeLogger()
+            with logger._get_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute("SELECT DISTINCT user_id FROM api_key_settings WHERE app_key IS NOT NULL")
+                users = [row['user_id'] for row in cursor.fetchall()]
+            print(f"일일 보고서 생성 시작 ({len(users)}명)")
+            for user_id in users:
+                generate_daily_report_pdf(user_id=user_id, save_snapshot=not args.no_save)
+        return
+
+    # 단일 사용자 보고서
+    user_id = args.user_id or 7
+    pdf_path = generate_daily_report_pdf(
+        user_id=user_id,
         output_path=args.output,
         report_date=args.date,
         save_snapshot=not args.no_save
     )
+
+    if args.email and pdf_path:
+        send_report_email(user_id, pdf_path)
 
 
 if __name__ == "__main__":
