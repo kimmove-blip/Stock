@@ -159,6 +159,16 @@ class TelegramNotifier:
             url=f"/stock/{stock_code}"
         )
 
+    def notify_suggestion(self, stock_name: str, price: int, quantity: int, stock_code: str = None):
+        """매수 제안 알림 (semi 모드)"""
+        self._save_to_db(stock_code or "", stock_name, "매수 제안", f"{price:,}원 x {quantity}주")
+        self.send_push("📊 매수 제안", f"{stock_name} {price:,}원 x {quantity}주", f"/auto-trade/suggestions" if stock_code else None)
+
+    def notify_sell_signal(self, stock_name: str, reasons: str, stock_code: str = None):
+        """매도 신호 알림 (semi 모드 - 실행 없이 알림만)"""
+        self._save_to_db(stock_code or "", stock_name, "매도 신호", reasons)
+        self.send_push("⚠️ 매도 신호", f"{stock_name}: {reasons}", f"/stock/{stock_code}" if stock_code else None)
+
     def notify_suggestion_executed(self, stock_name: str, price: int, quantity: int, stock_code: str = None):
         """제안 매수 실행 알림"""
         self._save_to_db(stock_code or "", stock_name, "제안 매수 완료", f"{price:,}원 x {quantity}주")
@@ -1144,13 +1154,11 @@ class AutoTrader:
             else:
                 print("  매도 대상 없음")
 
-        # 5. 승인된 매수 제안 실행 (추천 매수가 이하일 때)
-        print("\n[5] 승인된 제안 매수 실행 중...")
-        investment_per_stock = self.risk_manager.calculate_investment_amount()
-        # 실제 주문금액은 min(종목당 투자금, 주문가능금액)
-        actual_investment = min(investment_per_stock, max_buy_amt)
-        print(f"  종목당 투자금: {investment_per_stock:,}원, 주문가능: {max_buy_amt:,}원 → 실제: {actual_investment:,}원")
-        self.execute_approved_suggestions(actual_investment)
+        # 5. 승인된 제안은 API에서 즉시 실행됨 (세미오토 원칙)
+        # 주의: 세미오토 모드에서는 사용자가 앱에서 승인할 때만 주문이 실행됨
+        # execute_approved_suggestions()는 호출하지 않음 (자동 매매 방지)
+        print("\n[5] 세미오토 모드: 사용자 승인 시 API에서 즉시 주문 실행됨")
+        print("  (스크립트에서 자동 주문 실행 안 함)")
 
         # 6. 새 매수 후보 → 제안 생성
         print("\n[6] 새 매수 제안 생성 중...")
@@ -1729,7 +1737,7 @@ class AutoTrader:
         report = self.logger.export_report(days=days)
         print(report)
 
-    def run_intraday(self, min_score: int = 75, screening_result: tuple = None) -> Dict:
+    def run_intraday(self, min_score: int = 75, screening_result: tuple = None, trade_mode: str = 'auto') -> Dict:
         """
         장중 10분 스크리닝 모드
 
@@ -1821,8 +1829,16 @@ class AutoTrader:
                 for item in sell_list:
                     print(f"    - {item['stock_name']}: {', '.join(item['sell_reasons'])}")
 
+                # semi 모드: 매도 실행 안함 (알림만)
+                if trade_mode == 'semi':
+                    print("  [SEMI] 반자동 모드 - 매도 실행 안함 (알림만 전송)")
+                    for item in sell_list:
+                        stock_code = item.get('stock_code')
+                        stock_name = item.get('stock_name', stock_code)
+                        reasons = ', '.join(item.get('sell_reasons', []))
+                        self.notifier.notify_sell_signal(stock_name, reasons, stock_code)
                 # 매도 실행
-                if not self.dry_run:
+                elif not self.dry_run:
                     self.execute_sell_orders(sell_list)
                     sell_count = len(sell_list)
                 else:
@@ -2045,9 +2061,28 @@ class AutoTrader:
                 print(f"  {stock_name}: 매수 가능 수량 없음")
                 continue
 
-            print(f"\n매수: {stock_name} ({stock_code})")
+            print(f"\n매수{'제안' if trade_mode == 'semi' else ''}: {stock_name} ({stock_code})")
             print(f"  현재가: {current_price:,}원, 점수: {score}점")
             print(f"  수량: {quantity}주 = {current_price * quantity:,}원")
+
+            # semi 모드: 제안만 저장 (실제 주문 X)
+            if trade_mode == 'semi':
+                suggestion_id = self.logger.add_buy_suggestion(
+                    user_id=self.user_id,
+                    stock_code=stock_code,
+                    stock_name=stock_name,
+                    current_price=current_price,
+                    quantity=quantity,
+                    score=score,
+                    reason=f"장중스크리닝 {score}점",
+                    signals=candidate.get("signals", [])
+                )
+                if suggestion_id:
+                    buy_count += 1
+                    print(f"  ✅ 매수 제안 저장 (suggestion_id={suggestion_id})")
+                    # 제안 알림
+                    self.notifier.notify_suggestion(stock_name, current_price, quantity, stock_code)
+                continue
 
             if self.dry_run:
                 print("  [DRY-RUN] 실제 주문 실행 안함")
@@ -2195,6 +2230,12 @@ def run_for_all_users(dry_run: bool = False, min_score: int = 75):
                 'is_mock': bool(api_key_data.get('is_mock', True))
             }
 
+            # 사용자별 자동매매 설정 조회
+            user_settings = logger.get_auto_trade_settings(user_id) or {}
+            user_min_score = user_settings.get('min_buy_score', min_score)
+            user_sell_score = user_settings.get('sell_score', 40)
+            print(f"  설정: min_buy={user_min_score}점, sell={user_sell_score}점")
+
             trader = AutoTrader(
                 dry_run=dry_run,
                 user_id=user_id,
@@ -2205,7 +2246,7 @@ def run_for_all_users(dry_run: bool = False, min_score: int = 75):
             if trade_mode == 'greenlight':
                 result = trader.run_greenlight()
             elif trade_mode in ('auto', 'semi'):
-                result = trader.run_intraday(min_score=min_score, screening_result=screening_result)
+                result = trader.run_intraday(min_score=user_min_score, screening_result=screening_result, trade_mode=trade_mode)
             else:
                 print(f"  지원하지 않는 모드: {trade_mode}")
                 continue
