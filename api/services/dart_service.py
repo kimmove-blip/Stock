@@ -4,7 +4,7 @@ DB 캐싱으로 DART API 호출 최소화 (연/분기 보고서 지원)
 """
 import os
 import sqlite3
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Optional, Dict, List, Any
 from contextlib import contextmanager
 
@@ -460,5 +460,210 @@ class DartService:
                 print(f"[DART] {stock_code} {year}년 {report_type} 저장 완료")
 
 
+    # ============================================================
+    # V3.5 신규: 5% 대량보유 공시 및 CB/BW 조회
+    # ============================================================
+
+    def get_major_shareholders(self, stock_code: str, days: int = 90) -> List[Dict]:
+        """
+        5% 대량보유 공시 조회 (최근 N일)
+
+        OpenDartReader의 major_shareholders() 사용
+
+        Args:
+            stock_code: 종목코드 (6자리)
+            days: 조회 기간 (기본 90일)
+
+        Returns:
+            [
+                {
+                    'name': 보고자명,
+                    'ownership_pct': 보유 비율 (%),
+                    'change_pct': 변동 비율 (%),
+                    'purpose': 보유 목적 ('management' | 'investment' | 'other'),
+                    'report_date': 보고일,
+                    'shares': 보유 주식수,
+                }
+            ]
+        """
+        result = []
+
+        try:
+            corp_code = self.get_corp_code(stock_code)
+            if not corp_code:
+                return result
+
+            # 날짜 범위 설정
+            end_date = datetime.now().strftime('%Y%m%d')
+            start_date = (datetime.now() - timedelta(days=days)).strftime('%Y%m%d')
+
+            # DART API 호출 - 대량보유 상황보고
+            # OpenDartReader의 major_shareholders() 메서드 사용
+            df = self.dart.major_shareholders(corp_code, start_date, end_date)
+
+            if df is None or df.empty:
+                return result
+
+            for _, row in df.iterrows():
+                # 보유 목적 분류
+                purpose_raw = str(row.get('stkhldr_motive', '')).lower()
+                if '경영참가' in purpose_raw or '경영권' in purpose_raw:
+                    purpose = 'management'
+                elif '단순투자' in purpose_raw:
+                    purpose = 'investment'
+                else:
+                    purpose = 'other'
+
+                # 보유 비율 파싱
+                ownership_str = str(row.get('trmend_posesn_stock_qota_rt', '0'))
+                try:
+                    ownership_pct = float(ownership_str.replace('%', '').replace(',', ''))
+                except:
+                    ownership_pct = 0
+
+                # 변동 비율 파싱
+                change_str = str(row.get('change_stock_qota_rt', '0'))
+                try:
+                    change_pct = float(change_str.replace('%', '').replace(',', ''))
+                except:
+                    change_pct = 0
+
+                # 보유 주식수
+                shares_str = str(row.get('trmend_posesn_stock_co', '0'))
+                try:
+                    shares = int(shares_str.replace(',', ''))
+                except:
+                    shares = 0
+
+                result.append({
+                    'name': row.get('repror', ''),
+                    'ownership_pct': ownership_pct,
+                    'change_pct': change_pct,
+                    'purpose': purpose,
+                    'report_date': row.get('rcept_dt', ''),
+                    'shares': shares,
+                })
+
+        except Exception as e:
+            print(f"5% 공시 조회 실패 ({stock_code}): {e}")
+
+        return result
+
+    def get_convertible_bonds(self, stock_code: str, days: int = 365) -> List[Dict]:
+        """
+        CB/BW (전환사채/신주인수권부사채) 공시 조회
+
+        Args:
+            stock_code: 종목코드 (6자리)
+            days: 조회 기간 (기본 365일)
+
+        Returns:
+            [
+                {
+                    'type': 'CB' | 'BW',
+                    'conversion_price': 전환가액,
+                    'amount': 발행 금액 (억원),
+                    'maturity_date': 만기일,
+                    'issue_date': 발행일,
+                    'description': 상세 내용,
+                }
+            ]
+        """
+        result = []
+
+        try:
+            corp_code = self.get_corp_code(stock_code)
+            if not corp_code:
+                return result
+
+            # 날짜 범위 설정
+            end_date = datetime.now().strftime('%Y%m%d')
+            start_date = (datetime.now() - timedelta(days=days)).strftime('%Y%m%d')
+
+            # DART 공시 검색 - 전환사채, 신주인수권부사채 키워드
+            # OpenDartReader의 list() 메서드로 공시 목록 조회
+            keywords = ['전환사채', '신주인수권부사채', 'CB', 'BW']
+
+            for keyword in keywords:
+                try:
+                    df = self.dart.list(corp_code, start=start_date, end=end_date, kind='A')
+
+                    if df is None or df.empty:
+                        continue
+
+                    # 키워드가 포함된 공시 필터링
+                    mask = df['report_nm'].str.contains(keyword, na=False)
+                    filtered = df[mask]
+
+                    for _, row in filtered.iterrows():
+                        # CB/BW 타입 판별
+                        report_name = str(row.get('report_nm', ''))
+                        if '전환사채' in report_name or 'CB' in report_name.upper():
+                            cb_type = 'CB'
+                        elif '신주인수권' in report_name or 'BW' in report_name.upper():
+                            cb_type = 'BW'
+                        else:
+                            continue
+
+                        # 중복 체크 (같은 날짜 + 같은 타입)
+                        issue_date = row.get('rcept_dt', '')
+                        if any(r['issue_date'] == issue_date and r['type'] == cb_type for r in result):
+                            continue
+
+                        result.append({
+                            'type': cb_type,
+                            'conversion_price': 0,  # 상세 공시에서 추출 필요
+                            'amount': 0,  # 상세 공시에서 추출 필요
+                            'maturity_date': '',
+                            'issue_date': issue_date,
+                            'description': report_name,
+                        })
+
+                except Exception:
+                    continue
+
+        except Exception as e:
+            print(f"CB/BW 공시 조회 실패 ({stock_code}): {e}")
+
+        return result
+
+    def get_disclosure_data_for_scoring(self, stock_code: str, current_price: float = 0) -> Dict:
+        """
+        V3.5 스코어링을 위한 공시 데이터 종합 조회
+
+        Args:
+            stock_code: 종목코드
+            current_price: 현재가 (CB/BW 오버행 계산용)
+
+        Returns:
+            {
+                'major_shareholders': [...],
+                'cb_bw': [...],
+                'current_price': float,
+            }
+        """
+        return {
+            'major_shareholders': self.get_major_shareholders(stock_code, days=90),
+            'cb_bw': self.get_convertible_bonds(stock_code, days=365),
+            'current_price': current_price,
+        }
+
+
 def get_dart_service() -> DartService:
     return DartService()
+
+
+# 편의 함수: V3.5 스코어링용 공시 데이터 조회
+def get_disclosure_data(stock_code: str, current_price: float = 0) -> Dict:
+    """
+    V3.5 스코어링을 위한 공시 데이터 조회 (편의 함수)
+
+    Args:
+        stock_code: 종목코드
+        current_price: 현재가
+
+    Returns:
+        disclosure_data 딕셔너리 (V3.5 calculate_score_v3_5()에 전달)
+    """
+    service = get_dart_service()
+    return service.get_disclosure_data_for_scoring(stock_code, current_price)

@@ -5,12 +5,14 @@
 - V1: 종합 기술적 분석 (과매도 가점, 역발상)
 - V2: 추세 추종 강화 (역배열 과락, 20일선 기울기)
 - V3: 사일런트 바이어 (OBV 다이버전스, 매집봉, Spring, VCP)
+- V3.5: 사일런트 바이어 발전형 (와이코프 Phase, 위치 필터, 숏커버링, 공시 확증)
 - V4: Hybrid Sniper (VCP, OBV 다이버전스, 수급)
 """
 
 from .scoring_v1 import calculate_score_v1
 from .scoring_v2 import calculate_score_v2
 from .scoring_v3 import calculate_score_v3
+from .scoring_v3_5 import calculate_score_v3_5, calculate_score_v3_5_with_investor
 from .scoring_v4 import calculate_score_v4, calculate_score_v4_with_investor
 
 # 버전별 함수 매핑
@@ -18,6 +20,7 @@ SCORING_FUNCTIONS = {
     'v1': calculate_score_v1,
     'v2': calculate_score_v2,
     'v3': calculate_score_v3,
+    'v3.5': calculate_score_v3_5,
     'v4': calculate_score_v4,
 }
 
@@ -31,7 +34,7 @@ def calculate_score(df, version: str = None):
 
     Args:
         df: OHLCV 데이터프레임
-        version: 'v1', 'v2', 'v3', 'v4' 중 하나 (기본값: v2)
+        version: 'v1', 'v2', 'v3', 'v3.5', 'v4' 중 하나 (기본값: v2)
 
     Returns:
         점수 계산 결과 딕셔너리
@@ -85,6 +88,7 @@ def list_versions():
         'v1': '종합 기술적 분석 (과매도 가점, 역발상)',
         'v2': '추세 추종 강화 (역배열 과락, 20일선 기울기) [현재 운영]',
         'v3': '사일런트 바이어 (OBV 다이버전스, 매집봉, Spring, VCP)',
+        'v3.5': '사일런트 바이어 발전형 (와이코프 Phase, 위치 필터, 숏커버링, 공시 확증)',
         'v4': 'Hybrid Sniper (VCP, OBV 다이버전스, 수급)',
     }
 
@@ -99,6 +103,8 @@ __all__ = [
     'calculate_score_v1',
     'calculate_score_v2',
     'calculate_score_v3',
+    'calculate_score_v3_5',
+    'calculate_score_v3_5_with_investor',
     'calculate_score_v4',
     'calculate_score_v4_with_investor',
     'calculate_score',
