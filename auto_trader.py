@@ -1729,7 +1729,7 @@ class AutoTrader:
         report = self.logger.export_report(days=days)
         print(report)
 
-    def run_intraday(self, min_score: int = 75) -> Dict:
+    def run_intraday(self, min_score: int = 75, screening_result: tuple = None) -> Dict:
         """
         장중 10분 스크리닝 모드
 
@@ -1737,6 +1737,10 @@ class AutoTrader:
         - 전종목 실시간 스크리닝 (strict 모드)
         - 75점 이상 종목 자동 매수
         - 당일 블랙리스트 적용 (왕복매매 방지)
+
+        Args:
+            min_score: 최소 매수 점수 (기본: 75)
+            screening_result: (top_stocks, stats) 튜플. 전달 시 스크리닝 건너뜀
 
         cron 예시: */10 9-14 * * 1-5 /path/to/python auto_trader.py --intraday
         """
@@ -1834,23 +1838,30 @@ class AutoTrader:
 
         # 3. 전종목 스크리닝 (strict 모드) - ScreeningConfig 기준 사용
         from config import ScreeningConfig
-        print(f"\n[3] 전종목 스크리닝 중 (strict 모드)...")
-        print(f"  시총: {ScreeningConfig.MIN_MARKET_CAP/1e8:.0f}억 ~ {ScreeningConfig.MAX_MARKET_CAP/1e8:.0f}억")
-        print(f"  거래대금: {ScreeningConfig.MIN_TRADING_AMOUNT/1e8:.0f}억 이상")
-        screener = MarketScreener(max_workers=ScreeningConfig.MAX_WORKERS)
-        top_stocks, stats = screener.run_full_screening(
-            top_n=ScreeningConfig.TOP_N,
-            mode="strict",
-            min_marcap=ScreeningConfig.MIN_MARKET_CAP,
-            max_marcap=ScreeningConfig.MAX_MARKET_CAP,
-            min_amount=ScreeningConfig.MIN_TRADING_AMOUNT,
-        )
+
+        # screening_result가 전달되면 스크리닝 건너뛰기 (--all 모드에서 1회만 실행)
+        if screening_result:
+            top_stocks, stats = screening_result
+            print(f"\n[3] 스크리닝 결과 재사용 ({len(top_stocks)}개 종목)")
+        else:
+            print(f"\n[3] 전종목 스크리닝 중 (strict 모드)...")
+            print(f"  시총: {ScreeningConfig.MIN_MARKET_CAP/1e8:.0f}억 ~ {ScreeningConfig.MAX_MARKET_CAP/1e8:.0f}억")
+            print(f"  거래대금: {ScreeningConfig.MIN_TRADING_AMOUNT/1e8:.0f}억 이상")
+            screener = MarketScreener(max_workers=ScreeningConfig.MAX_WORKERS)
+            top_stocks, stats = screener.run_full_screening(
+                top_n=ScreeningConfig.TOP_N,
+                mode="strict",
+                min_marcap=ScreeningConfig.MIN_MARKET_CAP,
+                max_marcap=ScreeningConfig.MAX_MARKET_CAP,
+                min_amount=ScreeningConfig.MIN_TRADING_AMOUNT,
+            )
 
         if not top_stocks:
             print("  스크리닝 결과 없음")
             return {"status": "completed", "buy_count": 0}
 
-        print(f"  스크리닝 완료: {len(top_stocks)}개 종목")
+        if not screening_result:
+            print(f"  스크리닝 완료: {len(top_stocks)}개 종목")
 
         # JSON 파일에 스크리닝 결과 저장 (진단 페이지 점수 동기화용)
         try:
@@ -1922,8 +1933,8 @@ class AutoTrader:
         except Exception as e:
             print(f"  JSON 저장 실패: {e}")
 
-        # 4. 매수 후보 필터링 (점수 + 거래량 + 연속성 조건)
-        print(f"\n[4] 매수 후보 필터링 중 (점수 >= {min_score}, 거래량/연속성 조건 적용)...")
+        # 4. 매수 후보 필터링 (점수 + 거래량 조건)
+        print(f"\n[4] 매수 후보 필터링 중 (점수 >= {min_score}, 거래량 조건 적용)...")
 
         # 시간대별 거래량 보정 계수
         now = datetime.now()
@@ -1937,20 +1948,6 @@ class AutoTrader:
         else:
             volume_multiplier = 1.0  # 14시 이후
         print(f"  시간대 거래량 보정: x{volume_multiplier}")
-
-        # 이전 스크리닝 결과 로드 (10분 전 점수 확인용)
-        prev_scores = {}
-        try:
-            intraday_files = sorted(OUTPUT_DIR.glob("intraday_*.json"), reverse=True)
-            if len(intraday_files) >= 2:
-                # 가장 최근 파일은 방금 저장한 것이므로, 두 번째 파일이 이전 스크리닝
-                with open(intraday_files[1], 'r', encoding='utf-8') as f:
-                    prev_data = json.load(f)
-                    for s in prev_data.get("stocks", []):
-                        prev_scores[s.get("code")] = s.get("score", 0)
-                print(f"  이전 스크리닝 로드: {intraday_files[1].name} ({len(prev_scores)}종목)")
-        except Exception as e:
-            print(f"  이전 스크리닝 로드 실패: {e}")
 
         candidates = []
         for stock in top_stocks:
@@ -1968,13 +1965,6 @@ class AutoTrader:
             if adjusted_volume < 1.5:
                 print(f"  [{name}] 거래량 부족 (원본 {volume_ratio:.1f}배, 보정 {adjusted_volume:.1f}배) - 제외")
                 continue
-
-            # 75점 이상 ~ 80점 미만: 이전 스크리닝에서도 75점 이상이어야 함
-            if min_score <= score < 80:
-                prev_score = prev_scores.get(code, 0)
-                if prev_score < min_score:
-                    print(f"  [{name}] 점수 {score}점, 이전 {prev_score}점 - 연속성 부족")
-                    continue
 
             # auto_trader 형식으로 변환
             candidates.append({
@@ -2161,6 +2151,23 @@ def run_for_all_users(dry_run: bool = False, min_score: int = 75):
     for user in users:
         print(f"  - user_id={user['user_id']}, mode={user['trade_mode']}, mock={user['is_mock']}")
 
+    # [최적화] 전종목 스크리닝 1회만 실행 (semi/auto 모드 사용자가 있을 때)
+    screening_result = None
+    semi_auto_users = [u for u in users if u['trade_mode'] in ('semi', 'auto')]
+    if semi_auto_users:
+        print(f"\n[2] 전종목 스크리닝 (1회 실행, {len(semi_auto_users)}명 공유)")
+        from config import ScreeningConfig
+        screener = MarketScreener(max_workers=ScreeningConfig.MAX_WORKERS)
+        top_stocks, stats = screener.run_full_screening(
+            top_n=ScreeningConfig.TOP_N,
+            mode="strict",
+            min_marcap=ScreeningConfig.MIN_MARKET_CAP,
+            max_marcap=ScreeningConfig.MAX_MARKET_CAP,
+            min_amount=ScreeningConfig.MIN_TRADING_AMOUNT,
+        )
+        screening_result = (top_stocks, stats)
+        print(f"  스크리닝 완료: {len(top_stocks) if top_stocks else 0}개 종목")
+
     results = []
 
     for user in users:
@@ -2198,7 +2205,7 @@ def run_for_all_users(dry_run: bool = False, min_score: int = 75):
             if trade_mode == 'greenlight':
                 result = trader.run_greenlight()
             elif trade_mode in ('auto', 'semi'):
-                result = trader.run_intraday(min_score=min_score)
+                result = trader.run_intraday(min_score=min_score, screening_result=screening_result)
             else:
                 print(f"  지원하지 않는 모드: {trade_mode}")
                 continue
