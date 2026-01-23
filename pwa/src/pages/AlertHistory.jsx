@@ -88,9 +88,12 @@ export default function AlertHistory() {
     };
   };
 
-  // 날짜 포맷
+  // 날짜 포맷 (서버에서 KST 시간으로 저장됨)
   const formatDate = (dateStr) => {
-    const date = new Date(dateStr);
+    // DB에서 "2026-01-23 13:06:06" 형식으로 오는데, 시간대 정보가 없음
+    // 서버가 KST로 저장하므로 명시적으로 +09:00 붙여서 파싱
+    const kstDateStr = dateStr.replace(' ', 'T') + '+09:00';
+    const date = new Date(kstDateStr);
     const now = new Date();
     const diff = now - date;
     const diffDays = Math.floor(diff / (1000 * 60 * 60 * 24));
