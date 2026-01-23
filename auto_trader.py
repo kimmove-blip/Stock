@@ -731,11 +731,18 @@ class AutoTrader:
                 continue
 
             # === 당일 상한가 체크 (시장가 주문 불가) ===
-            prev_close = item.get("current_price", current_price)
-            if prev_close > 0:
-                today_change_pct = (current_price - prev_close) / prev_close * 100
-                if today_change_pct >= 29:
-                    print(f"  {stock_name}: 당일 상한가 근접 ({today_change_pct:+.1f}%) - 시장가 주문 불가")
+            # 스크리닝 결과의 change_pct 사용 (전일 대비 등락률)
+            screening_change_pct = item.get("change_pct", 0)
+            if screening_change_pct >= 25:
+                print(f"  {stock_name}: 상한가 근접 ({screening_change_pct:+.1f}%) - 시장가 주문 불가")
+                continue
+
+            # 실시간 가격으로도 재확인 (전일종가 기준)
+            prev_close = item.get("current_price", 0)
+            if prev_close > 0 and current_price > 0:
+                realtime_change_pct = (current_price - prev_close) / prev_close * 100
+                if realtime_change_pct >= 25:
+                    print(f"  {stock_name}: 실시간 상한가 근접 ({realtime_change_pct:+.1f}%) - 시장가 주문 불가")
                     continue
 
             # === 시초가 갭 전략 평가 ===
