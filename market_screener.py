@@ -315,11 +315,15 @@ class MarketScreener:
             f"    → 스크리닝 완료: {len(results):,}개 유효 종목 (소요시간: {elapsed_total:.1f}초)"
         )
         return results
-    def get_top_stocks(self, results, top_n=100, min_score=30):
+    def get_top_stocks(self, results, top_n=None, min_score=30):
         """
         상위 종목 추출 (다중 정렬 기준 적용)
+        top_n=None이면 전체 반환
         """
-        print(f"[5/5] 상위 {top_n}개 종목 선정 중...")
+        if top_n:
+            print(f"[5/5] 상위 {top_n}개 종목 선정 중...")
+        else:
+            print(f"[5/5] 전체 종목 정렬 중...")
         # 최소 점수 이상만 필터
         filtered = [r for r in results if r["score"] >= min_score]
         # 다중 정렬 기준 함수
@@ -335,8 +339,8 @@ class MarketScreener:
             return (-score_priority, -total_weight, -signal_count)
         # 다중 정렬 적용
         sorted_results = sorted(filtered, key=sort_key)
-        # 상위 N개 추출
-        top_stocks = sorted_results[:top_n]
+        # 상위 N개 추출 (top_n=None이면 전체)
+        top_stocks = sorted_results[:top_n] if top_n else sorted_results
         print(f"    → {len(top_stocks)}개 종목 선정 완료")
         return top_stocks
 
