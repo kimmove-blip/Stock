@@ -210,6 +210,129 @@ def detect_distribution_pattern(df: pd.DataFrame) -> Dict:
     return result
 
 
+def detect_double_top_pattern(df: pd.DataFrame) -> Dict:
+    """
+    쌍봉(Double Top/이중 천정형) 패턴 감지
+
+    쌍봉 조건:
+    1. 최근 60일 내 고점이 두 번 발생
+    2. 두 번째 고점이 첫 번째 고점과 비슷하거나 약간 낮음 (±3%)
+    3. 두 고점 사이에 명확한 저점(Neckline)이 존재
+    4. 현재가가 Neckline 근처 또는 하향 이탈 시 critical 경고
+
+    Returns:
+        {
+            'detected': bool,
+            'pattern_type': 'double_top' | 'head_and_shoulders' | None,
+            'severity': 'critical' | 'high' | 'medium' | None,
+            'first_peak': float,   # 첫 번째 고점
+            'second_peak': float,  # 두 번째 고점
+            'neckline': float,     # 네크라인 (두 고점 사이 저점)
+            'neckline_broken': bool,  # 네크라인 이탈 여부
+            'target_price': float,    # 하락 목표가 (고점-네크라인 만큼 하락)
+        }
+    """
+    result = {
+        'detected': False,
+        'pattern_type': None,
+        'severity': None,
+        'first_peak': 0,
+        'second_peak': 0,
+        'neckline': 0,
+        'neckline_broken': False,
+        'target_price': 0,
+    }
+
+    try:
+        if len(df) < 60:
+            return result
+
+        recent = df.tail(60)
+        curr_close = df.iloc[-1]['Close']
+
+        # 로컬 고점 찾기 (5일 기준)
+        local_highs = []
+        for i in range(5, len(recent) - 5):
+            window = recent.iloc[i-5:i+6]
+            if recent.iloc[i]['High'] == window['High'].max():
+                local_highs.append({
+                    'idx': i,
+                    'price': recent.iloc[i]['High'],
+                    'date': recent.index[i] if hasattr(recent.index, '__iter__') else i
+                })
+
+        if len(local_highs) < 2:
+            return result
+
+        # 최근 2개의 유효한 고점 선택 (가격 비슷한 것)
+        sorted_highs = sorted(local_highs, key=lambda x: x['price'], reverse=True)
+
+        first_peak = sorted_highs[0]
+        second_peak = None
+
+        for peak in sorted_highs[1:]:
+            # 첫 번째 고점과 ±5% 범위 내이고, 최소 10일 간격
+            price_diff = abs(peak['price'] / first_peak['price'] - 1) * 100
+            idx_diff = abs(peak['idx'] - first_peak['idx'])
+
+            if price_diff <= 5 and idx_diff >= 10:
+                second_peak = peak
+                break
+
+        if second_peak is None:
+            return result
+
+        # 시간 순서 정리 (먼저 온 게 first)
+        if first_peak['idx'] > second_peak['idx']:
+            first_peak, second_peak = second_peak, first_peak
+
+        # 두 고점 사이의 저점 (Neckline) 찾기
+        start_idx = first_peak['idx']
+        end_idx = second_peak['idx']
+        between = recent.iloc[start_idx:end_idx+1]
+
+        if len(between) < 3:
+            return result
+
+        neckline = between['Low'].min()
+
+        # 결과 저장
+        result['first_peak'] = first_peak['price']
+        result['second_peak'] = second_peak['price']
+        result['neckline'] = neckline
+
+        # 패턴 완성도 평가
+        peak_height = (first_peak['price'] + second_peak['price']) / 2
+        neckline_depth = (peak_height - neckline) / peak_height * 100
+
+        # 유효한 쌍봉: 네크라인이 고점 대비 5% 이상 깊어야 함
+        if neckline_depth < 5:
+            return result
+
+        result['detected'] = True
+        result['pattern_type'] = 'double_top'
+
+        # 하락 목표가 계산 (측정 원칙: 고점에서 네크라인까지 거리만큼 하락)
+        drop_distance = peak_height - neckline
+        result['target_price'] = neckline - drop_distance
+
+        # 네크라인 이탈 여부 및 심각도 판정
+        if curr_close < neckline * 0.98:  # 네크라인 2% 이상 하향 이탈
+            result['neckline_broken'] = True
+            result['severity'] = 'critical'
+        elif curr_close < neckline * 1.02:  # 네크라인 근처
+            result['severity'] = 'high'
+        elif curr_close < second_peak['price'] * 0.95:  # 두 번째 고점에서 5% 하락
+            result['severity'] = 'medium'
+        else:
+            result['severity'] = 'low'  # 아직 패턴 진행 중
+
+    except Exception:
+        pass
+
+    return result
+
+
 # ============================================================
 # Phase 2: 와이코프 Phase 판단
 # ============================================================
@@ -380,12 +503,68 @@ def detect_wyckoff_phase(df: pd.DataFrame) -> Dict:
             result['confidence'] = 30
 
         # SOS (Sign of Strength) 감지 - Phase D 진입 신호
+        sos_detected = False
+        sos_idx = None
+
         if result['phase'] == 'C':
             # 저항선 돌파 + 거래량 급증
             if curr_close > high_60d * 0.95 and df.iloc[-1]['Volume'] > vol_ma * 1.5:
                 result['events'].append('SOS')
                 result['phase'] = 'D'
                 result['confidence'] = min(100, result['confidence'] + 20)
+                sos_detected = True
+                sos_idx = len(recent) - 1
+
+        # BU (Back Up to Edge of Creek) 감지 - Phase D 최적 매수 타점
+        # SOS 발생 후 돌파했던 저항선(이제 지지선)까지 거래량 없이 눌림목
+        bu_detected = False
+
+        # 최근 20일 내 SOS 패턴이 있었는지 확인 (현재 SOS가 아니더라도)
+        for i in range(len(recent) - 20, len(recent) - 3):
+            if i < 0:
+                continue
+            # 과거 돌파 시점 찾기: 저항선 돌파 + 고거래량
+            past_close = recent.iloc[i]['Close']
+            past_volume = recent.iloc[i]['Volume']
+            if past_close > high_60d * 0.95 and past_volume > vol_ma * 1.5:
+                sos_detected = True
+                sos_idx = i
+                if 'SOS' not in result['events']:
+                    result['events'].append('SOS')
+                break
+
+        if sos_detected and sos_idx is not None:
+            # SOS 이후 눌림목 확인
+            # 조건: SOS 고점에서 하락 → 저항선(=지지선) 근처 도달 → 거래량 감소
+            sos_high = recent.iloc[sos_idx]['High']
+            resistance_turned_support = high_60d * 0.95  # 돌파했던 저항선
+
+            # 현재가가 저항선 전환 지지선 근처 (±3%)
+            near_support = abs(curr_close / resistance_turned_support - 1) * 100 < 3
+
+            # 최근 3일 거래량이 SOS 때보다 50% 이상 감소
+            recent_vol = recent['Volume'].tail(3).mean()
+            sos_volume = recent.iloc[sos_idx]['Volume']
+            vol_decreased = recent_vol < sos_volume * 0.5
+
+            # 현재가가 SOS 고점보다 낮음 (눌림)
+            pullback = curr_close < sos_high * 0.97
+
+            if near_support and vol_decreased and pullback:
+                bu_detected = True
+                result['events'].append('BU')
+                result['phase'] = 'D'
+                result['phase_score'] = 20  # BU는 최적 진입 타점, 만점
+                result['confidence'] = 90  # 높은 신뢰도
+                result['bu_entry_zone'] = True  # BU 진입 구간 플래그
+
+        # Phase D 이후 추가 상승 확인 (Phase E 진입)
+        if result['phase'] == 'D' and 'SOS' in result['events']:
+            # SOS 이후 5% 이상 추가 상승 시 Phase E (본격 상승)
+            if curr_close > high_60d * 1.05:
+                result['phase'] = 'E'
+                result['events'].append('MARKUP_CONFIRMED')
+                result['confidence'] = min(100, result['confidence'] + 10)
 
     except Exception as e:
         pass
@@ -504,20 +683,30 @@ def detect_short_covering_risk(
 def analyze_supply_demand(
     df: pd.DataFrame,
     investor_data: Optional[Dict] = None,
-    short_data: Optional[Dict] = None
+    short_data: Optional[Dict] = None,
+    market_regime: str = 'neutral',
+    stock_type: str = 'large_cap',
 ) -> Dict:
     """
-    수급 종합 분석 (20점 만점)
+    수급 종합 분석 (20점 만점) - 시장 국면별 가중치 차별화
 
-    점수 체계:
+    시장 국면에 따른 '주포' 가중치 조절:
+    - 상승장/대형주: 외국인/기관 수급 점수 비중 확대
+    - 하락장/중소형주: 패턴/공시 비중 확대 (수급 점수 비중 축소)
+
+    Args:
+        market_regime: 'bull' (상승장) | 'bear' (하락장) | 'neutral' (횡보장)
+        stock_type: 'large_cap' (대형주/코스피) | 'small_cap' (중소형주/코스닥)
+
+    점수 체계 (기본):
     - 외국인 5일 연속 순매수: +6점
     - 기관 5일 연속 순매수: +6점
     - 외국인+기관 동시 순매수: +4점
     - OBV 상승 추세: +4점
 
-    과락:
-    - 숏커버링 의심: 수급 점수 0점
-    - 외국인+기관 10일 연속 순매도: 수급 0점
+    가중치 조절:
+    - 상승장/대형주: 기본값 (외국인/기관 중심)
+    - 하락장/중소형주: 외국인/기관 점수 50% 감산, OBV/패턴 점수 증가
 
     Returns:
         {
@@ -525,6 +714,7 @@ def analyze_supply_demand(
             'signals': [],
             'disqualified': bool,
             'disqualify_reason': str,
+            'regime_adjustment': str,  # 시장 국면 조정 정보
         }
     """
     result = {
@@ -532,6 +722,7 @@ def analyze_supply_demand(
         'signals': [],
         'disqualified': False,
         'disqualify_reason': '',
+        'regime_adjustment': '',
     }
 
     try:
@@ -545,6 +736,18 @@ def analyze_supply_demand(
 
         score = 0
 
+        # 시장 국면별 가중치 결정
+        # 상승장+대형주: 외국인/기관 중심 (가중치 1.0)
+        # 하락장/중소형주: 외국인/기관 비중 축소 (가중치 0.5)
+        supply_weight = 1.0
+        if market_regime == 'bear' or stock_type == 'small_cap':
+            supply_weight = 0.5
+            result['regime_adjustment'] = f'{market_regime}/{stock_type}: 수급 가중치 50%'
+            result['signals'].append('REGIME_ADJUSTED')
+        elif market_regime == 'bull' and stock_type == 'large_cap':
+            supply_weight = 1.2  # 상승장 대형주는 약간 가점
+            result['regime_adjustment'] = '상승장/대형주: 수급 가중치 120%'
+
         # 투자자 동향 분석
         if investor_data:
             foreign_cons = investor_data.get('consecutive_foreign_buy', 0)
@@ -552,25 +755,25 @@ def analyze_supply_demand(
             foreign_net = investor_data.get('foreign_net', 0)
             inst_net = investor_data.get('institution_net', 0)
 
-            # 외국인 연속 순매수
+            # 외국인 연속 순매수 (가중치 적용)
             if foreign_cons >= 5:
-                score += 6
+                score += int(6 * supply_weight)
                 result['signals'].append('FOREIGN_5DAY_BUY')
             elif foreign_cons >= 3:
-                score += 3
+                score += int(3 * supply_weight)
                 result['signals'].append('FOREIGN_3DAY_BUY')
 
-            # 기관 연속 순매수
+            # 기관 연속 순매수 (가중치 적용)
             if inst_cons >= 5:
-                score += 6
+                score += int(6 * supply_weight)
                 result['signals'].append('INST_5DAY_BUY')
             elif inst_cons >= 3:
-                score += 3
+                score += int(3 * supply_weight)
                 result['signals'].append('INST_3DAY_BUY')
 
-            # 외국인+기관 동시 순매수
+            # 외국인+기관 동시 순매수 (가중치 적용)
             if foreign_net > 0 and inst_net > 0:
-                score += 4
+                score += int(4 * supply_weight)
                 result['signals'].append('FOREIGN_INST_ALIGNED')
 
             # 10일 연속 순매도 과락
@@ -589,14 +792,18 @@ def analyze_supply_demand(
                     result['signals'].append('10DAY_SELL_STREAK')
                     return result
 
-        # OBV 추세
+        # OBV 추세 (하락장/중소형주에서 비중 증가)
+        obv_weight = 1.0
+        if market_regime == 'bear' or stock_type == 'small_cap':
+            obv_weight = 1.5  # 하락장/중소형주: OBV 비중 증가
+
         if len(df) >= 20:
             obv = ta.obv(df['Close'], df['Volume'])
             if obv is not None:
                 obv_ma = ta.sma(obv, length=20)
                 if obv_ma is not None and pd.notna(obv_ma.iloc[-1]):
                     if obv.iloc[-1] > obv_ma.iloc[-1]:
-                        score += 4
+                        score += int(4 * obv_weight)
                         result['signals'].append('OBV_ABOVE_MA')
 
         result['score'] = min(20, score)
@@ -615,11 +822,16 @@ def analyze_disclosure_signals(disclosure_data: Optional[Dict] = None) -> Dict:
     """
     공시 확증 분석 (15점 만점)
 
-    신호:
-    - 5% 신규 보유 공시 (경영참가 목적): +15점 (강한 확증)
-    - 5% 신규 보유 공시 (단순투자 목적): +8점
-    - 1%p 이상 지분 변동 공시: +5점
-    - CB/BW 전환가액 대비 현재가 20% 이상: 주의 (오버행)
+    신호 (우선순위):
+    1. 보유 목적 변경 (단순투자→경영참가): +15점 (가장 강력한 확증)
+    2. 5% 신규 보유 공시 (경영참가 목적): +15점 (강한 확증)
+    3. 5% 신규 보유 공시 (단순투자 목적): +8점
+    4. 1%p 이상 지분 변동 공시: +5점
+    5. CB/BW 전환가액 대비 현재가 20% 이상: 주의 (오버행)
+
+    보유 목적 변경의 의미:
+    - 기존 단순투자 → 경영참가로 변경 시 구체적 계획(임원 선임, 배당 요구 등) 기재 필수
+    - 단순 신규 진입보다 훨씬 공격적이고 명확한 주가 부양 의지를 드러냄
 
     과락:
     - CB 물량 출회 예정 (전환가액 < 현재가): 최대 50점 제한
@@ -631,7 +843,10 @@ def analyze_disclosure_signals(disclosure_data: Optional[Dict] = None) -> Dict:
                 'ownership_pct': float,
                 'change_pct': float,
                 'purpose': 'management' | 'investment' | 'other',
+                'previous_purpose': 'investment' | 'management' | None,  # 변경 전 목적 (신규)
+                'purpose_changed': bool,  # 목적 변경 여부 (신규)
                 'report_date': str,
+                'report_type': 'new' | 'change' | 'purpose_change',  # 보고 유형 (신규)
             }],
             'cb_bw': [{
                 'type': 'CB' | 'BW',
@@ -649,6 +864,7 @@ def analyze_disclosure_signals(disclosure_data: Optional[Dict] = None) -> Dict:
             'overhang_warning': bool,
             'overhang_ratio': float,  # 오버행 비율
             'max_score_limit': 100 | 50,  # CB 오버행 시 50점 제한
+            'purpose_change_detected': bool,  # 목적 변경 감지 여부 (신규)
         }
     """
     result = {
@@ -657,6 +873,7 @@ def analyze_disclosure_signals(disclosure_data: Optional[Dict] = None) -> Dict:
         'overhang_warning': False,
         'overhang_ratio': 0,
         'max_score_limit': 100,
+        'purpose_change_detected': False,
     }
 
     if not disclosure_data:
@@ -672,8 +889,27 @@ def analyze_disclosure_signals(disclosure_data: Optional[Dict] = None) -> Dict:
             ownership = sh.get('ownership_pct', 0)
             change = sh.get('change_pct', 0)
             purpose = sh.get('purpose', '')
+            previous_purpose = sh.get('previous_purpose')
+            purpose_changed = sh.get('purpose_changed', False)
+            report_type = sh.get('report_type', '')
 
-            # 5% 신규 보유
+            # 1. 보유 목적 변경 감지 (단순투자 → 경영참가) - 가장 강력한 신호
+            # 조건 1: purpose_changed 플래그가 True이고 현재 목적이 management
+            # 조건 2: previous_purpose가 investment이고 현재 purpose가 management
+            # 조건 3: report_type이 'purpose_change'
+            is_purpose_upgrade = (
+                (purpose_changed and purpose == 'management') or
+                (previous_purpose == 'investment' and purpose == 'management') or
+                (report_type == 'purpose_change' and purpose == 'management')
+            )
+
+            if is_purpose_upgrade:
+                score = 15  # 최고점 (다른 신호 무시)
+                result['signals'].append('PURPOSE_CHANGE_TO_MANAGEMENT')
+                result['purpose_change_detected'] = True
+                break  # 목적 변경은 최고 신호, 더 이상 분석 불필요
+
+            # 2. 5% 신규 보유
             if ownership >= 5 and change >= 5:
                 if purpose == 'management':
                     score += 15
@@ -682,7 +918,7 @@ def analyze_disclosure_signals(disclosure_data: Optional[Dict] = None) -> Dict:
                     score += 8
                     result['signals'].append('5PCT_NEW_INVESTMENT')
 
-            # 1%p 이상 지분 증가
+            # 3. 1%p 이상 지분 증가
             elif change >= 1:
                 score += 5
                 result['signals'].append('1PCT_INCREASE')
@@ -1081,6 +1317,23 @@ def detect_exit_signals(
                 warning_score += 25
                 result['signals'].append('DISTRIBUTION_REJECTION')
 
+        # 1-2. 쌍봉(Double Top) 패턴 감지 - 강력한 엑시트 신호
+        double_top = detect_double_top_pattern(df)
+        if double_top['detected']:
+            result['double_top'] = double_top  # 상세 정보 저장
+
+            if double_top['severity'] == 'critical':
+                # 네크라인 이탈 - 가장 강력한 매도 신호
+                warning_score += 50
+                result['signals'].append('DOUBLE_TOP_NECKLINE_BROKEN')
+            elif double_top['severity'] == 'high':
+                # 네크라인 근처 - 임박한 하락 가능성
+                warning_score += 35
+                result['signals'].append('DOUBLE_TOP_NECKLINE_TEST')
+            elif double_top['severity'] == 'medium':
+                warning_score += 20
+                result['signals'].append('DOUBLE_TOP_FORMING')
+
         # 2. 고점권 + 급락 시작
         if location.get('is_top_zone') and decline_from_peak < -5:
             warning_score += 20
@@ -1412,6 +1665,8 @@ def calculate_score_v3_5(
     investor_data: Optional[Dict] = None,
     short_data: Optional[Dict] = None,
     disclosure_data: Optional[Dict] = None,
+    market_regime: str = 'neutral',
+    stock_type: str = 'large_cap',
 ) -> Optional[Dict]:
     """
     V3.5 점수 계산 (사일런트 바이어 발전형)
@@ -1421,6 +1676,8 @@ def calculate_score_v3_5(
         investor_data: 투자자 동향 데이터 (naver_investor.py)
         short_data: 공매도/대차잔고 데이터 (krx_short_data.py)
         disclosure_data: 공시 데이터 (5% 공시, CB/BW)
+        market_regime: 시장 국면 ('bull'|'bear'|'neutral')
+        stock_type: 종목 유형 ('large_cap'|'small_cap')
 
     Returns:
         {
@@ -1528,8 +1785,17 @@ def calculate_score_v3_5(
             for event in wyckoff['events']:
                 result['signals'].append(f'WYK_{event}')
 
+        # BU (Back Up) 감지 시 최적 진입 구간 표시
+        if wyckoff.get('bu_entry_zone'):
+            result['indicators']['bu_entry_zone'] = True
+            result['signals'].append('BU_OPTIMAL_ENTRY')
+
         # ========== Phase 3: 수급 분석 ==========
-        supply_demand = analyze_supply_demand(df, investor_data, short_data)
+        supply_demand = analyze_supply_demand(
+            df, investor_data, short_data,
+            market_regime=market_regime,
+            stock_type=stock_type
+        )
 
         if supply_demand['disqualified']:
             result['supply_demand_score'] = 0
@@ -1538,6 +1804,8 @@ def calculate_score_v3_5(
         else:
             result['supply_demand_score'] = supply_demand['score']
             result['signals'].extend(supply_demand['signals'])
+            if supply_demand.get('regime_adjustment'):
+                result['indicators']['regime_adjustment'] = supply_demand['regime_adjustment']
 
         # ========== Phase 4: 공시 분석 ==========
         disclosure = analyze_disclosure_signals(disclosure_data)
@@ -1783,6 +2051,21 @@ if __name__ == "__main__":
                 print(f"  레벨: {exit_warn.get('warning_level', '-')}")
                 print(f"  점수: {exit_warn.get('score', 0)}")
                 print(f"  신호: {exit_warn.get('signals', [])}")
+
+                # 쌍봉 패턴 상세
+                double_top = exit_warn.get('double_top', {})
+                if double_top and double_top.get('detected'):
+                    print(f"  [쌍봉 패턴]")
+                    print(f"    첫번째 고점: {double_top.get('first_peak', 0):,.0f}")
+                    print(f"    두번째 고점: {double_top.get('second_peak', 0):,.0f}")
+                    print(f"    네크라인: {double_top.get('neckline', 0):,.0f}")
+                    print(f"    네크라인 이탈: {'예' if double_top.get('neckline_broken') else '아니오'}")
+                    print(f"    하락 목표가: {double_top.get('target_price', 0):,.0f}")
+
+            # BU 진입 구간
+            if result['indicators'].get('bu_entry_zone'):
+                print(f"\n[BU 최적 진입 구간]")
+                print(f"  돌파 후 눌림목 - 저위험 진입 타점!")
 
             if result['disqualified']:
                 print(f"과락: {result['disqualify_reason']}")
