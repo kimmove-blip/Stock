@@ -8,6 +8,7 @@
 - V3.5: 사일런트 바이어 발전형 (와이코프 Phase, 위치 필터, 숏커버링, 공시 확증)
 - V4: Hybrid Sniper (VCP, OBV 다이버전스, 수급)
 - V5: 장대양봉 (Long Bullish Candle) - 눌림목, BB수축, 이평선 밀집, OBV 다이버전스
+- V6: Swing Predictor (스윙 예측기) - 2~5일 홀딩, 목표가/손절가 청산
 """
 
 from .scoring_v1 import calculate_score_v1
@@ -16,6 +17,9 @@ from .scoring_v3 import calculate_score_v3
 from .scoring_v3_5 import calculate_score_v3_5, calculate_score_v3_5_with_investor
 from .scoring_v4 import calculate_score_v4, calculate_score_v4_with_investor
 from .scoring_v5 import calculate_score_v5
+from .scoring_v6 import calculate_score_v6, calculate_score_v6_with_investor
+from .score_v7_trend_momentum import calculate_score_v7
+from .score_v8_contrarian_bounce import calculate_score_v8, calculate_score_v8_with_investor
 
 # 버전별 함수 매핑
 SCORING_FUNCTIONS = {
@@ -25,6 +29,9 @@ SCORING_FUNCTIONS = {
     'v3.5': calculate_score_v3_5,
     'v4': calculate_score_v4,
     'v5': calculate_score_v5,
+    'v6': calculate_score_v6,
+    'v7': calculate_score_v7,
+    'v8': calculate_score_v8,
 }
 
 # 기본 버전 (현재 운영 중)
@@ -93,6 +100,10 @@ def list_versions():
         'v3': '사일런트 바이어 (OBV 다이버전스, 매집봉, Spring, VCP)',
         'v3.5': '사일런트 바이어 발전형 (와이코프 Phase, 위치 필터, 숏커버링, 공시 확증)',
         'v4': 'Hybrid Sniper (VCP, OBV 다이버전스, 수급)',
+        'v5': '장대양봉 (Long Bullish Candle) - 눌림목, BB수축, 이평선 밀집',
+        'v6': 'Swing Predictor (스윙 예측기) - 2~5일 홀딩, 목표가/손절가 청산',
+        'v7': 'Trend Momentum (추세 모멘텀) - 추세필터, 3일홀딩, 트레일링스탑',
+        'v8': 'Contrarian Bounce (역발상 반등) - 약세종목 모멘텀반전, 바닥확인',
     }
 
     for version in SCORING_FUNCTIONS.keys():
@@ -110,6 +121,12 @@ __all__ = [
     'calculate_score_v3_5_with_investor',
     'calculate_score_v4',
     'calculate_score_v4_with_investor',
+    'calculate_score_v5',
+    'calculate_score_v6',
+    'calculate_score_v6_with_investor',
+    'calculate_score_v7',
+    'calculate_score_v8',
+    'calculate_score_v8_with_investor',
     'calculate_score',
     'compare_scores',
     'list_versions',
