@@ -136,14 +136,22 @@ self.addEventListener('notificationclick', (event) => {
 
   event.waitUntil(
     clients.matchAll({ type: 'window', includeUncontrolled: true }).then((clientList) => {
-      // 이미 열린 창이 있으면 포커스
-      for (const client of clientList) {
-        if (client.url.includes('stock.kims-ai.com') && 'focus' in client) {
-          client.navigate(urlToOpen);
+      // 이미 열린 창이 있으면 포커스 및 이동
+      if (clientList.length > 0) {
+        const client = clientList[0];
+        // 상대 경로면 현재 origin 기준으로 변환
+        const targetUrl = urlToOpen.startsWith('/')
+          ? new URL(urlToOpen, client.url).href
+          : urlToOpen;
+
+        if ('navigate' in client) {
+          client.navigate(targetUrl);
+        }
+        if ('focus' in client) {
           return client.focus();
         }
       }
-      // 없으면 새 창 열기
+      // 열린 창이 없으면 새 창 열기
       return clients.openWindow(urlToOpen);
     })
   );
