@@ -8,6 +8,7 @@ import os
 import sys
 import argparse
 import pickle
+import json
 from datetime import datetime
 from pathlib import Path
 
@@ -29,9 +30,16 @@ def get_auto_users():
         return [row['user_id'] for row in cursor.fetchall()]
 
 
-def get_v9_top_stocks(top_n=5, max_price=200000):
-    """V9 모델로 갭상승 확률 상위 종목 조회"""
+def get_v9_top_stocks(top_n=5, max_price=200000, fast_mode=False):
+    """V9 모델로 갭상승 확률 상위 종목 조회
+
+    Args:
+        top_n: 상위 N개 종목 반환
+        max_price: 최대 주가 필터 (0이면 필터 없음)
+        fast_mode: True면 거래대금 상위 500종목만 스캔 (빠른 모드)
+    """
     from pykrx import stock
+    from pykrx.website.krx.market.ticker import StockTicker
     import pandas as pd
     import numpy as np
 
@@ -47,10 +55,42 @@ def get_v9_top_stocks(top_n=5, max_price=200000):
 
     today = datetime.now().strftime('%Y%m%d')
 
-    # 전 종목 조회
-    kospi = stock.get_market_ticker_list(today, market='KOSPI')
-    kosdaq = stock.get_market_ticker_list(today, market='KOSDAQ')
-    all_tickers = kospi + kosdaq
+    # 전 종목 조회 (StockTicker 사용)
+    ticker_df = StockTicker().listed
+    ticker_df = ticker_df[ticker_df['시장'].isin(['STK', 'KSQ'])]
+    all_tickers = ticker_df.index.tolist()
+    ticker_names = ticker_df['종목'].to_dict()
+
+    # 빠른 모드: 최근 top100 결과 + 추가 종목만 스캔
+    if fast_mode:
+        print("빠른 모드: top100 기반 후보 종목 사용...")
+        output_dir = Path(__file__).parent / "output"
+        top100_files = sorted(output_dir.glob('top100_2*.json'), reverse=True)
+        candidate_tickers = set()
+
+        # top100 결과에서 종목 추출
+        for json_file in top100_files[:3]:  # 최근 3일치
+            try:
+                with open(json_file, 'r', encoding='utf-8') as f:
+                    data = json.load(f)
+                # stocks 키 아래에 종목 리스트가 있는 경우
+                stocks_list = data.get('stocks', data) if isinstance(data, dict) else data
+                for item in stocks_list:
+                    if isinstance(item, dict):
+                        code = item.get('code') or item.get('ticker') or item.get('stock_code')
+                        if code:
+                            candidate_tickers.add(code)
+            except Exception as e:
+                print(f"  파일 로드 실패: {json_file.name} - {e}")
+
+        # 후보가 있으면 사용
+        if candidate_tickers:
+            # 후보 + 추가 200개 (전체 리스트에서 샘플링)
+            extra_tickers = [t for t in all_tickers if t not in candidate_tickers][:200]
+            all_tickers = list(candidate_tickers) + extra_tickers
+            print(f"  → {len(candidate_tickers)}개 top100 후보 + {len(extra_tickers)}개 추가 = {len(all_tickers)}종목")
+        else:
+            print("  → top100 후보 없음, 전체 스캔")
 
     print(f"V9 모델 예측 중... ({len(all_tickers)}종목)")
 
@@ -72,13 +112,16 @@ def get_v9_top_stocks(top_n=5, max_price=200000):
 
             df = df.tail(60)
 
+            # 거래대금 계산 (pykrx는 거래대금 컬럼 미제공)
+            df['거래대금'] = df['거래량'] * df['종가']
+
             # 거래대금 필터 (30억 이상)
             if df['거래대금'].iloc[-1] < 3_000_000_000:
                 continue
 
-            # 현재가 필터
+            # 현재가 필터 (max_price가 0보다 크면 적용)
             current_price = df['종가'].iloc[-1]
-            if current_price > max_price:
+            if max_price > 0 and current_price > max_price:
                 continue
 
             # 피처 계산
@@ -115,12 +158,12 @@ def get_v9_top_stocks(top_n=5, max_price=200000):
             X = pd.DataFrame([feature_dict])[features]
             prob = model.predict_proba(X)[0][1]
 
-            name = stock.get_market_ticker_name(ticker)
+            name = ticker_names.get(ticker, '')
             results.append({
                 'ticker': ticker,
                 'name': name,
-                'price': current_price,
-                'prob': prob
+                'price': int(current_price),
+                'prob': float(prob)
             })
 
         except Exception:
@@ -241,7 +284,9 @@ def main():
     parser.add_argument('--buy', action='store_true', help='매수 주문 실행')
     parser.add_argument('--list', action='store_true', help='V9 상위 종목 조회만')
     parser.add_argument('--top', type=int, default=5, help='상위 N개 종목')
-    parser.add_argument('--max-price', type=int, default=200000, help='최대 주가')
+    parser.add_argument('--max-price', type=int, default=0, help='최대 주가 (0=무제한)')
+    parser.add_argument('--fast', action='store_true', help='빠른 모드 (거래대금 상위 500종목만)')
+    parser.add_argument('--use-latest', action='store_true', help='최근 저장된 결과 사용')
     parser.add_argument('--dry-run', action='store_true', help='테스트 모드')
     parser.add_argument('--user-id', type=int, help='특정 사용자만')
     args = parser.parse_args()
@@ -250,8 +295,23 @@ def main():
     print(f"V9 갭상승 종가 매수 - {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     print(f"{'='*50}\n")
 
-    # V9 상위 종목 조회
-    stocks = get_v9_top_stocks(top_n=args.top, max_price=args.max_price)
+    # 최근 저장된 결과 사용
+    if args.use_latest:
+        output_dir = Path(__file__).parent / "output"
+        json_files = sorted(output_dir.glob("v9_result_*.json"), reverse=True)
+        if json_files:
+            latest_file = json_files[0]
+            print(f"최근 결과 로드: {latest_file.name}")
+            with open(latest_file, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+            stocks = data['stocks'][:args.top]
+            print(f"  저장 시간: {data['timestamp']}")
+        else:
+            print("저장된 V9 결과 없음, 새로 예측 실행")
+            stocks = get_v9_top_stocks(top_n=args.top, max_price=args.max_price, fast_mode=args.fast)
+    else:
+        # V9 상위 종목 조회
+        stocks = get_v9_top_stocks(top_n=args.top, max_price=args.max_price, fast_mode=args.fast)
 
     if not stocks:
         print("V9 상위 종목 없음")
@@ -260,6 +320,20 @@ def main():
     print(f"\n=== V9 상위 {len(stocks)}종목 ===")
     for i, s in enumerate(stocks, 1):
         print(f"  {i}. {s['name']}({s['ticker']}): {s['price']:,}원, 확률 {s['prob']:.1%}")
+
+    # 결과 JSON 저장 (--use-latest가 아닐 때만)
+    if not args.use_latest:
+        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+        output_path = Path(__file__).parent / "output" / f"v9_result_{timestamp}.json"
+        result_data = {
+            'timestamp': datetime.now().isoformat(),
+            'top_n': args.top,
+            'fast_mode': args.fast,
+            'stocks': stocks
+        }
+        with open(output_path, 'w', encoding='utf-8') as f:
+            json.dump(result_data, f, ensure_ascii=False, indent=2)
+        print(f"\n결과 저장: {output_path}")
 
     if args.list:
         return
