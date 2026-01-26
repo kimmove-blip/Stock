@@ -101,6 +101,121 @@ python -m py_compile <filename>.py
 
 ---
 
+## 스코어링/전략 엔진
+
+### 기술적 분석 스코어링 (V1~V8)
+
+| 버전 | 전략명 | 설명 |
+|------|--------|------|
+| V1 | 종합 기술적 분석 | 과매도 가점, 역발상 |
+| **V2** | **추세 추종 강화** | **역배열 과락, 20일선 기울기 (현재 운영 기본값)** |
+| V3 | 사일런트 바이어 | OBV 다이버전스, 매집봉, Spring, VCP |
+| V3.5 | 사일런트 바이어 발전형 | 와이코프 Phase, 위치 필터, 숏커버링 |
+| V4 | Hybrid Sniper | VCP, OBV 다이버전스, 수급 |
+| V5 | 장대양봉 | 눌림목, BB수축, 이평선 밀집, OBV 다이버전스 |
+| V6 | Swing Predictor | 2~5일 홀딩, 목표가/손절가 청산 |
+| V7 | Trend Momentum | 추세필터, 3일홀딩, 트레일링스탑 |
+| V8 | Contrarian Bounce | 약세종목 모멘텀반전, 바닥확인 |
+
+### V9: 갭상승 확률 예측 (ML 기반)
+
+> **V9는 기술적 스코어링이 아닌 머신러닝 기반 오버나잇 갭상승 예측 전략**
+
+| 항목 | 내용 |
+|------|------|
+| 모델 | RandomForest 분류기 |
+| 목표 | 익일 시가 갭상승 확률 예측 |
+| 진입 | 장 마감 전 매수 (15:20 크론) |
+| 청산 | 익일 시가 매도 |
+| 임계값 | **확률 70% 이상** |
+
+#### V9 백테스트 결과 (1년, 비용 0.203% 차감 후)
+
+| 확률 임계값 | 거래수 | 승률 | 실제수익률 | 연간 총수익 |
+|-------------|--------|------|------------|-------------|
+| ≥50% | 18,245 | 55.9% | -0.075% | -1,368% |
+| ≥60% | 5,927 | 59.2% | +0.066% | +391% |
+| **≥70%** | **909** | **61.2%** | **+0.185%** | **+168%** |
+| ≥75% | 312 | 63.8% | +0.428% | +134% |
+| ≥80% | 98 | 61.2% | +0.446% | +44% |
+
+#### V9 피처 (20+개)
+- 캔들: `close_pos`, `body_ratio`, `upper_wick`, `lower_wick`, `is_bull`
+- 이평선: `dist_ma5`, `dist_ma20`, `aligned`
+- 거래량: `vol_ratio`, `vol_declining`, `trade_value`
+- 모멘텀: `day_change`, `rsi`, `consec_bull`, `is_surge`, `two_day_surge`
+- 위치: `near_high_20d`, `from_low_20d`, `volatility`
+
+#### V9 모델 학습
+
+```bash
+# 모델 재학습 (1회성, 약 30분 소요)
+python train_gap_model_v2.py
+```
+
+| 항목 | 내용 |
+|------|------|
+| 학습 데이터 | 5년치 (2021-01-23 ~ 2026-01-23) |
+| 데이터 소스 | pykrx (KOSPI/KOSDAQ 전 종목) |
+| 필터 조건 | 거래대금 50억+, 등락률 -15%~+25% |
+| 샘플 수 | 약 60,000+ 건 |
+| 저장 경로 | `models/gap_model_v9.pkl` |
+
+#### V9 관련 파일
+
+| 파일 | 설명 |
+|------|------|
+| `train_gap_model_v2.py` | 모델 학습 스크립트 (백테스트 동일 피처) |
+| `auto_trade_v9.py` | 자동매매 실행 (크론 15:20) |
+| `predict_gap_prob70.py` | 갭상승 확률 70%+ 종목 예측 |
+| `predict_gap_prob70_fast.py` | 빠른 버전 (캐시 모델 사용) |
+| `backtest_v9_historical.py` | 6개월 백테스트 |
+| `models/gap_model_v9.pkl` | 학습된 모델 파일 |
+| `docs/overnight_gap_strategy_v9_v10.md` | 전략 상세 문서 |
+
+### 스코어링 사용법
+
+```python
+from scoring import calculate_score, calculate_score_v4
+
+# 기본 버전 (v2) 사용
+result = calculate_score(df)
+
+# 특정 버전 사용
+result = calculate_score(df, version='v4')
+
+# 수급 데이터 포함 (v4, v6, v8)
+result = calculate_score_v4_with_investor(df, investor_data)
+```
+
+### 장중 스코어 기록 (V1~V9)
+
+> 10분마다 전 종목 스코어를 CSV로 기록
+
+| 항목 | 값 |
+|------|-----|
+| 대상 종목 | 거래대금 30억+, 시총 300억+ (~800개) |
+| 스코어 | V1~V8 + V9 갭상승확률 |
+| 실행 시간 | 09:03 ~ 15:43 (10분 간격, 39회/일) |
+| 저장 경로 | `output/intraday_scores/YYYYMMDD_HHMM.csv` |
+| 로그 | `/tmp/intraday_scores.log` |
+
+```bash
+# 수동 실행
+python record_intraday_scores.py
+
+# 테스트 (저장 안함)
+python record_intraday_scores.py --dry-run
+```
+
+#### CSV 컬럼
+```
+code, name, market, open, high, low, close, prev_close, change_pct,
+volume, amount, marcap, v1, v2, v3.5, v4, v5, v6, v7, v8, v9_prob, signals
+```
+
+---
+
 ## 시크릿 기능 - 자동매매
 
 > **중요**: 앱스토어 설명에 이 기능 언급 금지. 법적 문제로 추후 제거 가능.
