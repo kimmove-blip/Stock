@@ -16,30 +16,35 @@ FONT_BOLD = FONT_DIR / "NanumBarunpenB.ttf"
 
 def get_base_css():
     """기본 CSS 스타일 (한글 폰트 포함)"""
-    # NanumBarunpen 폰트 사용 (fontconfig에 등록됨)
-    font_family = "'NanumBarunpen', '나눔바른펜', sans-serif"
+    # 로컬 TTF 폰트 파일 직접 참조 (TTC 문제 회피)
+    font_regular = FONT_REGULAR.resolve().as_uri()
+    font_bold = FONT_BOLD.resolve().as_uri()
+
     return f"""
     @font-face {{
-        font-family: 'KoreanFont';
-        src: local('NanumBarunpen'), local('나눔바른펜');
+        font-family: 'NanumBarunpen';
+        src: url('{font_regular}') format('truetype');
         font-weight: normal;
+        font-style: normal;
     }}
+
     @font-face {{
-        font-family: 'KoreanFont';
-        src: local('NanumBarunpen Bold'), local('나눔바른펜 Bold');
+        font-family: 'NanumBarunpen';
+        src: url('{font_bold}') format('truetype');
         font-weight: bold;
+        font-style: normal;
     }}
 
     html, body, div, span, h1, h2, h3, h4, h5, h6, p, table, th, td, li, ul, ol {{
-        font-family: 'KoreanFont', {font_family} !important;
+        font-family: 'NanumBarunpen', sans-serif !important;
     }}
 
     * {{
-        font-family: 'KoreanFont', {font_family} !important;
+        font-family: 'NanumBarunpen', sans-serif !important;
     }}
 
     body {{
-        font-family: 'KoreanFont', {font_family};
+        font-family: 'NanumBarunpen', sans-serif;
         line-height: 1.6;
         color: #333;
         max-width: 100%;
@@ -49,7 +54,7 @@ def get_base_css():
     }}
 
     h1 {{
-        font-family: 'KoreanFont', 'NanumBarunpen', '나눔바른펜', sans-serif;
+        font-family: 'NanumBarunpen', sans-serif;
         font-weight: bold;
         color: #1a365d;
         border-bottom: 3px solid #2c5282;
@@ -59,7 +64,7 @@ def get_base_css():
     }}
 
     h2 {{
-        font-family: 'KoreanFont', 'NanumBarunpen', '나눔바른펜', sans-serif;
+        font-family: 'NanumBarunpen', sans-serif;
         font-weight: bold;
         color: #2c5282;
         margin-top: 25px;
@@ -69,7 +74,7 @@ def get_base_css():
     }}
 
     h3 {{
-        font-family: 'KoreanFont', 'NanumBarunpen', '나눔바른펜', sans-serif;
+        font-family: 'NanumBarunpen', sans-serif;
         font-weight: bold;
         color: #2d3748;
         font-size: 12pt;
@@ -267,12 +272,13 @@ def get_base_css():
     }}
 
     .header-logo {{
-        text-align: center;
-        font-size: 28pt;
+        position: absolute;
+        top: 15px;
+        right: 30px;
+        font-size: 10pt;
         font-weight: bold;
-        color: #2c5282;
-        margin-bottom: 10px;
-        letter-spacing: 2px;
+        color: #718096;
+        letter-spacing: 1px;
     }}
 
     .watermark {{
@@ -490,6 +496,14 @@ def create_detailed_html(results, stats=None, date_str=None):
     if date_str is None:
         date_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
+    # 스크리닝 엔진 버전명
+    version_names = {
+        'v1': '종합 기술적 분석',
+        'v2': '추세 추종 강화',
+        'v3': '래치 전략',
+        'v4': 'Hybrid Sniper'
+    }
+
     # 기본 통계 (stats가 없으면 기본값 사용)
     if stats is None:
         stats = {
@@ -544,47 +558,117 @@ def create_detailed_html(results, stats=None, date_str=None):
         signals = r.get("signals", [])
         indicators = r.get("indicators", {})
 
+        # === 점수 분석 ===
+        trend_score = r.get("trend_score", indicators.get("trend_score", 0)) or 0
+        momentum_score = r.get("momentum_score", indicators.get("momentum_score", 0)) or 0
+        volume_score = r.get("volume_score", indicators.get("volume_score", 0)) or 0
+        pattern_score = r.get("pattern_score", indicators.get("pattern_score", 0)) or 0
+        sma20_slope = r.get("sma20_slope", indicators.get("sma20_slope", 0))
+        trading_value = r.get("trading_value_억", indicators.get("trading_value_억", 0))
+        high_60d_pct = r.get("high_60d_pct", indicators.get("high_60d_pct", 0))
+        ma_status = r.get("ma_status", indicators.get("ma_status", ""))
+        selection_reasons = r.get("selection_reasons", [])
+
+        # 스크리닝 엔진 버전에 따른 점수 테이블
+        scoring_ver = stats.get('scoring_version', 'v2') if stats else 'v2'
+        if scoring_ver == 'v4':
+            # V4: 추세(30) + 수급(30) + 패턴(20) + 모멘텀(20)
+            score_breakdown = f"""
+            <table class="indicator-table">
+                <tr><th colspan="3" style="text-align:center; background:#2c5282; color:white;">점수 분석 (총 {score}점) - V4 Hybrid Sniper</th></tr>
+                <tr style="background:#e8f0fe;"><td><strong>추세 점수</strong></td><td style="text-align:right; font-weight:bold;">{trend_score}/30점</td><td>정배열, 20일선 기울기, 구름대, MACD</td></tr>
+                <tr><td><strong>수급 점수</strong></td><td style="text-align:right; font-weight:bold;">{volume_score}/30점</td><td>거래량, 거래대금, 기관/외국인</td></tr>
+                <tr style="background:#e8f0fe;"><td><strong>패턴 점수</strong></td><td style="text-align:right; font-weight:bold;">{pattern_score}/20점</td><td>VCP 패턴, OBV 다이버전스</td></tr>
+                <tr><td><strong>모멘텀 점수</strong></td><td style="text-align:right; font-weight:bold;">{momentum_score}/20점</td><td>RSI, StochRSI, 60일 신고가</td></tr>
+            </table>
+            """
+        else:
+            # V1-V3: 추세(30) + 모멘텀(35) + 거래량(35)
+            score_breakdown = f"""
+            <table class="indicator-table">
+                <tr><th colspan="3" style="text-align:center; background:#2c5282; color:white;">점수 분석 (총 {score}점)</th></tr>
+                <tr style="background:#e8f0fe;"><td><strong>추세 점수</strong></td><td style="text-align:right; font-weight:bold;">{trend_score}/30점</td><td>이평선 정배열, 20일선 기울기</td></tr>
+                <tr><td><strong>모멘텀 점수</strong></td><td style="text-align:right; font-weight:bold;">{momentum_score}/35점</td><td>RSI, 60일 신고가</td></tr>
+                <tr style="background:#e8f0fe;"><td><strong>거래량 점수</strong></td><td style="text-align:right; font-weight:bold;">{volume_score}/35점</td><td>거래량/거래대금</td></tr>
+            </table>
+            """
+
         # 지표 테이블 생성
         indicator_rows = ""
 
+        # 20일선 기울기 (변별력 강화 핵심)
+        if sma20_slope:
+            if sma20_slope > 3:
+                interp = "🔥 급등 추세"
+            elif sma20_slope > 1.5:
+                interp = "📈 상승 추세"
+            elif sma20_slope > 0.5:
+                interp = "완만한 상승"
+            else:
+                interp = "횡보"
+            highlight = " class='highlight'" if sma20_slope > 3 else ""
+            indicator_rows += f"<tr><td>20일선 기울기</td><td{highlight}>{sma20_slope:.1f}%</td><td>{interp}</td></tr>"
+
         # RSI
-        rsi = indicators.get("rsi")
+        rsi = r.get("rsi", indicators.get("rsi"))
         if rsi:
-            interp = get_indicator_interpretation("rsi", rsi)
-            indicator_rows += f"<tr><td>RSI</td><td>{rsi:.1f}</td><td>{interp}</td></tr>"
-
-        # ADX
-        adx = indicators.get("adx")
-        if adx:
-            interp = get_indicator_interpretation("adx", adx)
-            highlight = " class='highlight'" if adx > 25 else ""
-            indicator_rows += f"<tr><td>ADX</td><td{highlight}>{adx:.1f}</td><td>{interp}</td></tr>"
-
-        # MFI
-        mfi = indicators.get("mfi")
-        if mfi:
-            interp = get_indicator_interpretation("mfi", mfi)
-            indicator_rows += f"<tr><td>MFI</td><td>{mfi:.1f}</td><td>{interp}</td></tr>"
+            if 60 <= rsi <= 75:
+                interp = "✅ 최적 구간 (Sweet Spot)"
+            elif rsi > 80:
+                interp = "⚡ 강세 지속"
+            elif 50 <= rsi < 60:
+                interp = "안정적 상승"
+            elif rsi < 30:
+                interp = "⚠️ 과매도"
+            else:
+                interp = "중립"
+            highlight = " class='highlight'" if 60 <= rsi <= 75 else ""
+            indicator_rows += f"<tr><td>RSI (14)</td><td{highlight}>{rsi:.1f}</td><td>{interp}</td></tr>"
 
         # 거래량 배율
-        vol_ratio = indicators.get("volume_ratio")
+        vol_ratio = r.get("volume_ratio", indicators.get("volume_ratio"))
         if vol_ratio:
-            interp = get_indicator_interpretation("volume_ratio", vol_ratio)
-            highlight = " class='highlight'" if vol_ratio >= 2.0 else ""
-            indicator_rows += f"<tr><td>거래량 배율</td><td{highlight}>{vol_ratio:.2f}배</td><td>{interp}</td></tr>"
+            if vol_ratio >= 5:
+                interp = "🔥 폭발적 거래량"
+            elif vol_ratio >= 3:
+                interp = "📈 3배 이상 급증"
+            elif vol_ratio >= 2:
+                interp = "높은 거래량"
+            else:
+                interp = "보통"
+            highlight = " class='highlight'" if vol_ratio >= 3 else ""
+            indicator_rows += f"<tr><td>거래량 비율</td><td{highlight}>{vol_ratio:.1f}배</td><td>{interp}</td></tr>"
 
-        # CMF
-        cmf = indicators.get("cmf")
-        if cmf and abs(cmf) > 0.1:
-            interp = get_indicator_interpretation("cmf", cmf)
-            highlight = " class='highlight'" if cmf > 0.2 else (" class='negative'" if cmf < -0.2 else "")
-            cmf_text = "강한 자금유입" if cmf > 0.2 else ("강한 자금유출" if cmf < -0.2 else f"{cmf:.2f}")
-            indicator_rows += f"<tr><td>CMF</td><td{highlight}>{cmf_text}</td><td>{interp}</td></tr>"
+        # 거래대금
+        if trading_value:
+            if trading_value >= 500:
+                interp = "🔥 초대형 거래"
+            elif trading_value >= 100:
+                interp = "✅ 대형 거래"
+            elif trading_value >= 30:
+                interp = "보통"
+            else:
+                interp = "⚠️ 소형"
+            highlight = " class='highlight'" if trading_value >= 100 else ""
+            indicator_rows += f"<tr><td>거래대금</td><td{highlight}>{trading_value:.0f}억원</td><td>{interp}</td></tr>"
 
-        # CCI (과매도일 때만)
-        cci = indicators.get("cci")
-        if cci and cci < -100:
-            indicator_rows += f"<tr><td>CCI</td><td>과매도 탈출</td><td>반등 시작</td></tr>"
+        # 60일 고가 대비
+        if high_60d_pct is not None:
+            if high_60d_pct >= 0:
+                interp = "🔥 60일 신고가 돌파"
+            elif high_60d_pct >= -3:
+                interp = "📈 고가 근접"
+            elif high_60d_pct >= -5:
+                interp = "고가 접근 중"
+            else:
+                interp = f"고가 대비 {high_60d_pct:.1f}%"
+            highlight = " class='highlight'" if high_60d_pct >= -3 else ""
+            indicator_rows += f"<tr><td>60일 고가 대비</td><td{highlight}>{high_60d_pct:+.1f}%</td><td>{interp}</td></tr>"
+
+        # 이평선 상태
+        if ma_status:
+            ma_text = {"aligned": "✅ 정배열", "partial": "일부 정배열", "reverse_aligned": "❌ 역배열"}.get(ma_status, ma_status)
+            indicator_rows += f"<tr><td>이평선 상태</td><td>{ma_text}</td><td>5일 > 20일 > 60일</td></tr>"
 
         # 지표 테이블이 비어있으면 기본값
         if not indicator_rows:
@@ -594,11 +678,19 @@ def create_detailed_html(results, stats=None, date_str=None):
             """
 
         indicator_table = f"""
-        <table class="indicator-table">
-            <tr><th>지표</th><th>값</th><th>해석</th></tr>
+        {score_breakdown}
+        <table class="indicator-table" style="margin-top:10px;">
+            <tr><th>핵심 지표</th><th>값</th><th>해석</th></tr>
             {indicator_rows}
         </table>
         """
+
+        # 선정 이유 추가
+        if selection_reasons:
+            reasons_html = "<div style='margin-top:8px; padding:8px; background:#f8f9fa; border-radius:4px;'>"
+            reasons_html += "<strong>📌 선정 이유:</strong> " + ", ".join(selection_reasons[:5])
+            reasons_html += "</div>"
+            indicator_table += reasons_html
 
         # 발생 신호 해석
         signal_interpretations = generate_signal_interpretation(signals, indicators)
@@ -744,18 +836,19 @@ def create_detailed_html(results, stats=None, date_str=None):
     """
 
     # 전체 HTML 조립
+    scoring_ver = stats.get('scoring_version', 'v2').upper() if stats else 'V2'
     html = f"""
     <!DOCTYPE html>
     <html>
     <head>
         <meta charset="UTF-8">
-        <title>Kim's AI - 내일의 관심 종목 TOP 100 - {date_str}</title>
+        <title>Kim's AI - 내일의 관심 종목 TOP 100 ({scoring_ver}) - {date_str}</title>
     </head>
     <body>
         <div class="watermark">Kim's AI</div>
 
         <div class="header-logo">Kim's AI</div>
-        <h1>내일의 관심 종목 TOP 100</h1>
+        <h1>내일의 관심 종목 TOP 100 ({scoring_ver})</h1>
 
         <div style="background-color: #fff3cd; border: 1px solid #ffc107; padding: 15px; border-radius: 8px; margin-bottom: 20px;">
             <strong>투자 유의사항</strong><br><br>
@@ -765,9 +858,10 @@ def create_detailed_html(results, stats=None, date_str=None):
         </div>
 
         <div class="header-info">
-            <strong>생성일시:</strong> {date_str}
-            <strong>분석 모드:</strong> 기술적 분석 (18개 지표 + 캔들패턴)
-            <strong>분석 대상:</strong> KRX 전종목 (KOSPI + KOSDAQ)
+            <strong>생성일시:</strong> {date_str}<br>
+            <strong>스크리닝 엔진:</strong> {stats.get('scoring_version', 'v2').upper()} ({version_names.get(stats.get('scoring_version', 'v2'), '')})<br>
+            <strong>분석 모드:</strong> 기술적 분석 (18개 지표 + 캔들패턴)<br>
+            <strong>분석 대상:</strong> KRX 전종목 (KOSPI + KOSDAQ)<br>
             <strong>필터 조건:</strong> 시가총액 300억~1조, 거래대금 3억 이상, 주가 1,000원 이상, 관리종목/투자경고 제외
         </div>
 
@@ -788,7 +882,7 @@ def create_detailed_html(results, stats=None, date_str=None):
         {caution_html}
 
         <div class="footer">
-            <p style="text-align: center; font-weight: bold;">Generated by Kim's AI v1.0</p>
+            <p style="text-align: center; font-weight: bold;">Generated by Kim's AI v1.0 | Screening Engine {stats.get('scoring_version', 'v2').upper()}</p>
             <p style="text-align: center;">분석일: {date_str.split()[0] if ' ' in date_str else date_str}</p>
             <p style="text-align: center; color: #c53030;"><strong>본 자료의 무단 전재 및 재배포를 금지합니다.</strong></p>
         </div>
@@ -801,11 +895,66 @@ def create_detailed_html(results, stats=None, date_str=None):
 
 def generate_detailed_pdf(results, output_path, stats=None):
     """상세 분석 결과를 PDF로 저장"""
+    import tempfile
+    import shutil
+    from weasyprint.text.fonts import FontConfiguration
+
     date_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     html_content = create_detailed_html(results, stats=stats, date_str=date_str)
     css = CSS(string=get_base_css())
 
-    HTML(string=html_content).write_pdf(output_path, stylesheets=[css])
+    # 커스텀 fontconfig 설정으로 TTC 폰트 문제 우회
+    fontconfig_dir = None
+    original_fontconfig = os.environ.get('FONTCONFIG_PATH')
+
+    try:
+        # 임시 fontconfig 설정 생성 (TTF 폰트만 사용)
+        fontconfig_dir = tempfile.mkdtemp(prefix='fontconfig_')
+        fonts_conf = os.path.join(fontconfig_dir, 'fonts.conf')
+
+        with open(fonts_conf, 'w') as f:
+            f.write(f'''<?xml version="1.0"?>
+<!DOCTYPE fontconfig SYSTEM "fonts.dtd">
+<fontconfig>
+    <dir>{FONT_DIR}</dir>
+    <cachedir>{fontconfig_dir}/cache</cachedir>
+    <match target="pattern">
+        <edit name="family" mode="prepend" binding="strong">
+            <string>NanumBarunpen</string>
+        </edit>
+    </match>
+    <selectfont>
+        <rejectfont>
+            <glob>*.ttc</glob>
+            <glob>*.TTC</glob>
+        </rejectfont>
+    </selectfont>
+</fontconfig>''')
+
+        # 환경변수 설정
+        os.environ['FONTCONFIG_PATH'] = fontconfig_dir
+        os.environ['FONTCONFIG_FILE'] = fonts_conf
+
+        font_config = FontConfiguration()
+
+        HTML(string=html_content).write_pdf(
+            output_path,
+            stylesheets=[css],
+            font_config=font_config
+        )
+    finally:
+        # 환경변수 복원
+        if original_fontconfig:
+            os.environ['FONTCONFIG_PATH'] = original_fontconfig
+        elif 'FONTCONFIG_PATH' in os.environ:
+            del os.environ['FONTCONFIG_PATH']
+        if 'FONTCONFIG_FILE' in os.environ:
+            del os.environ['FONTCONFIG_FILE']
+
+        # 임시 디렉토리 삭제
+        if fontconfig_dir and os.path.exists(fontconfig_dir):
+            shutil.rmtree(fontconfig_dir, ignore_errors=True)
+
     return output_path
 
 

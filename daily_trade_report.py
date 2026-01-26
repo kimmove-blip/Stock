@@ -199,6 +199,27 @@ def generate_daily_report_html(user_id: int, report_date: str = None, save_snaps
         asset_diff_str = "-"
         asset_diff_cls = ""
 
+    # 최초 투자 대비 증감 (auto_trade_settings에서 initial_investment 조회)
+    initial_investment = None
+    try:
+        with logger._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT initial_investment FROM auto_trade_settings WHERE user_id = ?", (user_id,))
+            row = cursor.fetchone()
+            if row and row['initial_investment']:
+                initial_investment = row['initial_investment']
+    except Exception:
+        pass
+
+    if initial_investment and initial_investment > 0:
+        initial_diff = total_assets - initial_investment
+        initial_diff_rate = (initial_diff / initial_investment * 100)
+        initial_diff_cls = "change-positive" if initial_diff >= 0 else "change-negative"
+    else:
+        initial_diff = 0
+        initial_diff_rate = 0
+        initial_diff_cls = ""
+
     # 오늘 실현손익 계산 (매도 거래에서)
     realized_profit = sum((t.get('profit_loss') or 0) for t in today_sells)
 
@@ -311,7 +332,7 @@ def generate_daily_report_html(user_id: int, report_date: str = None, save_snaps
         trades_html += "<tr><th>종목</th><th>수량</th><th>단가</th><th>금액</th><th>시간</th></tr>"
         for t in today_buys:
             amount = t.get('quantity', 0) * t.get('price', 0)
-            time_str = t.get('executed_at', '')[-8:-3] if t.get('executed_at') else ''
+            time_str = t.get('trade_time', '')[:5] if t.get('trade_time') else ''
             trades_html += f"""<tr>
                 <td>{t.get('stock_name', t.get('stock_code'))}</td>
                 <td style='text-align:right'>{t.get('quantity', 0):,}주</td>
@@ -323,19 +344,26 @@ def generate_daily_report_html(user_id: int, report_date: str = None, save_snaps
 
     if today_sells:
         trades_html += "<h3>오늘 매도</h3><table class='trade-table'>"
-        trades_html += "<tr><th>종목</th><th>수량</th><th>단가</th><th>금액</th><th>손익</th></tr>"
+        trades_html += "<tr><th>종목</th><th>수량</th><th>매수가</th><th>매도가</th><th>매도금액</th><th>매매손익</th></tr>"
         for t in today_sells:
-            amount = t.get('quantity', 0) * t.get('price', 0)
-            profit = t.get('profit_amount', 0)
+            qty = t.get('quantity', 0)
+            sell_price = t.get('price', 0)
+            profit = t.get('profit_loss', 0) or 0
+            # 매도금액은 DB의 amount (순매도금액, 수수료 공제 후)
+            net_amount = t.get('amount', 0) or (qty * sell_price)
+            # 매수가 역산: 매수가 = (순매도금액 - 손익) / 수량
+            buy_price = int((net_amount - profit) / qty) if qty > 0 else 0
             profit_cls = 'profit' if profit >= 0 else 'loss'
             trades_html += f"""<tr>
                 <td>{t.get('stock_name', t.get('stock_code'))}</td>
-                <td style='text-align:right'>{t.get('quantity', 0):,}주</td>
-                <td style='text-align:right'>{t.get('price', 0):,}원</td>
-                <td style='text-align:right'>{amount:,}원</td>
+                <td style='text-align:right'>{qty:,}주</td>
+                <td style='text-align:right'>{buy_price:,}원</td>
+                <td style='text-align:right'>{sell_price:,}원</td>
+                <td style='text-align:right'>{net_amount:,}원</td>
                 <td style='text-align:right' class='{profit_cls}'>{profit:+,}원</td>
             </tr>"""
         trades_html += "</table>"
+        trades_html += "<p style='font-size: 8pt; color: #718096; margin-top: 5px;'>* 매도금액은 매도가 × 수량에서 세금과 수수료를 공제한 금액입니다.</p>"
 
     if not today_buys and not today_sells:
         trades_html = "<div class='no-data'>오늘 거래 내역이 없습니다.</div>"
@@ -343,6 +371,12 @@ def generate_daily_report_html(user_id: int, report_date: str = None, save_snaps
     # 보유 종목 테이블
     holdings_html = ""
     if holdings:
+        # 합계 계산
+        total_eval_amount = sum(h.get('eval_amount', 0) or 0 for h in holdings)
+        total_profit_loss = sum(h.get('profit_loss', 0) or 0 for h in holdings)
+        total_buy_amount = sum((h.get('avg_price', 0) or 0) * (h.get('quantity', 0) or 0) for h in holdings)
+        total_profit_rate = (total_profit_loss / total_buy_amount * 100) if total_buy_amount > 0 else 0
+
         holdings_html = "<table class='holdings-table'>"
         holdings_html += "<tr><th>종목</th><th>수량</th><th>평단가</th><th>현재가</th><th>평가금액</th><th>손익</th><th>수익률</th></tr>"
         for h in sorted(holdings, key=lambda x: x.get('profit_rate', 0), reverse=True):
@@ -359,6 +393,17 @@ def generate_daily_report_html(user_id: int, report_date: str = None, save_snaps
                 <td style='text-align:right' class='{profit_cls}'>{profit_loss:+,}원</td>
                 <td style='text-align:right' class='{profit_cls}'>{profit_rate:+.2f}%</td>
             </tr>"""
+        # 합계 행
+        total_cls = 'profit' if total_profit_loss >= 0 else 'loss'
+        holdings_html += f"""<tr style='background-color: #edf2f7; font-weight: bold;'>
+            <td>합계</td>
+            <td></td>
+            <td></td>
+            <td></td>
+            <td style='text-align:right'>{total_eval_amount:,}원</td>
+            <td style='text-align:right' class='{total_cls}'>{total_profit_loss:+,}원</td>
+            <td style='text-align:right' class='{total_cls}'>{total_profit_rate:+.2f}%</td>
+        </tr>"""
         holdings_html += "</table>"
     else:
         holdings_html = "<div class='no-data'>보유 종목이 없습니다.</div>"
@@ -370,9 +415,9 @@ def generate_daily_report_html(user_id: int, report_date: str = None, save_snaps
     sell_total = sum(t.get('quantity', 0) * t.get('price', 0) for t in today_sells)
     # realized_profit은 위에서 이미 계산됨
 
-    # 전일대비 요약 박스
+    # 전일대비 + 최초투자대비 요약 박스
     if prev_total_assets:
-        daily_summary_html = f"""
+        daily_box_html = f"""
         <div class='summary-box' style='background: linear-gradient(135deg, #e6fffa 0%, #ebf8ff 100%); border-color: #4fd1c5;'>
             <strong style='font-size: 12pt;'>전일 대비</strong><br>
             <span style='font-size: 18pt; font-weight: bold;' class='{asset_diff_cls}'>
@@ -384,7 +429,7 @@ def generate_daily_report_html(user_id: int, report_date: str = None, save_snaps
         </div>
         """
     else:
-        daily_summary_html = f"""
+        daily_box_html = f"""
         <div class='summary-box' style='background: linear-gradient(135deg, #fefcbf 0%, #fef3c7 100%); border-color: #ecc94b;'>
             <strong>전일 데이터 없음</strong><br>
             <span style='font-size: 9pt; color: #718096;'>
@@ -392,6 +437,30 @@ def generate_daily_report_html(user_id: int, report_date: str = None, save_snaps
             </span>
         </div>
         """
+
+    # 최초 투자 대비 박스
+    if initial_investment and initial_investment > 0:
+        initial_box_html = f"""
+        <div class='summary-box' style='background: linear-gradient(135deg, #faf5ff 0%, #e9d8fd 100%); border-color: #9f7aea;'>
+            <strong style='font-size: 12pt;'>최초 투자 대비</strong><br>
+            <span style='font-size: 18pt; font-weight: bold;' class='{initial_diff_cls}'>
+                {initial_diff:+,.0f}원 ({initial_diff_rate:+.2f}%)
+            </span><br>
+            <span style='font-size: 9pt; color: #718096;'>
+                최초 {initial_investment:,}원 → 현재 {total_assets:,}원
+            </span>
+        </div>
+        """
+    else:
+        initial_box_html = ""
+
+    # 두 박스를 나란히 표시
+    daily_summary_html = f"""
+    <div style='display: flex; gap: 15px; flex-wrap: wrap;'>
+        <div style='flex: 1; min-width: 250px;'>{daily_box_html}</div>
+        <div style='flex: 1; min-width: 250px;'>{initial_box_html}</div>
+    </div>
+    """
 
     trade_summary_html = f"""
     <div class='summary-box'>
