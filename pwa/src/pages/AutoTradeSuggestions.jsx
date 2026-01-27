@@ -185,8 +185,8 @@ function SuggestionCard({ suggestion, activeTab, onApprove, onReject, isApprovin
 
   return (
     <div
-      className={`bg-white rounded-xl p-4 shadow-sm transition-all duration-300 ${
-        isRemoving ? 'opacity-0 scale-95 -translate-x-full' : 'opacity-100 scale-100'
+      className={`bg-white rounded-xl p-4 shadow-sm transition-opacity duration-200 ${
+        isRemoving ? 'opacity-0' : 'opacity-100'
       }`}
     >
       {/* 헤더 */}
@@ -422,7 +422,7 @@ export default function AutoTradeSuggestions() {
     );
   }
 
-  // 매수 제안 목록 조회
+  // 매수 제안 목록 조회 - 항상 최신 데이터 (캐시 사용 안함)
   const {
     data: buySuggestions,
     isLoading: buyLoading,
@@ -431,11 +431,11 @@ export default function AutoTradeSuggestions() {
   } = useQuery({
     queryKey: ['autoTradeSuggestions', 'buy', filter],
     queryFn: () => autoTradeAPI.suggestions(filter).then((res) => res.data),
-    staleTime: 1000 * 30,
+    staleTime: 0,
     refetchOnWindowFocus: true,
   });
 
-  // 매도 제안 목록 조회
+  // 매도 제안 목록 조회 - 항상 최신 데이터 (캐시 사용 안함)
   const {
     data: sellSuggestions,
     isLoading: sellLoading,
@@ -444,9 +444,12 @@ export default function AutoTradeSuggestions() {
   } = useQuery({
     queryKey: ['autoTradeSuggestions', 'sell', filter],
     queryFn: () => autoTradeAPI.sellSuggestions(filter).then((res) => res.data),
-    staleTime: 1000 * 30,
+    staleTime: 0,
     refetchOnWindowFocus: true,
   });
+
+  // 수량 조정 확인 상태
+  const [adjustmentInfo, setAdjustmentInfo] = useState(null);
 
   // 매수 승인
   const approveBuyMutation = useMutation({
@@ -455,6 +458,21 @@ export default function AutoTradeSuggestions() {
       setRemovingIds(prev => new Set(prev).add(id));
     },
     onSuccess: (result) => {
+      // 수량 조정이 필요한 경우
+      if (result.data?.status === 'need_adjustment') {
+        setRemovingIds(prev => {
+          const next = new Set(prev);
+          next.delete(result.id);
+          return next;
+        });
+        setAdjustmentInfo({
+          suggestionId: result.id,
+          stockName: result.stockName,
+          ...result.data
+        });
+        return;
+      }
+
       showToast(`${result.stockName} 매수 주문이 접수되었습니다`, 'success');
       setTimeout(() => {
         refetchBuy();
@@ -476,6 +494,17 @@ export default function AutoTradeSuggestions() {
       showToast(error.response?.data?.detail || '승인 처리에 실패했습니다.', 'error');
     },
   });
+
+  // 조정된 수량으로 재주문
+  const handleForceAdjusted = () => {
+    if (!adjustmentInfo) return;
+    approveBuyMutation.mutate({
+      id: adjustmentInfo.suggestionId,
+      data: { force_adjusted: true },
+      stockName: adjustmentInfo.stockName
+    });
+    setAdjustmentInfo(null);
+  };
 
   // 매수 거부
   const rejectBuyMutation = useMutation({
@@ -600,6 +629,54 @@ export default function AutoTradeSuggestions() {
     <div className="max-w-md mx-auto space-y-4">
       {/* 토스트 알림 */}
       {toast && <Toast message={toast.message} type={toast.type} onClose={hideToast} />}
+
+      {/* 수량 조정 확인 다이얼로그 */}
+      {adjustmentInfo && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-2xl p-5 max-w-sm w-full shadow-xl">
+            <h3 className="text-lg font-bold text-gray-800 mb-3">
+              주문가능금액 초과
+            </h3>
+            <p className="text-sm text-gray-600 mb-4">
+              <span className="font-medium text-gray-800">{adjustmentInfo.stockName}</span>의
+              주문금액이 주문가능금액을 초과합니다.
+            </p>
+            <div className="bg-gray-50 rounded-lg p-3 mb-4 text-sm space-y-1">
+              <div className="flex justify-between">
+                <span className="text-gray-500">주문가능금액</span>
+                <span className="font-medium">{adjustmentInfo.max_buy_amt?.toLocaleString()}원</span>
+              </div>
+              <div className="flex justify-between text-red-500">
+                <span>원래 주문금액</span>
+                <span className="line-through">{adjustmentInfo.original_quantity}주 × {adjustmentInfo.price?.toLocaleString()}원</span>
+              </div>
+              <div className="flex justify-between text-blue-600 font-medium">
+                <span>조정 후</span>
+                <span>{adjustmentInfo.adjusted_quantity}주 × {adjustmentInfo.price?.toLocaleString()}원 = {adjustmentInfo.adjusted_amount?.toLocaleString()}원</span>
+              </div>
+            </div>
+            <p className="text-sm text-gray-600 mb-4">
+              <span className="font-medium text-blue-600">{adjustmentInfo.adjusted_quantity}주</span>로
+              수량을 조정하여 주문하시겠습니까?
+            </p>
+            <div className="flex gap-2">
+              <button
+                onClick={() => setAdjustmentInfo(null)}
+                className="flex-1 py-2.5 rounded-lg bg-gray-100 text-gray-700 font-medium hover:bg-gray-200"
+              >
+                취소
+              </button>
+              <button
+                onClick={handleForceAdjusted}
+                disabled={approveBuyMutation.isPending}
+                className="flex-1 py-2.5 rounded-lg bg-blue-500 text-white font-medium hover:bg-blue-600 disabled:opacity-50"
+              >
+                {approveBuyMutation.isPending ? '주문 중...' : '조정 후 주문'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* 매수/매도 탭 */}
       <div className="flex gap-2 bg-white rounded-xl p-2 shadow-sm">

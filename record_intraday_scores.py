@@ -38,7 +38,7 @@ OUTPUT_DIR = PROJECT_ROOT / "output" / "intraday_scores"
 V9_MODEL_PATH = PROJECT_ROOT / "models" / "gap_model_v9.pkl"
 MIN_MARKET_CAP = 30_000_000_000      # 300억
 MIN_TRADING_AMOUNT = 3_000_000_000   # 30억 (어제 기준)
-MAX_WORKERS = 20
+MAX_WORKERS = 40
 VERSIONS = ['v1', 'v2', 'v3.5', 'v4', 'v5', 'v6', 'v7', 'v8']
 
 # V9 모델 (전역 로드)
@@ -163,27 +163,73 @@ def predict_v9_prob(df) -> float:
         return 0.0
 
 
+def get_filtered_stocks_path(date_str: str = None) -> Path:
+    """필터링된 종목 CSV 경로"""
+    if date_str is None:
+        date_str = datetime.now().strftime('%Y%m%d')
+    return PROJECT_ROOT / "output" / f"filtered_stocks_{date_str}.csv"
+
+
+def create_filtered_stocks() -> pd.DataFrame:
+    """06:00 실행: FDR 전일 마감 데이터로 종목 필터링 후 CSV 저장
+
+    06:00에는 FDR.StockListing이 전일 마감 데이터를 반환함
+    - Marcap: 전일 시가총액
+    - Amount: 전일 거래대금
+    """
+    print("전일 데이터 기준 종목 필터링 시작...")
+
+    krx = fdr.StockListing("KRX")
+    df = krx[["Code", "Name", "Market", "Marcap", "Amount", "Stocks"]].copy()
+    df["Code"] = df["Code"].astype(str).str.zfill(6)
+
+    print(f"  전체 종목: {len(df)}개")
+
+    # 시총 300억+ 필터
+    if df["Marcap"].notna().sum() > 100:
+        df = df[df["Marcap"] >= MIN_MARKET_CAP]
+        print(f"  시총 300억+ 필터: {len(df)}개")
+    else:
+        print(f"  [경고] Marcap 데이터 없음")
+
+    # 거래대금 30억+ 필터
+    if df["Amount"].notna().sum() > 100:
+        df = df[df["Amount"] >= MIN_TRADING_AMOUNT]
+        print(f"  거래대금 30억+ 필터: {len(df)}개")
+    else:
+        print(f"  [경고] Amount 데이터 없음")
+
+    # 특수종목/우선주 제외
+    exclude_keywords = ["스팩", "SPAC", "리츠", "ETF", "ETN", "인버스", "레버리지"]
+    for kw in exclude_keywords:
+        df = df[~df["Name"].str.contains(kw, case=False, na=False)]
+    df = df[df["Code"].str[-1] == "0"]
+
+    print(f"  최종 필터 후: {len(df)}개")
+
+    # CSV 저장
+    csv_path = get_filtered_stocks_path()
+    df.to_csv(csv_path, index=False, encoding='utf-8-sig')
+    print(f"  저장 완료: {csv_path}")
+
+    return df
+
+
 def get_stock_list() -> pd.DataFrame:
-    """스크리닝 대상 종목 목록 (거래대금 30억+)"""
+    """장중 실행: 오늘 필터링된 종목 CSV 로드"""
     try:
-        krx = fdr.StockListing("KRX")
-        columns_needed = ["Code", "Name", "Market", "Marcap", "Amount"]
-        available_cols = [c for c in columns_needed if c in krx.columns]
-        df = krx[available_cols].copy()
-        df["Code"] = df["Code"].astype(str).str.zfill(6)
+        csv_path = get_filtered_stocks_path()
 
-        if "Marcap" in df.columns:
-            df = df[df["Marcap"] >= MIN_MARKET_CAP]
-        if "Amount" in df.columns:
-            df = df[df["Amount"] >= MIN_TRADING_AMOUNT]
+        if csv_path.exists():
+            df = pd.read_csv(csv_path)
+            df["Code"] = df["Code"].astype(str).str.zfill(6)
+            print(f"    필터 종목 로드: {csv_path.name} ({len(df)}개)")
+            return df
+        else:
+            print(f"    [경고] 필터 파일 없음: {csv_path.name}")
+            print(f"    → 장 전에 --filter 옵션으로 먼저 실행 필요")
+            return pd.DataFrame()
 
-        # 특수종목/우선주 제외
-        exclude_keywords = ["스팩", "SPAC", "리츠", "ETF", "ETN", "인버스", "레버리지"]
-        for kw in exclude_keywords:
-            df = df[~df["Name"].str.contains(kw, case=False, na=False)]
-        df = df[df["Code"].str[-1] == "0"]
-
-        return df.reset_index(drop=True)
     except Exception as e:
         print(f"[오류] 종목 목록 조회 실패: {e}")
         return pd.DataFrame()
@@ -230,6 +276,7 @@ def process_stock(stock_info: dict) -> dict:
     code = stock_info['Code']
     name = stock_info.get('Name', '')
     market = stock_info.get('Market', '')
+    stocks = stock_info.get('Stocks', 0)  # 발행주식수
 
     try:
         # 데이터 1회만 로드 (V1~V9 공유)
@@ -240,6 +287,14 @@ def process_stock(stock_info: dict) -> dict:
         # 현재가 정보
         latest = df.iloc[-1]
         prev = df.iloc[-2] if len(df) > 1 else latest
+
+        # 전일 거래대금 필터 (30억+)
+        prev_amount = int(prev['Close'] * prev['Volume'])
+        if prev_amount < MIN_TRADING_AMOUNT:
+            return None
+
+        # 전일 시총 계산 (전일종가 × 발행주식수)
+        prev_marcap = int(prev['Close'] * stocks) if stocks > 0 else 0
 
         current_price = int(latest['Close'])
         prev_close = int(prev['Close'])
@@ -262,8 +317,8 @@ def process_stock(stock_info: dict) -> dict:
             'prev_close': prev_close,
             'change_pct': round(change_rate, 2),
             'volume': int(latest.get('Volume', 0)),
-            'amount': int(stock_info.get('Amount', 0)),
-            'marcap': int(stock_info.get('Marcap', 0)),
+            'prev_amount': prev_amount,  # 전일 거래대금
+            'prev_marcap': prev_marcap,  # 전일 시총
             'v1': scores.get('v1', 0),
             'v2': scores.get('v2', 0),
             'v3.5': scores.get('v3.5', 0),
@@ -295,7 +350,7 @@ def save_to_csv(records: list, recorded_at: datetime) -> str:
 
     # 컬럼 순서 정리
     columns = ['code', 'name', 'market', 'open', 'high', 'low', 'close', 'prev_close',
-               'change_pct', 'volume', 'amount', 'marcap',
+               'change_pct', 'volume', 'prev_amount', 'prev_marcap',
                'v1', 'v2', 'v3.5', 'v4', 'v5', 'v6', 'v7', 'v8', 'v9_prob', 'signals']
     df = df[columns]
 
@@ -309,8 +364,17 @@ def save_to_csv(records: list, recorded_at: datetime) -> str:
 
 def main():
     parser = argparse.ArgumentParser(description='10분 단위 전 종목 스코어 기록')
+    parser.add_argument('--filter', action='store_true', help='장 전 실행: 전일 기준 종목 필터링')
     parser.add_argument('--dry-run', action='store_true', help='테스트 모드 (저장 안함)')
     args = parser.parse_args()
+
+    # 장 전 필터링 모드
+    if args.filter:
+        print("=" * 60)
+        print(f"  종목 필터링 (장 전 실행) - {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+        print("=" * 60)
+        create_filtered_stocks()
+        return
 
     recorded_at = datetime.now()
     print("=" * 60)
@@ -325,7 +389,7 @@ def main():
         print("    실패 - V9 확률 0으로 처리")
 
     # 종목 목록
-    print("\n[1] 종목 목록 조회 (거래대금 30억+)...")
+    print("\n[1] 종목 목록 조회...")
     stocks_df = get_stock_list()
     if stocks_df.empty:
         print("    종목 없음. 종료.")
