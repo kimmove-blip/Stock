@@ -61,36 +61,66 @@ def get_v9_top_stocks(top_n=5, max_price=200000, fast_mode=False):
     all_tickers = ticker_df.index.tolist()
     ticker_names = ticker_df['종목'].to_dict()
 
-    # 빠른 모드: 최근 top100 결과 + 추가 종목만 스캔
+    # 빠른 모드: 최근 v9_result (전종목 스캔 결과) 사용
     if fast_mode:
-        print("빠른 모드: top100 기반 후보 종목 사용...")
+        print("빠른 모드: 최근 V9 전종목 스캔 결과 사용...")
         output_dir = Path(__file__).parent / "output"
-        top100_files = sorted(output_dir.glob('top100_2*.json'), reverse=True)
-        candidate_tickers = set()
 
-        # top100 결과에서 종목 추출
-        for json_file in top100_files[:3]:  # 최근 3일치
+        # 1순위: 오늘 저장된 v9_result 중 종목 수가 가장 많은 파일 (15:10 전종목 스캔 결과)
+        today_str = datetime.now().strftime('%Y%m%d')
+        v9_files = list(output_dir.glob(f'v9_result_{today_str}_*.json'))
+
+        candidate_tickers = []
+        best_file = None
+        max_count = 0
+
+        # 종목 수가 가장 많은 파일 선택
+        for v9_file in v9_files:
             try:
-                with open(json_file, 'r', encoding='utf-8') as f:
+                with open(v9_file, 'r', encoding='utf-8') as f:
                     data = json.load(f)
-                # stocks 키 아래에 종목 리스트가 있는 경우
-                stocks_list = data.get('stocks', data) if isinstance(data, dict) else data
-                for item in stocks_list:
-                    if isinstance(item, dict):
-                        code = item.get('code') or item.get('ticker') or item.get('stock_code')
-                        if code:
-                            candidate_tickers.add(code)
+                count = len(data.get('stocks', []))
+                if count > max_count:
+                    max_count = count
+                    best_file = v9_file
+            except:
+                continue
+
+        if best_file and max_count >= 100:  # 최소 100종목 이상인 파일만 사용
+            try:
+                with open(best_file, 'r', encoding='utf-8') as f:
+                    data = json.load(f)
+                for item in data.get('stocks', []):
+                    ticker = item.get('ticker')
+                    if ticker:
+                        candidate_tickers.append(ticker)
+                print(f"  → V9 결과 로드: {best_file.name} ({len(candidate_tickers)}종목)")
             except Exception as e:
-                print(f"  파일 로드 실패: {json_file.name} - {e}")
+                print(f"  파일 로드 실패: {best_file.name} - {e}")
+
+        # 2순위: top100 파일 (fallback)
+        if not candidate_tickers:
+            print("  → V9 결과 없음, top100 fallback...")
+            top100_files = sorted(output_dir.glob('top100_2*.json'), reverse=True)
+            for json_file in top100_files[:3]:
+                try:
+                    with open(json_file, 'r', encoding='utf-8') as f:
+                        data = json.load(f)
+                    stocks_list = data.get('stocks', data) if isinstance(data, dict) else data
+                    for item in stocks_list:
+                        if isinstance(item, dict):
+                            code = item.get('code') or item.get('ticker') or item.get('stock_code')
+                            if code and code not in candidate_tickers:
+                                candidate_tickers.append(code)
+                except Exception as e:
+                    print(f"  파일 로드 실패: {json_file.name} - {e}")
 
         # 후보가 있으면 사용
         if candidate_tickers:
-            # 후보 + 추가 200개 (전체 리스트에서 샘플링)
-            extra_tickers = [t for t in all_tickers if t not in candidate_tickers][:200]
-            all_tickers = list(candidate_tickers) + extra_tickers
-            print(f"  → {len(candidate_tickers)}개 top100 후보 + {len(extra_tickers)}개 추가 = {len(all_tickers)}종목")
+            all_tickers = candidate_tickers
+            print(f"  → 총 {len(all_tickers)}종목 스캔 예정")
         else:
-            print("  → top100 후보 없음, 전체 스캔")
+            print("  → 후보 없음, 전체 스캔")
 
     print(f"V9 모델 예측 중... ({len(all_tickers)}종목)")
 
@@ -197,8 +227,8 @@ def get_account_balance(user_id):
     return d2_cash, is_mock
 
 
-def buy_stocks(user_id, stocks, dry_run=False):
-    """종목 분산 매수"""
+def buy_stocks(user_id, stocks, dry_run=False, target_count=5):
+    """종목 분산 매수 (고가 종목 스킵 시 다음 순위로 대체)"""
     logger = TradeLogger()
     api_key_data = logger.get_api_key_settings(user_id)
     if not api_key_data:
@@ -219,11 +249,17 @@ def buy_stocks(user_id, stocks, dry_run=False):
         is_virtual=is_mock
     )
 
-    # 종목당 투자금액
-    per_stock = d2_cash // len(stocks)
+    # 종목당 투자금액 (목표 종목 수 기준)
+    per_stock = d2_cash // target_count
 
     results = []
+    bought_count = 0
+
     for s in stocks:
+        # 목표 종목 수에 도달하면 종료
+        if bought_count >= target_count:
+            break
+
         ticker = s['ticker']
         name = s['name']
         price = s['price']
@@ -231,7 +267,7 @@ def buy_stocks(user_id, stocks, dry_run=False):
 
         quantity = per_stock // price
         if quantity <= 0:
-            print(f"  {name}: 수량 부족 (가격 {price:,}원, 투자금 {per_stock:,}원)")
+            print(f"  {name}: 수량 부족 (가격 {price:,}원 > 투자금 {per_stock:,}원) → 다음 순위로 대체")
             continue
 
         print(f"  [user {user_id}] {name}({ticker}) {quantity}주 @ {price:,}원 매수 (확률 {prob:.1%})...")
@@ -244,10 +280,10 @@ def buy_stocks(user_id, stocks, dry_run=False):
         try:
             result = client.place_order(
                 stock_code=ticker,
-                order_type='buy',
+                side='buy',
                 quantity=quantity,
                 price=0,  # 시장가
-                order_dv='01'
+                order_type='01'  # 시장가 주문
             )
 
             if result and result.get('rt_cd') == '0':
@@ -267,6 +303,7 @@ def buy_stocks(user_id, stocks, dry_run=False):
                 )
 
                 results.append({'stock_name': name, 'quantity': quantity, 'price': price, 'status': 'ordered'})
+                bought_count += 1
             else:
                 msg = result.get('msg1', '') if result else 'Unknown error'
                 print(f"    매수 주문 실패: {msg}")
@@ -276,13 +313,73 @@ def buy_stocks(user_id, stocks, dry_run=False):
             print(f"    매수 주문 에러: {e}")
             results.append({'stock_name': name, 'quantity': quantity, 'status': 'error', 'error': str(e)})
 
+    print(f"  [user {user_id}] 매수 완료: {bought_count}/{target_count}종목")
     return results
+
+
+def check_executed_orders(user_id=None):
+    """매수 체결 확인"""
+    logger = TradeLogger()
+
+    if user_id:
+        users = [user_id]
+    else:
+        users = get_auto_users()
+
+    print(f"\n=== 매수 체결 확인 ===")
+    print(f"대상 사용자: {users}\n")
+
+    for uid in users:
+        api_key_data = logger.get_api_key_settings(uid)
+        if not api_key_data:
+            print(f"[user {uid}] API 키 없음")
+            continue
+
+        is_mock = bool(api_key_data.get('is_mock', True))
+
+        client = KISClient(
+            app_key=api_key_data.get('app_key'),
+            app_secret=api_key_data.get('app_secret'),
+            account_number=api_key_data.get('account_number'),
+            is_virtual=is_mock
+        )
+
+        print(f"--- User {uid} ({'모의' if is_mock else '실전'}) ---")
+
+        # 미체결 주문 조회
+        pending = client.get_pending_orders()
+        if pending is None:
+            print("  미체결 조회 실패")
+            continue
+
+        if not pending:
+            print("  미체결 주문 없음 (모두 체결됨)")
+        else:
+            print(f"  미체결 {len(pending)}건:")
+            for order in pending:
+                if order['side'] == 'buy':
+                    print(f"    {order['stock_name']}: {order['order_qty']}주 중 {order['executed_qty']}주 체결, {order['remaining_qty']}주 미체결")
+
+        # 오늘 체결 내역 조회
+        from datetime import datetime
+        today = datetime.now().strftime('%Y%m%d')
+        history = client.get_order_history(start_date=today, end_date=today)
+
+        if history:
+            buy_orders = [h for h in history if h.get('side') == 'buy']
+            if buy_orders:
+                print(f"  오늘 매수 체결 {len(buy_orders)}건:")
+                for order in buy_orders:
+                    print(f"    {order.get('stock_name', 'N/A')}: {order.get('executed_qty', 0)}주 @ {order.get('executed_price', 0):,}원")
+
+        print()
 
 
 def main():
     parser = argparse.ArgumentParser(description='V9 갭상승 종목 종가 매수')
     parser.add_argument('--buy', action='store_true', help='매수 주문 실행')
     parser.add_argument('--list', action='store_true', help='V9 상위 종목 조회만')
+    parser.add_argument('--check-executed', action='store_true', help='매수 체결 확인')
     parser.add_argument('--top', type=int, default=5, help='상위 N개 종목')
     parser.add_argument('--max-price', type=int, default=0, help='최대 주가 (0=무제한)')
     parser.add_argument('--fast', action='store_true', help='빠른 모드 (거래대금 상위 500종목만)')
@@ -294,6 +391,14 @@ def main():
     print(f"\n{'='*50}")
     print(f"V9 갭상승 종가 매수 - {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     print(f"{'='*50}\n")
+
+    # 체결 확인 모드
+    if args.check_executed:
+        check_executed_orders(user_id=args.user_id)
+        print(f"{'='*50}")
+        print("완료")
+        print(f"{'='*50}\n")
+        return
 
     # 최근 저장된 결과 사용
     if args.use_latest:

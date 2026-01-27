@@ -616,7 +616,22 @@ class TradeLogger:
             holdings_count: 보유 종목 수 (선택)
         """
         today = datetime.now().strftime("%Y-%m-%d")
-        profit_rate = total_profit / total_invested if total_invested > 0 else 0
+
+        # 최초투자금 대비 수익률 계산
+        initial_investment = 0
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT initial_investment FROM auto_trade_settings WHERE user_id = ?", (user_id,))
+            row = cursor.fetchone()
+            if row and row['initial_investment']:
+                initial_investment = row['initial_investment']
+
+        if initial_investment > 0:
+            profit_rate = (total_assets - initial_investment) / initial_investment * 100
+        elif total_invested > 0:
+            profit_rate = total_profit / total_invested * 100
+        else:
+            profit_rate = 0
 
         # 오늘 거래 횟수 계산
         today_trades = self.get_today_trades(user_id)
