@@ -44,16 +44,12 @@ export default function StockDetail() {
     refetchOnWindowFocus: false,
   });
 
-  // 실시간 시세 수동 갱신 상태
-  const [manualRefresh, setManualRefresh] = useState(false);
-
-  // 실시간 시세 조회 - preloadedData가 있으면 수동 갱신 전까지 조회 안함
+  // 실시간 시세 조회 - 항상 활성화
   const { data: realtimePrice, refetch: refetchPrice, isFetching: isPriceFetching } = useQuery({
     queryKey: ['realtime-price', code],
     queryFn: () => realtimeAPI.price(code).then((res) => res.data),
     staleTime: 1000 * 30,  // 30초 캐시
     refetchOnWindowFocus: false,
-    enabled: !preloadedData || manualRefresh,  // preloadedData 있으면 수동 갱신 전까지 비활성화
   });
 
   // 상세 정보 + 실시간 가격 병합
@@ -262,10 +258,7 @@ export default function StockDetail() {
               <div className="flex items-center gap-2">
                 <p className="text-3xl font-bold">{detail.current_price?.toLocaleString()}원</p>
                 <button
-                  onClick={() => {
-                    setManualRefresh(true);
-                    refetchPrice();
-                  }}
+                  onClick={() => refetchPrice()}
                   disabled={isPriceFetching}
                   className="btn btn-ghost btn-xs"
                   title="실시간 시세 갱신"

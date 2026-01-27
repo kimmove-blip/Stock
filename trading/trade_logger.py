@@ -2145,6 +2145,46 @@ class TradeLogger:
                 conn.commit()
                 return cursor.lastrowid
 
+    def add_sell_suggestion(self, user_id: int, stock_code: str, stock_name: str,
+                           quantity: int, avg_price: int, suggested_price: int,
+                           profit_rate: float, reason: str) -> int:
+        """매도 제안 추가 (semi-auto 모드용)"""
+        now = datetime.now()
+
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+
+            # 테이블이 없으면 생성
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS pending_sell_suggestions (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    user_id INTEGER NOT NULL,
+                    stock_code TEXT NOT NULL,
+                    stock_name TEXT,
+                    quantity INTEGER,
+                    avg_price INTEGER,
+                    suggested_price INTEGER,
+                    current_price INTEGER,
+                    profit_rate REAL,
+                    reason TEXT,
+                    status TEXT DEFAULT 'pending',
+                    created_at TEXT,
+                    approved_at TEXT,
+                    executed_at TEXT
+                )
+            """)
+
+            cursor.execute("""
+                INSERT INTO pending_sell_suggestions
+                (user_id, stock_code, stock_name, quantity, avg_price,
+                 suggested_price, current_price, profit_rate, reason, created_at, status)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending')
+            """, (user_id, stock_code, stock_name, quantity, avg_price,
+                  suggested_price, suggested_price, profit_rate, reason, now.isoformat()))
+
+            conn.commit()
+            return cursor.lastrowid
+
 
 class BuySuggestionManager:
     """매수 제안 관리자 (semi-auto 모드용)"""

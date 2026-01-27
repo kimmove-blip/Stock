@@ -17,8 +17,43 @@ from api.dependencies import get_current_user_required, get_db
 from trading.trade_logger import TradeLogger
 from database.db_manager import DatabaseManager
 import httpx
+import FinanceDataReader as fdr
+import pandas as pd
 
 router = APIRouter()
+
+
+def get_stock_sma20(stock_code: str) -> dict:
+    """종목의 20일선 조회 (래치 전략용)"""
+    try:
+        from datetime import datetime, timedelta
+        end_date = datetime.now()
+        start_date = end_date - timedelta(days=60)
+
+        df = fdr.DataReader(stock_code, start_date.strftime('%Y-%m-%d'), end_date.strftime('%Y-%m-%d'))
+        if df is None or len(df) < 20:
+            return {'sma20': None, 'below_sma20': False}
+
+        df['SMA_20'] = df['Close'].rolling(window=20).mean()
+
+        current_price = df.iloc[-1]['Close']
+        sma20 = df.iloc[-1]['SMA_20']
+
+        if pd.isna(sma20):
+            return {'sma20': None, 'below_sma20': False}
+
+        below_sma20 = current_price < sma20
+
+        return {
+            'sma20': int(sma20),
+            'current_price': int(current_price),
+            'below_sma20': below_sma20,
+            'distance_pct': round((current_price / sma20 - 1) * 100, 2) if sma20 > 0 else 0
+        }
+    except Exception as e:
+        print(f"20일선 조회 실패 [{stock_code}]: {e}")
+        return {'sma20': None, 'below_sma20': False}
+
 
 async def get_stock_ai_score(stock_code: str) -> dict:
     """종목의 AI 기술분석 점수 조회"""
@@ -57,17 +92,18 @@ async def get_stock_current_price(stock_code: str) -> int:
 
 
 async def get_stock_price_info(stock_code: str) -> dict:
-    """종목의 현재가 및 전일비 조회"""
+    """종목의 현재가 및 전일비 조회 (실시간 API 사용)"""
     try:
         async with httpx.AsyncClient() as client:
+            # 실시간 시세 API 사용 (30초 캐시)
             response = await client.get(
-                f"http://localhost:8000/api/stocks/{stock_code}",
+                f"http://localhost:8000/api/realtime/price/{stock_code}",
                 timeout=10.0
             )
             if response.status_code == 200:
                 data = response.json()
                 return {
-                    'current_price': data.get('price', 0) or data.get('current_price', 0),
+                    'current_price': data.get('current_price', 0),
                     'change_rate': data.get('change_rate', 0) or 0
                 }
     except Exception as e:
@@ -982,6 +1018,35 @@ async def get_account(
         # 총 자산 = 평가금액 + d2 예수금 (실제 자산 기준)
         total_asset = total_evaluation + d2_cash_balance
 
+        # holdings에 AI 점수 추가 (top100 JSON에서 - 전종목 점수 포함)
+        scores_map = {}
+        try:
+            from config import OUTPUT_DIR
+            import json
+            today = datetime.now()
+            for days_back in range(7):
+                check_date = today - timedelta(days=days_back)
+                json_path = OUTPUT_DIR / f"top100_{check_date.strftime('%Y%m%d')}.json"
+                if json_path.exists():
+                    with open(json_path, 'r', encoding='utf-8') as f:
+                        data = json.load(f)
+                        # 1. 전종목 점수 (all_scores)가 있으면 사용
+                        all_scores = data.get('screening_stats', {}).get('all_scores', {})
+                        if all_scores:
+                            scores_map = all_scores
+                        else:
+                            # 2. 없으면 상위 종목에서만 점수 가져오기
+                            for stock in data.get('stocks', []):
+                                scores_map[stock.get('code')] = stock.get('score', 0)
+                    break
+        except Exception as e:
+            print(f"점수 조회 실패: {e}")
+
+        # holdings에 점수 추가
+        for h in holdings:
+            stock_code = h.get('stock_code', '')
+            h['score'] = scores_map.get(stock_code, None)
+
         return {
             'holdings': holdings,
             'balance': {
@@ -1017,17 +1082,11 @@ async def get_account(
 class AutoTradeSettingsRequest(BaseModel):
     """자동매매 설정 요청"""
     trade_mode: str = "manual"  # auto, semi, manual
-    max_investment: int = 1000000
-    stock_ratio: int = 5  # 종목당 투자비율 (1~20%)
+    max_per_stock: int = 200000  # 종목당 최대 금액
     stop_loss_rate: float = -7.0  # 손절률 (-20 ~ 0%)
     min_buy_score: int = 70  # 최소 매수 점수 (50~100)
     sell_score: int = 40  # 매도 점수 (이 점수 이하면 매도)
-    max_holdings: int = 10  # 최대 보유 종목 (1~20)
-    max_daily_trades: int = 10  # 일일 최대 거래 (1~50)
-    max_holding_days: int = 14  # 최대 보유 기간 (1~30일)
     trading_enabled: bool = True
-    trading_start_time: str = "09:00"
-    trading_end_time: str = "15:20"
     initial_investment: int = 0  # 초기 투자금
 
 
@@ -1044,26 +1103,22 @@ async def get_settings(
     # 기본값 설정
     default_settings = {
         "trade_mode": "manual",
-        "max_investment": 1000000,
-        "stock_ratio": 5,
+        "max_per_stock": 200000,
         "stop_loss_rate": -7.0,
         "min_buy_score": 70,
         "sell_score": 40,
-        "max_holdings": 10,
-        "max_daily_trades": 10,
-        "max_holding_days": 14,
         "trading_enabled": True,
-        "trading_start_time": "09:00",
-        "trading_end_time": "15:20",
         "initial_investment": 0
     }
 
     if not settings:
         return default_settings
 
-    # 기존 설정에 initial_investment가 없으면 기본값 추가
+    # 기존 설정에 없는 필드 기본값 추가
     if 'initial_investment' not in settings:
         settings['initial_investment'] = 0
+    if 'max_per_stock' not in settings:
+        settings['max_per_stock'] = 200000
 
     print(f"[설정조회] user_id={current_user.get('id')}, initial_investment={settings.get('initial_investment')}")
     return settings
@@ -1198,8 +1253,25 @@ async def approve_suggestion(
             # force_adjusted=True면 조정된 수량으로 진행
             quantity = adjusted_quantity
 
-        # 주문 실행
+        # 주문 실행 전 상한가 체크
         stock_code = suggestion.get('stock_code')
+        current_quote = client.get_current_price(stock_code)
+        if current_quote:
+            change_rate = current_quote.get('change_rate', 0)
+            # 상한가(+29% 이상) 종목은 매수 불가 - 매도 물량이 없어 체결 안됨
+            if change_rate >= 29.0:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=f"상한가 종목({change_rate:+.1f}%)은 매수할 수 없습니다. 매도 물량이 없어 체결되지 않습니다."
+                )
+            # 상한가 근접(+25% 이상) 시장가 주문 경고
+            if change_rate >= 25.0 and is_market_order:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=f"상한가 근접 종목({change_rate:+.1f}%)은 시장가 주문이 위험합니다. 지정가 주문을 사용하세요."
+                )
+
+        # 주문 실행
         result = client.place_order(
             stock_code=stock_code,
             side='buy',
@@ -1490,11 +1562,45 @@ async def get_diagnosis(
     total_profit_rate = 0
 
     import asyncio
+    from concurrent.futures import ThreadPoolExecutor
 
-    # 모든 종목의 AI 점수와 가격 정보를 병렬로 조회
+    # 종목 코드 목록
     stock_codes = [h.get('stock_code', '') for h in holdings]
-    ai_scores = await asyncio.gather(*[get_stock_ai_score(code) for code in stock_codes])
+
+    # JSON에서 점수 가져오기 (계좌현황과 동일한 방식)
+    scores_map = {}
+    try:
+        from config import OUTPUT_DIR
+        import json
+        today = datetime.now()
+        for days_back in range(7):
+            check_date = today - timedelta(days=days_back)
+            json_path = OUTPUT_DIR / f"top100_{check_date.strftime('%Y%m%d')}.json"
+            if json_path.exists():
+                with open(json_path, 'r', encoding='utf-8') as f:
+                    data = json.load(f)
+                    # 1. 전종목 점수 (all_scores)가 있으면 사용
+                    all_scores = data.get('screening_stats', {}).get('all_scores', {})
+                    if all_scores:
+                        scores_map = all_scores
+                    else:
+                        # 2. 없으면 상위 종목에서만 점수 가져오기
+                        for stock in data.get('stocks', []):
+                            scores_map[stock.get('code')] = stock.get('score', 0)
+                break
+    except Exception as e:
+        print(f"진단 점수 조회 실패: {e}")
+
+    # 가격 정보를 병렬로 조회
     price_infos = await asyncio.gather(*[get_stock_price_info(code) for code in stock_codes])
+
+    # 20일선 정보 조회 (래치 전략용) - 동기 함수이므로 executor 사용
+    loop = asyncio.get_event_loop()
+    with ThreadPoolExecutor(max_workers=5) as executor:
+        sma20_infos = await asyncio.gather(*[
+            loop.run_in_executor(executor, get_stock_sma20, code)
+            for code in stock_codes
+        ])
 
     for i, h in enumerate(holdings):
         profit_rate = h.get('profit_rate', 0)
@@ -1503,15 +1609,34 @@ async def get_diagnosis(
         # 전일비 등락률
         change_rate = price_infos[i].get('change_rate', 0) if price_infos[i] else 0
 
-        # AI 기술분석 점수 사용
-        ai_data = ai_scores[i]
-        health_score = int(ai_data.get('score', 50))
-        ai_opinion = ai_data.get('opinion', '관망')
-        ai_comment = ai_data.get('comment', '')
+        # JSON에서 가져온 스크리닝 점수 사용 (계좌현황과 동일)
+        stock_code = h.get('stock_code', '')
+        health_score = scores_map.get(stock_code, 50)
+        if health_score is None:
+            health_score = 50
+        health_score = int(health_score)
+        ai_comment = ''
 
-        # 시그널 결정: AI 점수 + 수익률 고려
+        # 20일선 정보
+        sma20_data = sma20_infos[i]
+        below_sma20 = sma20_data.get('below_sma20', False)
+        sma20_distance = sma20_data.get('distance_pct', 0)
+
+        # 시그널 결정: 래치 전략 (20일선 이탈 + 40점 미만)
         signal = 'hold'
-        if profit_rate >= 20:
+
+        # [래치 전략] 20일선 이탈 = 추세 종료 → 강력 매도
+        if below_sma20:
+            signal = 'strong_sell'
+            warning_count += 1
+            ai_comment = f"⚠️ 20일선 이탈 ({sma20_distance:+.1f}%) - 추세 종료, 매도 권장"
+        # [래치 전략] 40점 미만 = 모멘텀 완전 붕괴 → 강력 매도
+        elif health_score < 40:
+            signal = 'strong_sell'
+            warning_count += 1
+            if not ai_comment:
+                ai_comment = f"⚠️ AI 점수 {health_score}점 - 모멘텀 붕괴, 매도 권장"
+        elif profit_rate >= 20:
             signal = 'take_profit'  # 익절 고려
             if not ai_comment:
                 ai_comment = "목표 수익률 달성. 일부 익절을 고려해보세요."
@@ -1951,6 +2076,13 @@ async def sync_portfolio_from_auto_trade(
     synced = 0
     added = 0
     updated = 0
+    deleted = 0
+
+    # 자동매매 계좌의 보유종목 코드 세트 (수량 > 0인 것만)
+    account_stock_codes = {
+        h.get('stock_code') for h in holdings
+        if h.get('quantity', 0) > 0
+    }
 
     for holding in holdings:
         stock_code = holding.get('stock_code')
@@ -1986,10 +2118,205 @@ async def sync_portfolio_from_auto_trade(
 
         synced += 1
 
+    # 자동매매 계좌에 없는 종목 삭제
+    for stock_code, item in portfolio_map.items():
+        if stock_code not in account_stock_codes:
+            db.delete_portfolio_item(item['id'])
+            deleted += 1
+
     return {
         "success": True,
-        "message": f"동기화 완료: {synced}종목 (추가 {added}, 업데이트 {updated})",
+        "message": f"동기화 완료: {synced}종목 (추가 {added}, 업데이트 {updated}, 삭제 {deleted})",
         "synced_count": synced,
         "added_count": added,
-        "updated_count": updated
+        "updated_count": updated,
+        "deleted_count": deleted
     }
+
+
+# ==================== Green Light (LLM) 설정 ====================
+
+class LLMSettingsRequest(BaseModel):
+    """LLM 설정 요청"""
+    llm_provider: str  # claude, openai, gemini
+    llm_api_key: str
+    llm_model: Optional[str] = None  # None이면 기본 모델 사용
+
+
+class LLMSettingsResponse(BaseModel):
+    """LLM 설정 응답"""
+    llm_provider: Optional[str]
+    llm_model: Optional[str]
+    is_configured: bool
+
+
+@router.get("/llm-settings", response_model=LLMSettingsResponse)
+async def get_llm_settings(
+    current_user: dict = Depends(get_current_user_required)
+):
+    """LLM 설정 조회"""
+    check_auto_trade_permission(current_user)
+
+    logger = get_trade_logger()
+    settings = logger.get_llm_settings(current_user.get('id'))
+
+    if settings and settings.get('llm_api_key'):
+        return LLMSettingsResponse(
+            llm_provider=settings.get('llm_provider'),
+            llm_model=settings.get('llm_model'),
+            is_configured=True
+        )
+
+    return LLMSettingsResponse(
+        llm_provider=None,
+        llm_model=None,
+        is_configured=False
+    )
+
+
+@router.post("/llm-settings")
+async def save_llm_settings(
+    request: LLMSettingsRequest,
+    current_user: dict = Depends(get_current_user_required)
+):
+    """LLM 설정 저장 (API 키 검증 후 저장)"""
+    check_auto_trade_permission(current_user)
+
+    # API 키 유효성 검증
+    provider = request.llm_provider.lower()
+    api_key = request.llm_api_key.strip()
+    model = request.llm_model
+
+    if provider not in ['claude', 'openai', 'gemini']:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"지원하지 않는 provider: {provider}"
+        )
+
+    # 간단한 API 키 검증 (호출 테스트)
+    try:
+        from trading.llm_trader import LLMTrader
+        trader = LLMTrader(provider=provider, api_key=api_key, model=model)
+        # 간단한 테스트 호출은 비용이 발생하므로 생략
+        # 대신 클라이언트 초기화 성공 여부만 확인
+    except ImportError as e:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"LLM 라이브러리 설치 필요: {str(e)}"
+        )
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"LLM 초기화 실패: {str(e)}"
+        )
+
+    # 저장
+    logger = get_trade_logger()
+    success = logger.save_llm_settings(
+        user_id=current_user.get('id'),
+        provider=provider,
+        api_key=api_key,
+        model=model
+    )
+
+    if not success:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="LLM 설정 저장 실패"
+        )
+
+    provider_names = {'claude': 'Claude (Anthropic)', 'openai': 'OpenAI', 'gemini': 'Gemini (Google)'}
+    return {
+        "message": f"LLM 설정이 저장되었습니다 ({provider_names.get(provider, provider)})",
+        "is_configured": True
+    }
+
+
+@router.delete("/llm-settings")
+async def delete_llm_settings(
+    current_user: dict = Depends(get_current_user_required)
+):
+    """LLM 설정 삭제"""
+    check_auto_trade_permission(current_user)
+
+    logger = get_trade_logger()
+    # NULL로 설정하여 삭제
+    success = logger.save_llm_settings(
+        user_id=current_user.get('id'),
+        provider=None,
+        api_key=None,
+        model=None
+    )
+
+    return {"message": "LLM 설정이 삭제되었습니다", "is_configured": False}
+
+
+# ==================== Green Light 결정 이력 ====================
+
+class GreenlightDecision(BaseModel):
+    """Green Light 결정"""
+    id: int
+    decision_time: str
+    llm_provider: str
+    market_analysis: Optional[str]
+    decisions_count: int
+    buy_count: int
+    sell_count: int
+    risk_assessment: Optional[str]
+
+
+@router.get("/greenlight-decisions")
+async def get_greenlight_decisions(
+    limit: int = 20,
+    current_user: dict = Depends(get_current_user_required)
+):
+    """Green Light AI 결정 이력 조회"""
+    check_auto_trade_permission(current_user)
+
+    logger = get_trade_logger()
+    decisions = logger.get_greenlight_decisions(current_user.get('id'), limit=limit)
+
+    result = []
+    for d in decisions:
+        decisions_json = d.get('decisions_json', [])
+        if isinstance(decisions_json, str):
+            import json
+            try:
+                decisions_json = json.loads(decisions_json)
+            except:
+                decisions_json = []
+
+        buy_count = sum(1 for dec in decisions_json if dec.get('action') == 'BUY')
+        sell_count = sum(1 for dec in decisions_json if dec.get('action') == 'SELL')
+
+        # raw_response에서 market_analysis, risk_assessment 추출
+        raw_response = d.get('raw_response', '')
+        market_analysis = ''
+        risk_assessment = ''
+
+        if raw_response:
+            import json
+            import re
+            json_match = re.search(r'\{[\s\S]*\}', raw_response)
+            if json_match:
+                try:
+                    parsed = json.loads(json_match.group(0))
+                    market_analysis = parsed.get('market_analysis', '')
+                    risk_assessment = parsed.get('risk_assessment', '')
+                except:
+                    pass
+
+        result.append({
+            "id": d.get('id'),
+            "decision_time": d.get('decision_time'),
+            "llm_provider": d.get('llm_provider'),
+            "market_analysis": market_analysis,
+            "decisions_count": len(decisions_json),
+            "buy_count": buy_count,
+            "sell_count": sell_count,
+            "risk_assessment": risk_assessment,
+            "decisions": decisions_json,
+            "executed_orders": d.get('executed_orders_json', [])
+        })
+
+    return {"decisions": result, "total": len(result)}
