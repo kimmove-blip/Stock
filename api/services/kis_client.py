@@ -631,7 +631,8 @@ class KISClient:
             "FID_INPUT_ISCD": stock_code,
             "FID_INPUT_DATE_1": target_date,
             "FID_INPUT_HOUR_1": start_time,
-            "FID_PW_DATA_INCU_YN": "Y",
+            "FID_PW_DATA_INCU_YN": "N",
+            "FID_FAKE_TICK_INCU_YN": "",  # 허봉 포함 여부 (공백 필수)
         }
 
         try:
@@ -640,6 +641,7 @@ class KISClient:
             data = res.json()
 
             if data.get("rt_cd") != "0":
+                print(f"분봉 API 오류 [{stock_code}]: {data.get('msg1', '')}")
                 return None
 
             output2 = data.get("output2", [])
@@ -1202,6 +1204,69 @@ class KISClient:
                 break
 
         return all_orders if all_orders else None
+
+    def get_realized_profit(self, start_date: str = None, end_date: str = None) -> Optional[List[Dict]]:
+        """
+        기간별 실현손익 조회
+
+        Args:
+            start_date: 조회 시작일 (YYYYMMDD)
+            end_date: 조회 종료일 (YYYYMMDD)
+
+        Returns:
+            종목별 실현손익 리스트
+        """
+        if not self.account_no:
+            raise ValueError("계좌번호가 설정되지 않았습니다.")
+
+        if not start_date:
+            start_date = datetime.now().strftime("%Y%m%d")
+        if not end_date:
+            end_date = datetime.now().strftime("%Y%m%d")
+
+        url = f"{self.BASE_URL}/uapi/domestic-stock/v1/trading/inquire-period-profit"
+
+        # 모의투자는 지원 안함
+        tr_id = "VTTC8715R" if self.is_virtual else "TTTC8715R"
+
+        headers = self._get_headers(tr_id)
+        params = {
+            "CANO": self.account_no,
+            "ACNT_PRDT_CD": self.account_product_code,
+            "SORT_DVSN": "00",
+            "PDNO": "",
+            "INQR_STRT_DT": start_date,
+            "INQR_END_DT": end_date,
+            "CBLC_DVSN": "00",
+            "CTX_AREA_FK100": "",
+            "CTX_AREA_NK100": "",
+        }
+
+        try:
+            res = requests.get(url, headers=headers, params=params, timeout=10)
+            res.raise_for_status()
+            data = res.json()
+
+            if data.get("rt_cd") != "0":
+                print(f"실현손익 조회 오류: {data.get('msg1', '')}")
+                return None
+
+            output = data.get("output1", [])
+            results = []
+            for item in output:
+                results.append({
+                    "stock_code": item.get("pdno", ""),
+                    "stock_name": item.get("prdt_name", ""),
+                    "sell_amount": int(item.get("sll_amt", 0)),
+                    "buy_amount": int(item.get("buy_amt", 0)),
+                    "realized_profit": int(item.get("rlzt_pfls", 0)),
+                })
+
+            return results
+
+        except requests.exceptions.RequestException as e:
+            print(f"실현손익 조회 실패: {str(e)}")
+            return None
 
 
 # 싱글톤 인스턴스

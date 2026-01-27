@@ -161,11 +161,50 @@ def generate_daily_report_html(user_id: int, report_date: str = None, save_snaps
         is_mock=is_mock
     )
 
-    # 오늘 거래 내역
-    trades = logger.get_trade_history(user_id, start_date=report_date, end_date=report_date)
-    today_trades = [t for t in trades if t.get('status') == 'executed']  # 체결된 것만
-    today_buys = [t for t in today_trades if t.get('side') == 'buy']
-    today_sells = [t for t in today_trades if t.get('side') == 'sell']
+    # 오늘 거래 내역 (한투 API에서 직접 조회)
+    from api.services.kis_client import KISClient
+    client = KISClient(
+        app_key=api_key_data.get('app_key'),
+        app_secret=api_key_data.get('app_secret'),
+        account_number=account_number,
+        is_virtual=is_mock
+    )
+
+    # API에서 오늘 체결 내역 조회
+    api_trades = client.get_order_history(start_date=today, end_date=today) or []
+
+    # 필드명 변환 (API → 보고서 형식) + 0주 필터링
+    for t in api_trades:
+        t['quantity'] = t.get('executed_qty', 0)
+        t['price'] = t.get('executed_price', 0)
+        t['amount'] = t.get('executed_amount', 0)
+
+    # 체결 수량이 0인 건 제외
+    api_trades = [t for t in api_trades if t.get('quantity', 0) > 0]
+
+    today_buys = [t for t in api_trades if t.get('side') == 'buy']
+    today_sells = [t for t in api_trades if t.get('side') == 'sell']
+
+    # 실현손익 조회 (매도 종목 손익)
+    realized_profits = client.get_realized_profit(start_date=today, end_date=today) or []
+    profit_map = {p['stock_code']: p for p in realized_profits}
+
+    # 매도 종목에 손익 정보 추가
+    for sell in today_sells:
+        stock_code = sell.get('stock_code')
+        if stock_code in profit_map:
+            p = profit_map[stock_code]
+            sell['profit_loss'] = p.get('realized_profit', 0)
+            # 매수가 역산: 매수금액 / 수량 (오늘 매도 수량 기준)
+            if sell.get('quantity', 0) > 0 and p.get('buy_amount', 0) > 0:
+                sell['buy_price'] = p.get('buy_amount', 0) // sell.get('quantity', 1)
+            else:
+                sell['buy_price'] = 0
+        else:
+            sell['profit_loss'] = 0
+            sell['buy_price'] = 0
+
+    today_trades = today_buys + today_sells
 
     # 오늘 매수한 종목 코드
     today_bought_codes = {t.get('stock_code') for t in today_buys}
@@ -187,6 +226,26 @@ def generate_daily_report_html(user_id: int, report_date: str = None, save_snaps
     prev_d2_cash = prev_day.get('d2_cash', 0) if prev_day else None
     prev_holdings_value = prev_day.get('holdings_value', 0) if prev_day else None
     prev_date = prev_day.get('trade_date', '-') if prev_day else '-'
+
+    # 전일 성과 데이터 조회 (daily_performance에서)
+    prev_total_profit = 0
+    prev_profit_rate = 0.0
+    prev_realized_profit = 0
+    try:
+        with logger._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                SELECT total_profit, profit_rate
+                FROM daily_performance
+                WHERE user_id = ? AND trade_date < ?
+                ORDER BY trade_date DESC LIMIT 1
+            """, (user_id, report_date))
+            row = cursor.fetchone()
+            if row:
+                prev_total_profit = row['total_profit'] or 0
+                prev_profit_rate = row['profit_rate'] or 0.0
+    except Exception:
+        pass
 
     # 전일 대비 증감
     if prev_total_assets:
@@ -262,16 +321,16 @@ def generate_daily_report_html(user_id: int, report_date: str = None, save_snaps
     <tr>
         <td>총 평가손익</td>
         <td class="{'profit' if total_profit >= 0 else 'loss'}">{total_profit:+,.0f}원</td>
-        <td>-</td>
-        <td>-</td>
+        <td class="{'profit' if prev_total_profit >= 0 else 'loss'}">{prev_total_profit:+,.0f}원</td>
+        <td>{format_change(total_profit, prev_total_profit)[0]}</td>
         <td>매입가 대비</td>
     </tr>
     <tr>
         <td>총 수익률</td>
-        <td class="{'profit' if profit_rate >= 0 else 'loss'}">{profit_rate:+.2f}%</td>
-        <td>-</td>
-        <td>-</td>
-        <td></td>
+        <td class="{'profit' if initial_diff_rate >= 0 else 'loss'}">{initial_diff_rate:+.2f}%</td>
+        <td class="{'profit' if prev_profit_rate >= 0 else 'loss'}">{prev_profit_rate:+.2f}%</td>
+        <td class="{'profit' if (initial_diff_rate - prev_profit_rate) >= 0 else 'loss'}">{(initial_diff_rate - prev_profit_rate):+.2f}%p</td>
+        <td>최초투자 대비</td>
     </tr>
     <tr>
         <td>오늘 실현손익</td>
