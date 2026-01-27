@@ -32,3 +32,38 @@ ta-lib/
 .streamlit/secrets.toml
 .encryption_key
 database/.encryption_key
+
+# Archive folder
+archive/
+
+# KIS token cache
+.kis_*_cache.json
+
+# Database files
+database/auto_trade.db
+
+# Cache files
+docs_cache/
+
+# Output files (generated daily)
+output/top100_*.csv
+output/top100_*.json
+output/top100_*.pdf
+output/top100_*.xlsx
+output/value_stocks_*.json
+output/filtered_stocks_*.csv
+output/daily_trade_report_*.pdf
+output/intraday/
+output/intraday_scores/
+output/intraday_reports/
+
+# Android build
+android-twa/
+
+# Screenshots
+screenshot/
+
+# Korean filename temp files
+비번변경스크립트.txt
+앱 개발계획.md
+archive/builds/
