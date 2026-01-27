@@ -38,8 +38,11 @@ export default function AutoTradeAccount() {
   const { data, isLoading, error, refetch, isFetching } = useQuery({
     queryKey: ['autoTradeAccount'],
     queryFn: () => autoTradeAPI.getAccount().then((res) => res.data),
-    staleTime: 1000 * 30, // 30초 캐시
+    staleTime: 1000 * 30,
     refetchOnWindowFocus: true,
+    refetchOnMount: 'always',
+    retry: 2,
+    retryDelay: 1000,
   });
 
   // 설정 조회 (초기투자금)

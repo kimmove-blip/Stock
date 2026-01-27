@@ -79,10 +79,10 @@ def sell_all_holdings(user_id, dry_run=False):
             # 시장가 매도 주문
             result = client.place_order(
                 stock_code=stock_code,
-                order_type='sell',
+                side='sell',
                 quantity=quantity,
                 price=0,  # 시장가
-                order_dv='01'  # 시장가 주문
+                order_type='01'  # 시장가 주문
             )
 
             if result and result.get('rt_cd') == '0':
@@ -159,6 +159,8 @@ def main():
     parser.add_argument('--check-executed', action='store_true', help='체결 상태 확인')
     parser.add_argument('--dry-run', action='store_true', help='테스트 모드 (실제 주문 안함)')
     parser.add_argument('--user-id', type=int, help='특정 사용자만 실행')
+    parser.add_argument('--mock-only', action='store_true', help='모의투자 계좌만 실행')
+    parser.add_argument('--real-only', action='store_true', help='실전투자 계좌만 실행')
     args = parser.parse_args()
 
     print(f"\n{'='*50}")
@@ -174,6 +176,17 @@ def main():
     print(f"대상 사용자: {users}\n")
 
     for user_id in users:
+        # mock-only / real-only 필터링
+        if args.mock_only or args.real_only:
+            logger = TradeLogger()
+            api_key_data = logger.get_api_key_settings(user_id)
+            if api_key_data:
+                is_mock = bool(api_key_data.get('is_mock', True))
+                if args.mock_only and not is_mock:
+                    continue  # 모의투자만 실행인데 실전투자 계좌면 스킵
+                if args.real_only and is_mock:
+                    continue  # 실전투자만 실행인데 모의투자 계좌면 스킵
+
         print(f"\n--- User {user_id} ---")
 
         if args.sell:

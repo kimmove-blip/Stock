@@ -1836,13 +1836,36 @@ class AutoTrader:
                 for item in sell_list:
                     print(f"    - {item['stock_name']}: {', '.join(item['sell_reasons'])}")
 
-                # semi 모드: 매도 실행 안함 (알림만)
+                # semi 모드: 매도 실행 안함 (매도 제안 + 알림)
                 if trade_mode == 'semi':
-                    print("  [SEMI] 반자동 모드 - 매도 실행 안함 (알림만 전송)")
+                    print("  [SEMI] 반자동 모드 - 매도 제안 등록 + 알림 전송")
                     for item in sell_list:
                         stock_code = item.get('stock_code')
                         stock_name = item.get('stock_name', stock_code)
                         reasons = ', '.join(item.get('sell_reasons', []))
+
+                        # 보유 종목에서 수량, 평균가 찾기
+                        holding = next((h for h in holdings if h.get('stock_code') == stock_code), None)
+                        if holding:
+                            quantity = holding.get('quantity', 0)
+                            avg_price = holding.get('avg_price', 0)
+                            current_price = current_prices.get(stock_code, 0)
+                            profit_rate = (current_price - avg_price) / avg_price * 100 if avg_price > 0 else 0
+
+                            # 매도 제안 DB 저장
+                            self.logger.add_sell_suggestion(
+                                user_id=self.user_id,
+                                stock_code=stock_code,
+                                stock_name=stock_name,
+                                quantity=quantity,
+                                avg_price=avg_price,
+                                suggested_price=current_price,
+                                profit_rate=profit_rate,
+                                reason=reasons
+                            )
+                            print(f"    → 매도 제안 등록: {stock_name}")
+
+                        # 푸시 알림 전송
                         self.notifier.notify_sell_signal(stock_name, reasons, stock_code)
                 # 매도 실행
                 elif not self.dry_run:
@@ -2312,7 +2335,20 @@ def main():
         return
 
     # user_id가 지정되면 해당 사용자 설정 사용
-    trader = AutoTrader(dry_run=args.dry_run, user_id=args.user_id)
+    user_config = None
+    if args.user_id:
+        logger = TradeLogger()
+        api_key_data = logger.get_api_key_settings(args.user_id)
+        if api_key_data:
+            user_config = {
+                'app_key': api_key_data.get('app_key'),
+                'app_secret': api_key_data.get('app_secret'),
+                'account_number': api_key_data.get('account_number'),
+                'account_product_code': api_key_data.get('account_product_code', '01'),
+                'is_mock': bool(api_key_data.get('is_mock', True))
+            }
+
+    trader = AutoTrader(dry_run=args.dry_run, user_id=args.user_id, user_config=user_config)
 
     if args.report:
         trader.print_report(days=args.days)

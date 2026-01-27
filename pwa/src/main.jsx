@@ -8,10 +8,15 @@ if (/Android/i.test(navigator.userAgent)) {
   document.documentElement.classList.add('android');
 }
 
-// PWA Service Worker 등록
+// PWA Service Worker 등록 (버전 파라미터로 강제 업데이트)
 if ('serviceWorker' in navigator) {
   window.addEventListener('load', () => {
-    navigator.serviceWorker.register('/sw.js').catch((error) => {
+    // 기존 SW 강제 업데이트
+    navigator.serviceWorker.getRegistrations().then(registrations => {
+      registrations.forEach(reg => reg.update());
+    });
+    // 새 SW 등록 (버전 파라미터로 캐시 무효화)
+    navigator.serviceWorker.register('/sw.js?v=12').catch((error) => {
       console.log('SW registration failed:', error);
     });
   });

@@ -20,6 +20,7 @@ import signal
 from datetime import datetime, timedelta
 from pathlib import Path
 from flask import Flask, render_template_string, jsonify, request
+from trading.trade_logger import BuySuggestionManager, TradeLogger
 
 # 프로젝트 경로
 BASE_DIR = Path(__file__).parent
@@ -36,6 +37,7 @@ DASHBOARD_HTML = """
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <!-- AJAX로 새로고침 (모달 열려있으면 건너뜀) -->
     <title>자동매매 대시보드</title>
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     <style>
@@ -71,6 +73,37 @@ DASHBOARD_HTML = """
         .stat-card .value.negative { color: #f87171; }
         .stat-card .value.neutral { color: #60a5fa; }
         .stat-card .sub { color: #666; font-size: 0.55rem; margin-top: 2px; }
+        .stat-card.clickable { cursor: pointer; transition: transform 0.2s, box-shadow 0.2s; }
+        .stat-card.clickable:hover { transform: scale(1.02); box-shadow: 0 4px 12px rgba(0,0,0,0.3); }
+        /* 모달 스타일 */
+        .modal {
+            position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+            background: rgba(0,0,0,0.8); z-index: 1000;
+            display: flex; align-items: center; justify-content: center;
+        }
+        .modal-content {
+            background: #1a1a2e; border-radius: 12px; width: 95%; max-width: 600px;
+            max-height: 80vh; overflow: hidden; border: 1px solid rgba(255,255,255,0.1);
+        }
+        .modal-header {
+            display: flex; justify-content: space-between; align-items: center;
+            padding: 12px 16px; border-bottom: 1px solid rgba(255,255,255,0.1);
+        }
+        .modal-header h3 { margin: 0; font-size: 0.9rem; color: #fff; }
+        .close-btn { font-size: 1.5rem; cursor: pointer; color: #888; }
+        .close-btn:hover { color: #fff; }
+        .modal-body { padding: 16px; overflow-y: auto; max-height: calc(80vh - 60px); }
+        .trade-date-group { margin-bottom: 16px; }
+        .trade-date-header { color: #888; font-size: 0.7rem; margin-bottom: 8px; padding-bottom: 4px; border-bottom: 1px solid rgba(255,255,255,0.1); }
+        .trade-item {
+            display: grid; grid-template-columns: 1fr auto; gap: 8px;
+            padding: 10px; background: rgba(255,255,255,0.03); border-radius: 8px; margin-bottom: 8px;
+        }
+        .trade-item .stock-name { font-weight: 600; color: #fff; font-size: 0.8rem; }
+        .trade-item .trade-detail { color: #888; font-size: 0.65rem; margin-top: 4px; }
+        .trade-item .trade-result { text-align: right; }
+        .trade-item .profit-amount { font-size: 0.8rem; font-weight: 600; }
+        .trade-item .profit-rate { font-size: 0.65rem; }
         .section {
             background: rgba(255,255,255,0.05);
             border-radius: 10px;
@@ -126,6 +159,15 @@ DASHBOARD_HTML = """
         .status-badge.running { background: rgba(74,222,128,0.2); color: #4ade80; }
         .status-badge.stopped { background: rgba(107,114,128,0.2); color: #9ca3af; }
         .empty-state { text-align: center; padding: 20px; color: #666; font-size: 0.7rem; }
+        .collapsible {
+            cursor: pointer;
+            user-select: none;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+        .collapsible:hover { color: #60a5fa; }
+        #settingsIcon { font-size: 0.7rem; transition: transform 0.2s; }
         .control-panel {
             display: flex;
             align-items: center;
@@ -193,50 +235,35 @@ DASHBOARD_HTML = """
             <p>마지막 업데이트: {{ last_update }}</p>
         </header>
 
-        <!-- 제어 패널 -->
-        <div class="section">
-            <div class="control-panel">
-                <span class="status-badge {{ 'running' if is_running else 'stopped' }}">
-                    {{ '실행 중' if is_running else '정지됨' }}
-                </span>
-                {% if is_running %}
-                <button class="btn btn-stop" onclick="stopTrader()">정지</button>
-                {% else %}
-                <button class="btn btn-start" onclick="startTrader()">실행</button>
-                {% endif %}
-                <button class="btn btn-start" onclick="runOnce()">1회 실행</button>
-                <button class="btn btn-refresh" onclick="location.reload()">새로고침</button>
-            </div>
-        </div>
-
         <!-- 계좌 현황 -->
         <div class="stats-grid">
             <div class="stat-card">
-                <div class="label">총 자산</div>
-                <div class="value neutral">{{ "{:,}".format(summary.total_assets) }}원</div>
-                <div class="sub">{{ "API 연결됨" if summary.api_connected else "API 연결 안됨" }}</div>
+                <div class="label">투자금액</div>
+                <div class="value neutral">{{ "{:,}".format(summary.invested_amount) }}원</div>
             </div>
             <div class="stat-card">
-                <div class="label">현금 잔고</div>
-                <div class="value neutral">{{ "{:,}".format(summary.cash_balance) }}원</div>
-            </div>
-            <div class="stat-card">
-                <div class="label">평가 금액</div>
+                <div class="label">평가금액</div>
                 <div class="value neutral">{{ "{:,}".format(summary.total_eval_amount) }}원</div>
             </div>
             <div class="stat-card">
-                <div class="label">총 손익</div>
+                <div class="label">실현손익</div>
+                <div class="value {{ 'positive' if summary.realized_profit|default(0) >= 0 else 'negative' }}">
+                    {{ "{:+,}".format(summary.realized_profit|default(0)) }}원
+                </div>
+            </div>
+            <div class="stat-card">
+                <div class="label">총손익</div>
                 <div class="value {{ 'positive' if summary.total_profit >= 0 else 'negative' }}">
                     {{ "{:+,}".format(summary.total_profit) }}원
                 </div>
                 <div class="sub">{{ "{:+.2f}".format(summary.profit_rate * 100) }}%</div>
             </div>
             <div class="stat-card">
-                <div class="label">보유 종목</div>
+                <div class="label">보유종목</div>
                 <div class="value neutral">{{ summary.holdings_count }}개</div>
                 <div class="sub">최대 {{ config.max_holdings }}개</div>
             </div>
-            <div class="stat-card">
+            <div class="stat-card clickable" onclick="showTradeHistory()">
                 <div class="label">승률</div>
                 <div class="value {{ 'positive' if summary.win_rate >= 0.5 else 'negative' }}">
                     {{ "{:.1f}".format(summary.win_rate * 100) }}%
@@ -245,51 +272,137 @@ DASHBOARD_HTML = """
             </div>
         </div>
 
-        <!-- 설정 -->
+        <!-- 거래 내역 모달 -->
+        <div id="tradeHistoryModal" class="modal" style="display: none;">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h3>거래 내역</h3>
+                    <span class="close-btn" onclick="closeTradeHistory()">&times;</span>
+                </div>
+                <div class="modal-body" id="tradeHistoryBody">
+                    <p>로딩 중...</p>
+                </div>
+            </div>
+        </div>
+
+        <!-- 설정 및 제어 -->
         <div class="section">
-            <h2>매매 설정</h2>
-            <form id="settingsForm">
-                <div class="settings-grid">
-                    <div class="setting-item">
-                        <label>최소 매수 점수</label>
-                        <input type="number" name="min_buy_score" value="{{ config.min_buy_score }}" min="50" max="100">
-                        <span class="hint">50~100 (높을수록 엄격)</span>
-                    </div>
-                    <div class="setting-item">
-                        <label>손절률 (%)</label>
-                        <input type="number" name="stop_loss_pct" value="{{ (config.stop_loss_pct * 100)|round(1) }}" step="0.5" min="-20" max="0">
-                        <span class="hint">-20 ~ 0 (예: -7)</span>
-                    </div>
-                    <div class="setting-item">
-                        <label>매도 점수</label>
-                        <input type="number" name="min_hold_score" value="{{ config.min_hold_score }}" min="0" max="70">
-                        <span class="hint">이 점수 이하면 매도</span>
-                    </div>
-                    <div class="setting-item">
-                        <label>종목당 투자비율 (%)</label>
-                        <input type="number" name="max_position_pct" value="{{ (config.max_position_pct * 100)|round(1) }}" step="0.5" min="1" max="20">
-                        <span class="hint">1~20 (예: 5)</span>
-                    </div>
-                    <div class="setting-item">
-                        <label>최대 보유 종목</label>
-                        <input type="number" name="max_holdings" value="{{ config.max_holdings }}" min="1" max="20">
-                        <span class="hint">1~20개</span>
-                    </div>
-                    <div class="setting-item">
-                        <label>일일 최대 거래</label>
-                        <input type="number" name="max_daily_trades" value="{{ config.max_daily_trades }}" min="1" max="50">
-                        <span class="hint">1~50회</span>
-                    </div>
-                    <div class="setting-item">
-                        <label>최대 보유 기간 (일)</label>
-                        <input type="number" name="max_hold_days" value="{{ config.max_hold_days }}" min="1" max="30">
-                        <span class="hint">1~30일</span>
+            <h2 class="collapsible" onclick="toggleSettings()">
+                <span id="settingsIcon">▶</span> 설정 및 제어
+                <span class="status-badge {{ 'running' if is_running else 'stopped' }}" style="margin-left: 10px;">
+                    {{ '실행 중' if is_running else '정지됨' }}
+                </span>
+            </h2>
+            <div id="settingsForm" style="display: none;">
+                <!-- 제어 버튼 -->
+                <div style="margin-bottom: 20px; padding: 10px; background: rgba(255,255,255,0.03); border-radius: 6px;">
+                    <label style="color: #888; font-size: 0.65rem; display: block; margin-bottom: 8px;">자동매매 제어</label>
+                    <div class="control-panel">
+                        {% if is_running %}
+                        <button class="btn btn-stop" onclick="stopTrader()">정지</button>
+                        {% else %}
+                        <button class="btn btn-start" onclick="startTrader()">실행</button>
+                        {% endif %}
+                        <button class="btn btn-start" onclick="runOnce()">1회 실행</button>
+                        <button class="btn btn-refresh" onclick="location.reload()">새로고침</button>
+                        {% if is_virtual %}
+                        <button class="btn btn-stop" onclick="resetVirtualBalance()" style="margin-left: 10px;">잔고 리셋</button>
+                        {% endif %}
                     </div>
                 </div>
-                <div style="margin-top: 20px;">
-                    <button type="submit" class="btn btn-save">설정 저장</button>
-                </div>
-            </form>
+
+                <!-- 매매 설정 -->
+                <form id="settingsFormInner">
+                    <div class="settings-grid">
+                        <div class="setting-item">
+                            <label>매매 모드</label>
+                            <select name="trade_mode">
+                                <option value="auto" {{ 'selected' if config.trade_mode == 'auto' else '' }}>자동매매 (Auto)</option>
+                                <option value="semi-auto" {{ 'selected' if config.trade_mode == 'semi-auto' else '' }}>반자동 (Semi-Auto)</option>
+                            </select>
+                            <span class="hint">auto: 즉시매수 / semi-auto: 제안승인</span>
+                        </div>
+                        <div class="setting-item">
+                            <label>최소 매수 점수</label>
+                            <input type="number" name="min_buy_score" value="{{ config.min_buy_score }}" min="50" max="100">
+                            <span class="hint">50~100 (높을수록 엄격)</span>
+                        </div>
+                        <div class="setting-item">
+                            <label>손절률 (%)</label>
+                            <input type="number" name="stop_loss_pct" value="{{ (config.stop_loss_pct * 100)|round(1) }}" step="0.5" min="-20" max="0">
+                            <span class="hint">-20 ~ 0 (예: -7)</span>
+                        </div>
+                        <div class="setting-item">
+                            <label>매도 점수</label>
+                            <input type="number" name="min_hold_score" value="{{ config.min_hold_score }}" min="0" max="70">
+                            <span class="hint">이 점수 이하면 매도</span>
+                        </div>
+                        <div class="setting-item">
+                            <label>종목당 투자비율 (%)</label>
+                            <input type="number" name="max_position_pct" value="{{ (config.max_position_pct * 100)|round(1) }}" step="0.5" min="1" max="20">
+                            <span class="hint">1~20 (예: 5)</span>
+                        </div>
+                        <div class="setting-item">
+                            <label>최대 보유 종목</label>
+                            <input type="number" name="max_holdings" value="{{ config.max_holdings }}" min="1" max="20">
+                            <span class="hint">1~20개</span>
+                        </div>
+                        <div class="setting-item">
+                            <label>일일 최대 거래</label>
+                            <input type="number" name="max_daily_trades" value="{{ config.max_daily_trades }}" min="1" max="50">
+                            <span class="hint">1~50회</span>
+                        </div>
+                        <div class="setting-item">
+                            <label>최대 보유 기간 (일)</label>
+                            <input type="number" name="max_hold_days" value="{{ config.max_hold_days }}" min="1" max="30">
+                            <span class="hint">1~30일</span>
+                        </div>
+                    </div>
+                    <div style="margin-top: 20px; display: flex; align-items: center; gap: 10px;">
+                        <input type="password" id="adminPassword" placeholder="비밀번호" style="width: 100px; padding: 8px; background: rgba(255,255,255,0.1); border: 1px solid rgba(255,255,255,0.2); border-radius: 6px; color: #fff; font-size: 0.7rem;">
+                        <button type="submit" class="btn btn-save">설정 저장</button>
+                    </div>
+                </form>
+            </div>
+        </div>
+
+        <!-- 매수 대기열 -->
+        <div class="section">
+            <h2>📊 매수 대기열 <span style="font-size: 0.65rem; color: #888;">({{ buy_candidates|length }}개 대기)</span></h2>
+            {% if buy_candidates %}
+            <table>
+                <thead>
+                    <tr>
+                        <th>종목명</th>
+                        <th>점수</th>
+                        <th>현재가</th>
+                        <th>추천가</th>
+                        <th>밴드상한</th>
+                        <th>상태</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for c in buy_candidates %}
+                    <tr>
+                        <td>{{ c.stock_name }}</td>
+                        <td><span class="badge buy">{{ c.score }}점</span></td>
+                        <td>{{ "{:,}".format(c.current_price) }}원</td>
+                        <td>{{ "{:,}".format(c.recommended_price) }}원</td>
+                        <td>{{ "{:,}".format(c.buy_band_high) }}원</td>
+                        <td>
+                            {% if c.current_price <= c.buy_band_high %}
+                            <span class="badge buy">매수가능</span>
+                            {% else %}
+                            <span style="color: #888; font-size: 0.6rem;">가격대기 ({{ "{:.1f}".format((c.current_price - c.buy_band_high) / c.buy_band_high * 100) }}%↑)</span>
+                            {% endif %}
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+            {% else %}
+            <div class="empty-state">매수 조건 충족 종목이 없습니다</div>
+            {% endif %}
         </div>
 
         <!-- 보유 종목 -->
@@ -378,8 +491,99 @@ DASHBOARD_HTML = """
             setTimeout(() => { toast.style.display = 'none'; }, 3000);
         }
 
+        function toggleSettings() {
+            const form = document.getElementById('settingsForm');
+            const icon = document.getElementById('settingsIcon');
+            if (form.style.display === 'none') {
+                form.style.display = 'block';
+                icon.textContent = '▼';
+            } else {
+                form.style.display = 'none';
+                icon.textContent = '▶';
+            }
+        }
+
+        function showTradeHistory() {
+            document.getElementById('tradeHistoryModal').style.display = 'flex';
+            fetch('/api/trade-history')
+                .then(res => res.json())
+                .then(data => {
+                    const body = document.getElementById('tradeHistoryBody');
+                    if (!data.trades || data.trades.length === 0) {
+                        body.innerHTML = '<p style="color: #888; text-align: center;">거래 내역이 없습니다.</p>';
+                        return;
+                    }
+                    // 날짜별로 그룹화
+                    const grouped = {};
+                    data.trades.forEach(t => {
+                        const date = t.trade_date;
+                        if (!grouped[date]) grouped[date] = [];
+                        grouped[date].push(t);
+                    });
+                    let html = '';
+                    Object.keys(grouped).sort().reverse().forEach(date => {
+                        html += `<div class="trade-date-group">`;
+                        html += `<div class="trade-date-header">${date}</div>`;
+                        grouped[date].forEach(t => {
+                            const profitClass = t.profit_loss >= 0 ? 'profit' : 'loss';
+                            const profitSign = t.profit_loss >= 0 ? '+' : '';
+                            const rateSign = t.profit_rate >= 0 ? '+' : '';
+                            html += `
+                                <div class="trade-item">
+                                    <div>
+                                        <div class="stock-name">${t.stock_name}</div>
+                                        <div class="trade-detail">
+                                            매수 ${t.buy_price?.toLocaleString() || '-'}원 → 매도 ${t.sell_price?.toLocaleString() || '-'}원 (${t.quantity}주)
+                                        </div>
+                                        <div class="trade-detail">
+                                            매수금액 ${t.buy_amount?.toLocaleString() || '-'}원 / 매도금액 ${t.sell_amount?.toLocaleString() || '-'}원
+                                        </div>
+                                    </div>
+                                    <div class="trade-result">
+                                        <div class="profit-amount ${profitClass}">${profitSign}${t.profit_loss?.toLocaleString() || 0}원</div>
+                                        <div class="profit-rate ${profitClass}">${rateSign}${(t.profit_rate * 100).toFixed(1)}%</div>
+                                    </div>
+                                </div>
+                            `;
+                        });
+                        html += '</div>';
+                    });
+                    body.innerHTML = html;
+                })
+                .catch(err => {
+                    document.getElementById('tradeHistoryBody').innerHTML = '<p style="color: #f87171;">데이터 로딩 실패</p>';
+                });
+        }
+
+        function closeTradeHistory() {
+            document.getElementById('tradeHistoryModal').style.display = 'none';
+        }
+
+        // 모달 바깥 클릭 시 닫기
+        document.getElementById('tradeHistoryModal')?.addEventListener('click', function(e) {
+            if (e.target === this) closeTradeHistory();
+        });
+
+        function getPassword() {
+            return document.getElementById('adminPassword').value;
+        }
+
+        function checkPassword() {
+            const pwd = getPassword();
+            if (pwd !== '8864') {
+                showToast('비밀번호가 올바르지 않습니다', 'error');
+                return false;
+            }
+            return true;
+        }
+
         function startTrader() {
-            fetch('/api/trader/start', { method: 'POST' })
+            if (!checkPassword()) return;
+            fetch('/api/trader/start', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ password: getPassword() })
+            })
                 .then(r => r.json())
                 .then(data => {
                     showToast(data.message, data.success ? 'success' : 'error');
@@ -388,7 +592,12 @@ DASHBOARD_HTML = """
         }
 
         function stopTrader() {
-            fetch('/api/trader/stop', { method: 'POST' })
+            if (!checkPassword()) return;
+            fetch('/api/trader/stop', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ password: getPassword() })
+            })
                 .then(r => r.json())
                 .then(data => {
                     showToast(data.message, data.success ? 'success' : 'error');
@@ -397,8 +606,13 @@ DASHBOARD_HTML = """
         }
 
         function runOnce() {
+            if (!checkPassword()) return;
             showToast('자동매매 1회 실행 중...', 'success');
-            fetch('/api/trader/run-once', { method: 'POST' })
+            fetch('/api/trader/run-once', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ password: getPassword() })
+            })
                 .then(r => r.json())
                 .then(data => {
                     showToast(data.message, data.success ? 'success' : 'error');
@@ -406,10 +620,47 @@ DASHBOARD_HTML = """
                 });
         }
 
-        document.getElementById('settingsForm').addEventListener('submit', function(e) {
+        function resetVirtualBalance() {
+            if (!checkPassword()) return;
+            if (!confirm('가상 잔고를 초기 금액으로 리셋하시겠습니까?')) return;
+
+            fetch('/api/virtual-balance/reset', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ password: getPassword() })
+            })
+                .then(r => r.json())
+                .then(data => {
+                    showToast(data.message, data.success ? 'success' : 'error');
+                    if (data.success) setTimeout(() => location.reload(), 1000);
+                });
+        }
+
+        function approveSuggestion(id) {
+            fetch('/api/suggestions/' + id + '/approve', { method: 'POST' })
+                .then(r => r.json())
+                .then(data => {
+                    showToast(data.message, data.success ? 'success' : 'error');
+                    if (data.success) setTimeout(() => location.reload(), 500);
+                });
+        }
+
+        function rejectSuggestion(id) {
+            fetch('/api/suggestions/' + id + '/reject', { method: 'POST' })
+                .then(r => r.json())
+                .then(data => {
+                    showToast(data.message, data.success ? 'success' : 'error');
+                    if (data.success) setTimeout(() => location.reload(), 500);
+                });
+        }
+
+        document.getElementById('settingsFormInner').addEventListener('submit', function(e) {
             e.preventDefault();
+            if (!checkPassword()) return;
+
             const formData = new FormData(this);
             const data = Object.fromEntries(formData.entries());
+            data.password = getPassword();
 
             fetch('/api/settings', {
                 method: 'POST',
@@ -452,6 +703,16 @@ DASHBOARD_HTML = """
                 }
             }
         });
+
+        // 20초마다 자동 새로고침 (모달 열려있으면 건너뜀)
+        setInterval(() => {
+            const modal = document.getElementById('tradeHistoryModal');
+            if (modal && modal.style.display !== 'none') {
+                console.log('모달 열려있음 - 새로고침 건너뜀');
+                return;
+            }
+            location.reload();
+        }, 20000);
     </script>
 </body>
 </html>
@@ -494,6 +755,7 @@ def get_config():
         from config import AutoTraderConfig
         return {
             "is_virtual": AutoTraderConfig.IS_VIRTUAL,
+            "trade_mode": getattr(AutoTraderConfig, 'TRADE_MODE', 'auto'),
             "min_buy_score": AutoTraderConfig.MIN_BUY_SCORE,
             "stop_loss_pct": AutoTraderConfig.STOP_LOSS_PCT,
             "min_hold_score": AutoTraderConfig.MIN_HOLD_SCORE,
@@ -505,6 +767,7 @@ def get_config():
     except:
         return {
             "is_virtual": True,
+            "trade_mode": "auto",
             "min_buy_score": 80,
             "stop_loss_pct": -0.07,
             "min_hold_score": 40,
@@ -523,6 +786,7 @@ def save_config(settings):
         config_content = CONFIG_PATH.read_text(encoding='utf-8')
 
         mappings = {
+            'trade_mode': ('TRADE_MODE = ', lambda x: f'"{x}"'),
             'min_buy_score': ('MIN_BUY_SCORE = ', int),
             'stop_loss_pct': ('STOP_LOSS_PCT = ', lambda x: float(x) / 100),
             'min_hold_score': ('MIN_HOLD_SCORE = ', int),
@@ -557,6 +821,9 @@ def is_trader_running():
         try:
             pid = int(PID_FILE.read_text().strip())
             os.kill(pid, 0)
+            return True
+        except PermissionError:
+            # 다른 사용자가 실행한 프로세스 - 실행 중으로 간주
             return True
         except (ProcessLookupError, ValueError):
             PID_FILE.unlink(missing_ok=True)
@@ -631,9 +898,10 @@ if __name__ == "__main__":
 
 def get_summary(days=30):
     """성과 요약"""
-    account = get_account_from_api()
-    api_summary = account.get("summary", {})
+    config = get_config()
+    is_virtual = config.get("is_virtual", True)
 
+    # 거래 통계 조회
     total_trades = 0
     wins = 0
 
@@ -653,21 +921,106 @@ def get_summary(days=30):
         total_trades = trade_stats["total"] if trade_stats else 0
         wins = trade_stats["wins"] if trade_stats and trade_stats["wins"] else 0
 
+    # 모의투자: 가상 잔고 사용
+    if is_virtual:
+        try:
+            logger = TradeLogger()
+
+            # 가상 잔고 없으면 초기화
+            virtual_balance = logger.get_virtual_balance()
+            if not virtual_balance:
+                from config import AutoTraderConfig
+                initial_cash = getattr(AutoTraderConfig, 'VIRTUAL_INITIAL_CASH', 100_000_000)
+                logger.init_virtual_balance(initial_cash)
+                virtual_balance = logger.get_virtual_balance()
+
+            # 보유 종목의 현재 평가금액 계산
+            holdings = logger.get_holdings()
+            total_eval = 0
+            invested_amount = 0
+
+            if holdings:
+                # API에서 현재가 조회해서 평가금액 계산
+                account = get_account_from_api()
+                api_holdings = {h.get('stock_code'): h for h in account.get('holdings', [])}
+
+                for h in holdings:
+                    stock_code = h.get('stock_code')
+                    quantity = h.get('quantity', 0)
+                    avg_price = h.get('avg_price', 0)
+
+                    # API 데이터가 있으면 현재가 사용, 없으면 평균단가 사용
+                    if stock_code in api_holdings:
+                        current_price = api_holdings[stock_code].get('current_price', avg_price)
+                    else:
+                        current_price = avg_price
+
+                    total_eval += current_price * quantity
+                    invested_amount += avg_price * quantity
+
+                # 평가금액 업데이트
+                logger.update_virtual_eval(total_eval)
+
+            summary = logger.get_virtual_summary()
+            realized_profit = summary.get('total_profit', 0)  # 실현손익
+            unrealized_profit = total_eval - invested_amount  # 미실현손익 = 평가금액 - 투자금액
+            total_profit = realized_profit + unrealized_profit  # 총손익 = 실현 + 미실현
+            total_assets = summary.get('current_cash', 0) + total_eval
+
+            return {
+                "total_assets": total_assets,
+                "invested_amount": invested_amount,
+                "total_eval_amount": total_eval,
+                "cash_balance": summary.get('current_cash', 0),
+                "total_profit": total_profit,
+                "realized_profit": realized_profit,
+                "unrealized_profit": unrealized_profit,
+                "profit_rate": total_profit / invested_amount if invested_amount > 0 else 0,
+                "win_rate": wins / total_trades if total_trades > 0 else 0,
+                "winning_trades": wins,
+                "total_trades": total_trades,
+                "holdings_count": len(holdings),
+                "api_connected": True,
+                "is_virtual_balance": True
+            }
+        except Exception as e:
+            print(f"가상 잔고 조회 실패: {e}")
+
+    # 실전투자 또는 가상잔고 실패 시: API 사용
+    account = get_account_from_api()
+    api_summary = account.get("summary", {})
+
     total_eval = api_summary.get("total_eval_amount", 0)
     cash = api_summary.get("cash_balance", 0)
     total_assets = total_eval + cash if total_eval else cash
 
+    holdings = account.get("holdings", [])
+    invested_amount = sum(
+        h.get("avg_price", 0) * h.get("quantity", 0) for h in holdings
+    )
+
+    # 미실현손익 = 평가금액 - 투자금액
+    unrealized_profit = total_eval - invested_amount
+    # API에서 실현손익 (없으면 0)
+    realized_profit = api_summary.get("total_profit_loss", 0) - unrealized_profit if api_summary.get("total_profit_loss") else 0
+    # 총손익 = 실현 + 미실현
+    total_profit = realized_profit + unrealized_profit
+
     return {
         "total_assets": total_assets,
-        "cash_balance": cash,
+        "invested_amount": invested_amount,
         "total_eval_amount": total_eval,
-        "total_profit": api_summary.get("total_profit_loss", 0),
+        "cash_balance": cash,
+        "total_profit": total_profit,
+        "realized_profit": realized_profit,
+        "unrealized_profit": unrealized_profit,
         "profit_rate": api_summary.get("profit_rate", 0) / 100 if api_summary.get("profit_rate") else 0,
         "win_rate": wins / total_trades if total_trades > 0 else 0,
         "winning_trades": wins,
         "total_trades": total_trades,
-        "holdings_count": len(account.get("holdings", [])),
-        "api_connected": account.get("success", False)
+        "holdings_count": len(holdings),
+        "api_connected": account.get("success", False),
+        "is_virtual_balance": False
     }
 
 
@@ -742,12 +1095,27 @@ def dashboard():
     trades = get_trades()
     performance = get_performance()
 
+    # 매수 대기열 조회
+    buy_candidates = []
+    try:
+        from auto_trader import AutoTrader
+        trader = AutoTrader(dry_run=True)
+        analysis = trader.load_analysis_results()
+        if analysis:
+            candidates = trader.filter_buy_candidates(analysis)
+            # 이미 보유 중인 종목 제외
+            holding_codes = {h.get('stock_code') for h in holdings}
+            buy_candidates = [c for c in candidates if c.get('stock_code') not in holding_codes]
+    except Exception as e:
+        print(f"매수 대기열 조회 실패: {e}")
+
     return render_template_string(
         DASHBOARD_HTML,
         summary=summary,
         holdings=holdings,
         trades=trades,
         config=config,
+        buy_candidates=buy_candidates,
         performance_json=json.dumps(performance),
         last_update=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
         is_virtual=config.get("is_virtual", True),
@@ -755,10 +1123,21 @@ def dashboard():
     )
 
 
+ADMIN_PASSWORD = "8864"
+
+
+def check_password(data):
+    """비밀번호 확인"""
+    return data.get("password") == ADMIN_PASSWORD
+
+
 @app.route("/api/settings", methods=["POST"])
 def api_save_settings():
     """설정 저장 API"""
     data = request.json
+    if not check_password(data):
+        return jsonify({"success": False, "message": "비밀번호가 올바르지 않습니다"})
+
     if save_config(data):
         return jsonify({"success": True, "message": "설정이 저장되었습니다"})
     return jsonify({"success": False, "message": "설정 저장 실패"})
@@ -767,6 +1146,10 @@ def api_save_settings():
 @app.route("/api/trader/start", methods=["POST"])
 def api_start_trader():
     """자동매매 시작 (스케줄러 모드)"""
+    data = request.json or {}
+    if not check_password(data):
+        return jsonify({"success": False, "message": "비밀번호가 올바르지 않습니다"})
+
     if is_trader_running():
         return jsonify({"success": False, "message": "이미 실행 중입니다"})
 
@@ -797,6 +1180,10 @@ def api_start_trader():
 @app.route("/api/trader/stop", methods=["POST"])
 def api_stop_trader():
     """자동매매 정지"""
+    data = request.json or {}
+    if not check_password(data):
+        return jsonify({"success": False, "message": "비밀번호가 올바르지 않습니다"})
+
     if not is_trader_running():
         return jsonify({"success": False, "message": "실행 중이 아닙니다"})
 
@@ -812,6 +1199,10 @@ def api_stop_trader():
 @app.route("/api/trader/run-once", methods=["POST"])
 def api_run_once():
     """자동매매 1회 실행 (실제 매매)"""
+    data = request.json or {}
+    if not check_password(data):
+        return jsonify({"success": False, "message": "비밀번호가 올바르지 않습니다"})
+
     try:
         # logs 디렉토리 생성
         logs_dir = BASE_DIR / "logs"
@@ -844,6 +1235,126 @@ def api_holdings():
 @app.route("/api/trades")
 def api_trades():
     return jsonify(get_trades())
+
+
+@app.route("/api/trade-history")
+def api_trade_history():
+    """완료된 거래 내역 (매수-매도 매칭)"""
+    try:
+        logger = TradeLogger()
+        with logger._get_connection() as conn:
+            cursor = conn.cursor()
+            # 매도 기록에서 매수 정보와 함께 조회
+            cursor.execute("""
+                SELECT
+                    s.trade_date,
+                    s.stock_code,
+                    s.stock_name,
+                    b.price as buy_price,
+                    s.price as sell_price,
+                    s.quantity,
+                    b.price * s.quantity as buy_amount,
+                    s.price * s.quantity as sell_amount,
+                    s.profit_loss,
+                    s.profit_rate
+                FROM trade_log s
+                LEFT JOIN trade_log b ON s.stock_code = b.stock_code
+                    AND b.side = 'buy' AND b.status = 'executed'
+                WHERE s.side = 'sell' AND s.status = 'executed'
+                ORDER BY s.trade_date DESC, s.created_at DESC
+                LIMIT 100
+            """)
+            rows = cursor.fetchall()
+            trades = [dict(row) for row in rows]
+        return jsonify({"success": True, "trades": trades})
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e), "trades": []})
+
+
+@app.route("/api/suggestions")
+def api_suggestions():
+    """매수 대기열 조회"""
+    try:
+        suggestion_manager = BuySuggestionManager()
+        suggestions = suggestion_manager.get_pending_suggestions()
+        return jsonify({"success": True, "suggestions": suggestions})
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)})
+
+
+@app.route("/api/suggestions/<int:suggestion_id>/approve", methods=["POST"])
+def api_approve_suggestion(suggestion_id):
+    """매수 제안 승인"""
+    try:
+        suggestion_manager = BuySuggestionManager()
+        suggestion = suggestion_manager.get_suggestion(suggestion_id)
+
+        if not suggestion:
+            return jsonify({"success": False, "message": "제안을 찾을 수 없습니다"})
+
+        if suggestion_manager.approve_suggestion(suggestion_id):
+            return jsonify({
+                "success": True,
+                "message": f"{suggestion.get('stock_name', '')} 매수 제안 승인됨"
+            })
+        else:
+            return jsonify({"success": False, "message": "승인 처리 실패"})
+    except Exception as e:
+        return jsonify({"success": False, "message": f"오류: {e}"})
+
+
+@app.route("/api/suggestions/<int:suggestion_id>/reject", methods=["POST"])
+def api_reject_suggestion(suggestion_id):
+    """매수 제안 거부"""
+    try:
+        suggestion_manager = BuySuggestionManager()
+        suggestion = suggestion_manager.get_suggestion(suggestion_id)
+
+        if not suggestion:
+            return jsonify({"success": False, "message": "제안을 찾을 수 없습니다"})
+
+        if suggestion_manager.reject_suggestion(suggestion_id):
+            return jsonify({
+                "success": True,
+                "message": f"{suggestion.get('stock_name', '')} 매수 제안 거부됨"
+            })
+        else:
+            return jsonify({"success": False, "message": "거부 처리 실패"})
+    except Exception as e:
+        return jsonify({"success": False, "message": f"오류: {e}"})
+
+
+@app.route("/api/suggestions/stats")
+def api_suggestion_stats():
+    """매수 제안 통계"""
+    try:
+        suggestion_manager = BuySuggestionManager()
+        stats = suggestion_manager.get_statistics()
+        return jsonify({"success": True, "stats": stats})
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)})
+
+
+@app.route("/api/virtual-balance/reset", methods=["POST"])
+def api_reset_virtual_balance():
+    """가상 잔고 리셋"""
+    try:
+        data = request.json or {}
+        password = data.get("password", "")
+
+        # 비밀번호 확인
+        if password != "8864":
+            return jsonify({"success": False, "message": "비밀번호가 올바르지 않습니다"})
+
+        from config import AutoTraderConfig
+        initial_cash = getattr(AutoTraderConfig, 'VIRTUAL_INITIAL_CASH', 100_000_000)
+
+        logger = TradeLogger()
+        logger.reset_virtual_balance(initial_cash)
+
+        return jsonify({"success": True, "message": f"가상 잔고가 {initial_cash:,}원으로 리셋되었습니다"})
+    except Exception as e:
+        return jsonify({"success": False, "message": f"오류: {e}"})
 
 
 def main():

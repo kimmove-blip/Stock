@@ -19,21 +19,27 @@ from config import OUTPUT_DIR
 from trading.trade_logger import TradeLogger, BuySuggestionManager
 
 
-def get_user_holdings(user_id: int) -> set:
-    """사용자 보유종목 코드 조회"""
+def get_account_data(user_id: int) -> Dict:
+    """사용자 계좌 데이터 조회 (한 번만 호출용)"""
     logger = TradeLogger()
     api_key_data = logger.get_api_key_settings(user_id)
 
     if not api_key_data:
-        return set()
+        return {'holdings': [], 'summary': {}}
 
-    account_data = logger.get_real_account_balance(
+    return logger.get_real_account_balance(
         app_key=api_key_data.get('app_key'),
         app_secret=api_key_data.get('app_secret'),
         account_number=api_key_data.get('account_number'),
         account_product_code=api_key_data.get('account_product_code', '01'),
         is_mock=bool(api_key_data.get('is_mock', True))
     )
+
+
+def get_user_holdings(user_id: int, account_data: Dict = None) -> set:
+    """사용자 보유종목 코드 조회"""
+    if account_data is None:
+        account_data = get_account_data(user_id)
 
     holdings = [h for h in account_data.get('holdings', []) if h.get('quantity', 0) > 0]
     return set(h.get('stock_code') for h in holdings)
@@ -119,7 +125,8 @@ def generate_buy_suggestions(
     exclude_today_traded: bool = True,
     limit_up_threshold: float = 29.0,
     save_to_db: bool = True,
-    verbose: bool = True
+    verbose: bool = True,
+    account_data: Dict = None
 ) -> List[Dict]:
     """
     매수 제안 생성
@@ -134,6 +141,7 @@ def generate_buy_suggestions(
         limit_up_threshold: 상한가 판단 기준 (기본 29%)
         save_to_db: DB에 저장 여부 (기본 True)
         verbose: 상세 출력 (기본 True)
+        account_data: 미리 조회한 계좌 데이터 (중복 API 호출 방지)
 
     Returns:
         생성된 제안 목록
@@ -142,7 +150,7 @@ def generate_buy_suggestions(
         print(f"=== 매수 제안 생성 (user_id={user_id}) ===\n")
 
     # 필터링용 데이터 로드
-    holdings = get_user_holdings(user_id) if exclude_holdings else set()
+    holdings = get_user_holdings(user_id, account_data) if exclude_holdings else set()
     sold_today = get_today_sold_stocks(user_id) if exclude_today_traded else set()
     today_scores = load_screening_scores()
     prev_scores = load_prev_scores() if require_continuity else {}
@@ -269,21 +277,10 @@ def generate_buy_suggestions(
     return suggestions
 
 
-def get_holdings_with_details(user_id: int) -> List[Dict]:
+def get_holdings_with_details(user_id: int, account_data: Dict = None) -> List[Dict]:
     """사용자 보유종목 상세 정보 조회"""
-    logger = TradeLogger()
-    api_key_data = logger.get_api_key_settings(user_id)
-
-    if not api_key_data:
-        return []
-
-    account_data = logger.get_real_account_balance(
-        app_key=api_key_data.get('app_key'),
-        app_secret=api_key_data.get('app_secret'),
-        account_number=api_key_data.get('account_number'),
-        account_product_code=api_key_data.get('account_product_code', '01'),
-        is_mock=bool(api_key_data.get('is_mock', True))
-    )
+    if account_data is None:
+        account_data = get_account_data(user_id)
 
     return [h for h in account_data.get('holdings', []) if h.get('quantity', 0) > 0]
 
@@ -316,7 +313,8 @@ def generate_sell_suggestions(
     min_sell_score: int = 40,
     check_ma20: bool = True,
     save_to_db: bool = True,
-    verbose: bool = True
+    verbose: bool = True,
+    account_data: Dict = None
 ) -> List[Dict]:
     """
     매도 제안 생성
@@ -328,6 +326,7 @@ def generate_sell_suggestions(
         check_ma20: 20일 이평선 하회 체크 (기본 True)
         save_to_db: DB에 저장 여부 (기본 True)
         verbose: 상세 출력 (기본 True)
+        account_data: 미리 조회한 계좌 데이터 (중복 API 호출 방지)
 
     Returns:
         생성된 매도 제안 목록
@@ -336,7 +335,7 @@ def generate_sell_suggestions(
         print(f"=== 매도 제안 생성 (user_id={user_id}) ===\n")
 
     # 보유종목 조회
-    holdings = get_holdings_with_details(user_id)
+    holdings = get_holdings_with_details(user_id, account_data)
     today_scores = load_screening_scores()
 
     if verbose:
@@ -474,11 +473,15 @@ def generate_all_suggestions(
     Returns:
         {'buy': [...], 'sell': [...]}
     """
+    # 계좌 데이터 한 번만 조회 (중복 API 호출 방지)
+    account_data = get_account_data(user_id)
+
     buy_suggestions = generate_buy_suggestions(
         user_id=user_id,
         min_score=min_buy_score,
         save_to_db=save_to_db,
-        verbose=verbose
+        verbose=verbose,
+        account_data=account_data
     )
 
     if verbose:
@@ -489,7 +492,8 @@ def generate_all_suggestions(
         stop_loss_rate=stop_loss_rate,
         min_sell_score=min_sell_score,
         save_to_db=save_to_db,
-        verbose=verbose
+        verbose=verbose,
+        account_data=account_data
     )
 
     return {

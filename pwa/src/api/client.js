@@ -248,6 +248,14 @@ export const autoTradeAPI = {
   modifyOrder: (orderId, data) => api.put(`/auto-trade/pending-orders/${orderId}`, data),
   // 포트폴리오 동기화 (증권 계좌 → 홈 보유종목)
   syncPortfolio: () => api.post('/auto-trade/sync-portfolio'),
+  // LLM 설정 조회 (Green Light 모드)
+  getLLMSettings: () => api.get('/auto-trade/llm-settings'),
+  // LLM 설정 저장
+  saveLLMSettings: (data) => api.post('/auto-trade/llm-settings', data),
+  // LLM 설정 삭제
+  deleteLLMSettings: () => api.delete('/auto-trade/llm-settings'),
+  // Green Light 결정 이력 조회
+  getGreenlightDecisions: (limit = 20) => api.get(`/auto-trade/greenlight-decisions?limit=${limit}`),
 };
 
 export default api;

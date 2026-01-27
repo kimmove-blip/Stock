@@ -72,6 +72,7 @@ export default function AutoTradeHistory() {
   if (isLoading) return <Loading text="거래 내역 불러오는 중..." />;
 
   const dayOptions = [
+    { value: 1, label: '당일' },
     { value: 7, label: '7일' },
     { value: 30, label: '30일' },
     { value: 90, label: '90일' },

@@ -439,7 +439,27 @@ async def get_portfolio_diagnosis(
             }
         }
 
-    # 기술적 분석 병렬 실행
+    # JSON에서 점수 가져오기 (TOP100/실시간 추천과 동일한 점수 사용)
+    scores_map = {}
+    try:
+        from config import OUTPUT_DIR
+        from datetime import datetime, timedelta
+        import json
+        today = datetime.now()
+        for days_back in range(7):
+            check_date = today - timedelta(days=days_back)
+            json_path = OUTPUT_DIR / f"top100_{check_date.strftime('%Y%m%d')}.json"
+            if json_path.exists():
+                with open(json_path, 'r', encoding='utf-8') as f:
+                    data = json.load(f)
+                    all_scores = data.get('screening_stats', {}).get('all_scores', {})
+                    if all_scores:
+                        scores_map = all_scores
+                break
+    except Exception as e:
+        print(f"진단 점수 조회 실패: {e}")
+
+    # 현재가만 실시간 조회 (점수는 JSON에서)
     analysis_map = {}
     stock_codes = [item['stock_code'] for item in items]
 
@@ -468,9 +488,12 @@ async def get_portfolio_diagnosis(
         # 수익률 계산
         profit_rate = ((current_price - avg_price) / avg_price * 100) if avg_price > 0 else 0
 
-        # AI 기술분석 점수 사용
-        health_score = int(analysis.get('score', 50))
-        ai_opinion = analysis.get('opinion', '관망')
+        # JSON에서 가져온 스크리닝 점수 사용 (TOP100과 동일)
+        health_score = scores_map.get(code, 50)
+        if health_score is None:
+            health_score = 50
+        health_score = int(health_score)
+        ai_opinion = '매수' if health_score >= 70 else '관망' if health_score >= 50 else '주의'
 
         # 시그널 결정: AI 점수 + 수익률 고려
         signal = 'hold'

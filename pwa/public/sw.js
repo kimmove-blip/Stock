@@ -1,4 +1,4 @@
-const CACHE_NAME = 'ai-stock-v5';
+const CACHE_NAME = 'ai-stock-v12';
 const STATIC_ASSETS = [
   '/manifest.json',
 ];
@@ -42,15 +42,19 @@ self.addEventListener('fetch', (event) => {
     return;
   }
 
-  // API 요청은 네트워크 우선
+  // API 요청은 네트워크만 사용 (캐시 안함 - 실시간 데이터)
   if (event.request.url.includes('/api/')) {
+    event.respondWith(fetch(event.request));
+    return;
+  }
+
+  // JS/CSS 파일은 네트워크 우선 (새 배포 즉시 반영)
+  if (url.pathname.endsWith('.js') || url.pathname.endsWith('.css')) {
     event.respondWith(
       fetch(event.request)
         .then((response) => {
           const responseClone = response.clone();
-          caches.open(CACHE_NAME).then((cache) => {
-            cache.put(event.request, responseClone);
-          });
+          caches.open(CACHE_NAME).then((cache) => cache.put(event.request, responseClone));
           return response;
         })
         .catch(() => caches.match(event.request))

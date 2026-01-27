@@ -10,14 +10,14 @@ import {
   Bot,
   HandMetal,
   DollarSign,
-  TrendingDown,
   Target,
-  Clock,
   ToggleLeft,
   ToggleRight,
-  Layers,
-  Calendar,
-  Activity,
+  Sparkles,
+  Key,
+  AlertTriangle,
+  Check,
+  X,
 } from 'lucide-react';
 
 // 숫자를 콤마 포맷으로 변환
@@ -36,20 +36,22 @@ export default function AutoTradeSettings() {
   const { user } = useAuth();
   const queryClient = useQueryClient();
   const [formData, setFormData] = useState({
-    trade_mode: 'manual', // auto: 완전자동, semi: 반자동(승인필요), manual: 수동
-    max_investment: 1000000, // 최대 투자금액
-    stock_ratio: 5, // 종목당 투자비율 (1~20%)
+    trade_mode: 'manual', // auto: 완전자동, semi: 반자동(승인필요), manual: 수동, greenlight: AI자율
+    max_per_stock: 200000, // 종목당 최대 금액
     stop_loss_rate: -7, // 손절률 (-20 ~ 0%)
     min_buy_score: 70, // 최소 매수 점수 (50~100)
     sell_score: 40, // 매도 점수 (이 점수 이하면 매도)
-    max_holdings: 10, // 최대 보유 종목 (1~20)
-    max_daily_trades: 10, // 일일 최대 거래 (1~50)
-    max_holding_days: 14, // 최대 보유 기간 (1~30일)
     trading_enabled: true, // 자동매매 활성화
-    trading_start_time: '09:00', // 매매 시작 시간
-    trading_end_time: '15:20', // 매매 종료 시간
     initial_investment: 0, // 초기 투자금
   });
+
+  // LLM 설정 (Green Light 모드용)
+  const [llmForm, setLLMForm] = useState({
+    llm_provider: 'claude',
+    llm_api_key: '',
+    llm_model: '',
+  });
+  const [showLLMKey, setShowLLMKey] = useState(false);
 
   // 설정 조회 (훅은 항상 최상위에서 호출)
   const { data, isLoading } = useQuery({
@@ -58,12 +60,37 @@ export default function AutoTradeSettings() {
     enabled: !!user?.auto_trade_enabled, // 권한 있을 때만 조회
   });
 
+  // LLM 설정 조회
+  const { data: llmSettings } = useQuery({
+    queryKey: ['llmSettings'],
+    queryFn: () => autoTradeAPI.getLLMSettings().then((res) => res.data),
+    enabled: !!user?.auto_trade_enabled,
+  });
+
+  // API 키 조회 (모의투자 여부 확인용)
+  const { data: apiKeyData } = useQuery({
+    queryKey: ['autoTradeApiKey'],
+    queryFn: () => autoTradeAPI.getApiKey().then((res) => res.data),
+    enabled: !!user?.auto_trade_enabled,
+  });
+
   // 설정 데이터가 로드되면 폼에 반영
   useEffect(() => {
     if (data) {
       setFormData((prev) => ({ ...prev, ...data }));
     }
   }, [data]);
+
+  // LLM 설정 데이터가 로드되면 폼에 반영
+  useEffect(() => {
+    if (llmSettings && llmSettings.is_configured) {
+      setLLMForm((prev) => ({
+        ...prev,
+        llm_provider: llmSettings.llm_provider || 'claude',
+        llm_model: llmSettings.llm_model || '',
+      }));
+    }
+  }, [llmSettings]);
 
   // 설정 저장
   const saveMutation = useMutation({
@@ -77,9 +104,41 @@ export default function AutoTradeSettings() {
     },
   });
 
+  // LLM 설정 저장
+  const saveLLMMutation = useMutation({
+    mutationFn: (data) => autoTradeAPI.saveLLMSettings(data),
+    onSuccess: () => {
+      queryClient.invalidateQueries(['llmSettings']);
+      setLLMForm((prev) => ({ ...prev, llm_api_key: '' }));
+      alert('LLM 설정이 저장되었습니다.');
+    },
+    onError: (error) => {
+      alert(error.response?.data?.detail || 'LLM 설정 저장에 실패했습니다.');
+    },
+  });
+
+  // LLM 설정 삭제
+  const deleteLLMMutation = useMutation({
+    mutationFn: () => autoTradeAPI.deleteLLMSettings(),
+    onSuccess: () => {
+      queryClient.invalidateQueries(['llmSettings']);
+      setLLMForm({ llm_provider: 'claude', llm_api_key: '', llm_model: '' });
+      alert('LLM 설정이 삭제되었습니다.');
+    },
+  });
+
   const handleSubmit = (e) => {
     e.preventDefault();
     saveMutation.mutate(formData);
+  };
+
+  const handleLLMSubmit = (e) => {
+    e.preventDefault();
+    if (!llmForm.llm_api_key) {
+      alert('API 키를 입력해주세요.');
+      return;
+    }
+    saveLLMMutation.mutate(llmForm);
   };
 
   // 자동매매 권한 체크 (훅 호출 이후에 조건부 반환)
@@ -97,11 +156,11 @@ export default function AutoTradeSettings() {
 
   const tradeModes = [
     {
-      value: 'auto',
-      label: '자동매매 (Auto)',
-      icon: Bot,
-      description: '즉시 매수 실행',
-      color: 'bg-green-500',
+      value: 'manual',
+      label: '수동 (Manual)',
+      icon: Settings,
+      description: '알림만 받고 직접 매매',
+      color: 'bg-gray-500',
     },
     {
       value: 'semi',
@@ -111,13 +170,30 @@ export default function AutoTradeSettings() {
       color: 'bg-yellow-500',
     },
     {
-      value: 'manual',
-      label: '수동',
-      icon: Settings,
-      description: '알림만 받고 직접 매매',
-      color: 'bg-gray-500',
+      value: 'auto',
+      label: '자동 (Auto)',
+      icon: Bot,
+      description: '즉시 매수 실행',
+      color: 'bg-green-500',
+    },
+    {
+      value: 'greenlight',
+      label: '자율 (Green Light)',
+      icon: Sparkles,
+      description: 'AI가 모든 결정 (모의투자 전용)',
+      color: 'bg-emerald-500',
+      badge: 'BETA',
     },
   ];
+
+  const llmProviders = [
+    { value: 'claude', label: 'Claude (Anthropic)', description: '추천' },
+    { value: 'openai', label: 'OpenAI (GPT)', description: '' },
+    { value: 'gemini', label: 'Gemini (Google)', description: '' },
+  ];
+
+  // 모의투자 여부 확인
+  const isMockAccount = apiKeyData?.is_mock !== false;
 
   if (isLoading) return <Loading text="설정 불러오는 중..." />;
 
@@ -164,331 +240,346 @@ export default function AutoTradeSettings() {
             매매 모드
           </h3>
           <div className="space-y-2">
-            {tradeModes.map((mode) => (
-              <label
-                key={mode.value}
-                className={`flex items-center gap-3 p-3 rounded-lg cursor-pointer border-2 transition-all ${
-                  formData.trade_mode === mode.value
-                    ? 'border-purple-500 bg-purple-50'
-                    : 'border-gray-200 hover:border-gray-300'
-                }`}
-              >
-                <input
-                  type="radio"
-                  name="trade_mode"
-                  value={mode.value}
-                  checked={formData.trade_mode === mode.value}
-                  onChange={(e) => setFormData({ ...formData, trade_mode: e.target.value })}
-                  className="hidden"
-                />
-                <div className={`w-10 h-10 ${mode.color} rounded-full flex items-center justify-center`}>
-                  <mode.icon size={20} className="text-white" />
-                </div>
-                <div className="flex-1">
-                  <p className="font-medium text-gray-800">{mode.label}</p>
-                  <p className="text-xs text-gray-500">{mode.description}</p>
-                </div>
-                <div
-                  className={`w-5 h-5 rounded-full border-2 flex items-center justify-center ${
-                    formData.trade_mode === mode.value
-                      ? 'border-purple-500 bg-purple-500'
-                      : 'border-gray-300'
+            {tradeModes.map((mode) => {
+              // Green Light 모드는 모의투자에서만 선택 가능
+              const isDisabled = mode.value === 'greenlight' && !isMockAccount;
+
+              return (
+                <label
+                  key={mode.value}
+                  className={`flex items-center gap-3 p-3 rounded-lg border-2 transition-all ${
+                    isDisabled
+                      ? 'cursor-not-allowed border-gray-200 bg-gray-50'
+                      : 'cursor-pointer'
+                  } ${
+                    formData.trade_mode === mode.value && !isDisabled
+                      ? 'border-purple-500 bg-purple-50'
+                      : !isDisabled ? 'border-gray-200 hover:border-gray-300' : ''
                   }`}
                 >
-                  {formData.trade_mode === mode.value && (
-                    <div className="w-2 h-2 bg-white rounded-full" />
-                  )}
-                </div>
-              </label>
-            ))}
+                  <input
+                    type="radio"
+                    name="trade_mode"
+                    value={mode.value}
+                    checked={formData.trade_mode === mode.value}
+                    onChange={(e) => !isDisabled && setFormData({ ...formData, trade_mode: e.target.value })}
+                    disabled={isDisabled}
+                    className="hidden"
+                  />
+                  <div className={`w-10 h-10 ${mode.color} ${isDisabled ? 'opacity-50' : ''} rounded-full flex items-center justify-center`}>
+                    <mode.icon size={20} className="text-white" />
+                  </div>
+                  <div className="flex-1">
+                    <div className="flex items-center gap-2">
+                      <p className={`font-medium ${isDisabled ? 'text-gray-400' : 'text-gray-800'}`}>{mode.label}</p>
+                      {mode.badge && (
+                        <span className={`px-1.5 py-0.5 text-[10px] rounded font-medium ${isDisabled ? 'bg-gray-100 text-gray-400' : 'bg-emerald-100 text-emerald-700'}`}>
+                          {mode.badge}
+                        </span>
+                      )}
+                    </div>
+                    <p className={`text-xs ${isDisabled ? 'text-gray-400' : 'text-gray-500'}`}>{mode.description}</p>
+                    {isDisabled && (
+                      <p className="text-xs text-orange-500 mt-1">모의투자 계좌에서만 사용 가능</p>
+                    )}
+                  </div>
+                  <div
+                    className={`w-5 h-5 rounded-full border-2 flex items-center justify-center ${
+                      formData.trade_mode === mode.value && !isDisabled
+                        ? 'border-purple-500 bg-purple-500'
+                        : 'border-gray-300'
+                    }`}
+                  >
+                    {formData.trade_mode === mode.value && !isDisabled && (
+                      <div className="w-2 h-2 bg-white rounded-full" />
+                    )}
+                  </div>
+                </label>
+              );
+            })}
           </div>
         </div>
 
-        {/* 투자 설정 */}
-        <div className="bg-white rounded-xl p-4 shadow-sm">
-          <h3 className="font-bold text-gray-800 mb-3 flex items-center gap-2">
-            <DollarSign size={18} className="text-green-600" />
-            투자 설정
-          </h3>
-          <div className="space-y-4">
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">
-                초기 투자금
-              </label>
-              <div className="relative">
-                <input
-                  type="text"
-                  inputMode="numeric"
-                  value={formatNumber(formData.initial_investment)}
-                  onChange={(e) => {
-                    const value = parseNumber(e.target.value);
-                    setFormData({ ...formData, initial_investment: value });
-                  }}
-                  placeholder="0"
-                  className="w-full px-3 py-2 pr-10 border border-gray-300 rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-transparent text-right"
-                />
-                <span className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-500">원</span>
-              </div>
-              <p className="text-xs text-gray-500 mt-1">
-                성과분석에서 총수익률 계산에 사용됩니다
-              </p>
-            </div>
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">
-                최대 투자금액
-              </label>
-              <div className="relative">
-                <input
-                  type="text"
-                  inputMode="numeric"
-                  value={formatNumber(formData.max_investment)}
-                  onChange={(e) => {
-                    const value = parseNumber(e.target.value);
-                    setFormData({ ...formData, max_investment: value });
-                  }}
-                  placeholder="0"
-                  className="w-full px-3 py-2 pr-10 border border-gray-300 rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-transparent text-right"
-                />
-                <span className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-500">원</span>
-              </div>
-              <p className="text-xs text-gray-500 mt-1">
-                현재: {formatNumber(formData.max_investment)}원
-              </p>
-            </div>
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-2">
-                종목당 투자비율
-              </label>
-              <div className="bg-gray-100 rounded-xl p-3">
-                <div className="flex items-center justify-between mb-2">
-                  <span className="text-xs text-gray-500">1%</span>
-                  <span className="text-lg font-bold text-purple-600">{formData.stock_ratio}%</span>
-                  <span className="text-xs text-gray-500">20%</span>
+        {/* Green Light 모드 - LLM 설정 */}
+        {formData.trade_mode === 'greenlight' && (
+          <div className="bg-gradient-to-br from-emerald-50 to-teal-50 rounded-xl p-4 shadow-sm border border-emerald-200">
+            <h3 className="font-bold text-gray-800 mb-3 flex items-center gap-2">
+              <Sparkles size={18} className="text-emerald-600" />
+              AI 엔진 설정
+              {llmSettings?.is_configured && (
+                <span className="ml-auto flex items-center gap-1 text-xs text-emerald-600">
+                  <Check size={14} />
+                  연결됨
+                </span>
+              )}
+            </h3>
+
+            {/* 경고 배너 */}
+            <div className="bg-amber-50 border border-amber-200 rounded-lg p-3 mb-4">
+              <div className="flex items-start gap-2">
+                <AlertTriangle size={16} className="text-amber-600 mt-0.5 flex-shrink-0" />
+                <div className="text-xs text-amber-700">
+                  <p className="font-medium mb-1">Green Light 모드 안내</p>
+                  <ul className="space-y-0.5 text-amber-600">
+                    <li>- AI가 모든 매매 결정을 자율적으로 수행합니다</li>
+                    <li>- 손절/익절 규칙 없이 AI가 직접 판단합니다</li>
+                    <li>- 한 종목 집중투자(몰빵)가 가능합니다</li>
+                    <li>- 모의투자 계좌에서만 사용 가능합니다</li>
+                  </ul>
                 </div>
-                <input
-                  type="range"
-                  value={formData.stock_ratio}
-                  onChange={(e) =>
-                    setFormData({ ...formData, stock_ratio: parseInt(e.target.value) })
-                  }
-                  min={1}
-                  max={20}
-                  className="w-full h-3 bg-gray-300 rounded-full appearance-none cursor-pointer
-                    [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:w-6 [&::-webkit-slider-thumb]:h-6
-                    [&::-webkit-slider-thumb]:bg-purple-600 [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:shadow-lg
-                    [&::-webkit-slider-thumb]:border-4 [&::-webkit-slider-thumb]:border-white"
-                />
               </div>
-              <p className="text-xs text-gray-500 mt-1">예: 5% = 투자금의 5%씩 매수</p>
+            </div>
+
+            {/* LLM Provider 선택 */}
+            <div className="space-y-3">
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-2">
+                  AI 엔진 선택
+                </label>
+                <div className="grid grid-cols-3 gap-2">
+                  {llmProviders.map((provider) => (
+                    <button
+                      key={provider.value}
+                      type="button"
+                      onClick={() => setLLMForm({ ...llmForm, llm_provider: provider.value })}
+                      className={`p-2 rounded-lg border-2 transition-all text-center ${
+                        llmForm.llm_provider === provider.value
+                          ? 'border-emerald-500 bg-emerald-50'
+                          : 'border-gray-200 hover:border-gray-300'
+                      }`}
+                    >
+                      <p className="text-xs font-medium text-gray-800">{provider.label}</p>
+                      {provider.description && (
+                        <p className="text-[10px] text-emerald-600">{provider.description}</p>
+                      )}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {/* API Key 입력 */}
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">
+                  API Key
+                </label>
+                <div className="relative">
+                  <input
+                    type={showLLMKey ? 'text' : 'password'}
+                    value={llmForm.llm_api_key}
+                    onChange={(e) => setLLMForm({ ...llmForm, llm_api_key: e.target.value })}
+                    placeholder={llmSettings?.is_configured ? '(저장됨) 변경하려면 새 키 입력' : 'API 키를 입력하세요'}
+                    className="w-full px-3 py-2 pr-20 border border-gray-300 rounded-lg focus:ring-2 focus:ring-emerald-500 focus:border-transparent text-sm"
+                  />
+                  <div className="absolute right-2 top-1/2 -translate-y-1/2 flex items-center gap-1">
+                    <button
+                      type="button"
+                      onClick={() => setShowLLMKey(!showLLMKey)}
+                      className="p-1 text-gray-400 hover:text-gray-600"
+                    >
+                      <Key size={16} />
+                    </button>
+                  </div>
+                </div>
+                <p className="text-xs text-gray-500 mt-1">
+                  {llmForm.llm_provider === 'claude' && 'Anthropic Console에서 API 키를 발급받으세요'}
+                  {llmForm.llm_provider === 'openai' && 'OpenAI Platform에서 API 키를 발급받으세요'}
+                  {llmForm.llm_provider === 'gemini' && 'Google AI Studio에서 API 키를 발급받으세요'}
+                </p>
+              </div>
+
+              {/* 모델 선택 (선택사항) */}
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">
+                  모델 (선택사항)
+                </label>
+                <input
+                  type="text"
+                  value={llmForm.llm_model}
+                  onChange={(e) => setLLMForm({ ...llmForm, llm_model: e.target.value })}
+                  placeholder="기본 모델 사용"
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-emerald-500 focus:border-transparent text-sm"
+                />
+                <p className="text-xs text-gray-500 mt-1">
+                  비워두면 기본 모델 사용 (Claude: claude-sonnet-4-20250514, GPT: gpt-4o)
+                </p>
+              </div>
+
+              {/* LLM 저장/삭제 버튼 */}
+              <div className="flex gap-2 pt-2">
+                <button
+                  type="button"
+                  onClick={handleLLMSubmit}
+                  disabled={saveLLMMutation.isLoading}
+                  className="flex-1 flex items-center justify-center gap-2 bg-emerald-600 text-white py-2 rounded-lg font-medium hover:bg-emerald-700 disabled:opacity-50 transition-colors text-sm"
+                >
+                  <Key size={16} />
+                  {saveLLMMutation.isLoading ? '저장 중...' : 'LLM 설정 저장'}
+                </button>
+                {llmSettings?.is_configured && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (confirm('LLM 설정을 삭제하시겠습니까?')) {
+                        deleteLLMMutation.mutate();
+                      }
+                    }}
+                    disabled={deleteLLMMutation.isLoading}
+                    className="px-4 py-2 border border-red-300 text-red-600 rounded-lg hover:bg-red-50 transition-colors text-sm"
+                  >
+                    <X size={16} />
+                  </button>
+                )}
+              </div>
             </div>
           </div>
-        </div>
+        )}
 
-        {/* 매매 기준 설정 */}
-        <div className="bg-white rounded-xl p-4 shadow-sm">
-          <h3 className="font-bold text-gray-800 mb-3 flex items-center gap-2">
-            <Target size={18} className="text-blue-600" />
-            매매 기준
-          </h3>
-          <div className="space-y-4">
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-2">
-                손절률
-              </label>
-              <div className="bg-blue-50 rounded-xl p-3">
-                <div className="flex items-center justify-between mb-2">
-                  <span className="text-xs text-gray-500">-20%</span>
-                  <span className="text-lg font-bold text-blue-600">{formData.stop_loss_rate}%</span>
-                  <span className="text-xs text-gray-500">0%</span>
+        {/* 투자 설정 (Green Light 모드가 아닐 때만 표시) */}
+        {formData.trade_mode !== 'greenlight' && (
+          <div className="bg-white rounded-xl p-4 shadow-sm">
+            <h3 className="font-bold text-gray-800 mb-3 flex items-center gap-2">
+              <DollarSign size={18} className="text-green-600" />
+              투자 설정
+            </h3>
+            <div className="space-y-4">
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">
+                  초기 투자금
+                </label>
+                <div className="relative">
+                  <input
+                    type="text"
+                    inputMode="numeric"
+                    value={formatNumber(formData.initial_investment)}
+                    onChange={(e) => {
+                      const value = parseNumber(e.target.value);
+                      setFormData({ ...formData, initial_investment: value });
+                    }}
+                    placeholder="0"
+                    className="w-full px-3 py-2 pr-10 border border-gray-300 rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-transparent text-right"
+                  />
+                  <span className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-500">원</span>
                 </div>
-                <input
-                  type="range"
-                  value={formData.stop_loss_rate}
-                  onChange={(e) =>
-                    setFormData({ ...formData, stop_loss_rate: parseInt(e.target.value) })
-                  }
-                  min={-20}
-                  max={0}
-                  className="w-full h-3 bg-blue-200 rounded-full appearance-none cursor-pointer
-                    [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:w-6 [&::-webkit-slider-thumb]:h-6
-                    [&::-webkit-slider-thumb]:bg-blue-600 [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:shadow-lg
-                    [&::-webkit-slider-thumb]:border-4 [&::-webkit-slider-thumb]:border-white"
-                />
+                <p className="text-xs text-gray-500 mt-1">
+                  성과분석에서 총수익률 계산에 사용됩니다
+                </p>
               </div>
-              <p className="text-xs text-gray-500 mt-1">예: -7% = 7% 손실시 자동 매도</p>
-            </div>
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-2">
-                최소 매수 점수
-              </label>
-              <div className="bg-green-50 rounded-xl p-3">
-                <div className="flex items-center justify-between mb-2">
-                  <span className="text-xs text-gray-500">50</span>
-                  <span className="text-lg font-bold text-green-600">{formData.min_buy_score}점</span>
-                  <span className="text-xs text-gray-500">100</span>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">
+                  종목당 최대 금액
+                </label>
+                <div className="relative">
+                  <input
+                    type="text"
+                    inputMode="numeric"
+                    value={formatNumber(formData.max_per_stock)}
+                    onChange={(e) => {
+                      const value = parseNumber(e.target.value);
+                      setFormData({ ...formData, max_per_stock: value });
+                    }}
+                    placeholder="200,000"
+                    className="w-full px-3 py-2 pr-10 border border-gray-300 rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-transparent text-right"
+                  />
+                  <span className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-500">원</span>
                 </div>
-                <input
-                  type="range"
-                  value={formData.min_buy_score}
-                  onChange={(e) =>
-                    setFormData({ ...formData, min_buy_score: parseInt(e.target.value) })
-                  }
-                  min={50}
-                  max={100}
-                  className="w-full h-3 bg-green-200 rounded-full appearance-none cursor-pointer
-                    [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:w-6 [&::-webkit-slider-thumb]:h-6
-                    [&::-webkit-slider-thumb]:bg-green-600 [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:shadow-lg
-                    [&::-webkit-slider-thumb]:border-4 [&::-webkit-slider-thumb]:border-white"
-                />
+                <p className="text-xs text-gray-500 mt-1">
+                  한 종목에 최대 {formatNumber(formData.max_per_stock)}원까지 매수
+                </p>
               </div>
-              <p className="text-xs text-gray-500 mt-1">높을수록 매수 기준이 엄격해집니다</p>
-            </div>
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-2">
-                매도 점수
-              </label>
-              <div className="bg-red-50 rounded-xl p-3">
-                <div className="flex items-center justify-between mb-2">
-                  <span className="text-xs text-gray-500">0</span>
-                  <span className="text-lg font-bold text-red-600">{formData.sell_score}점</span>
-                  <span className="text-xs text-gray-500">50</span>
-                </div>
-                <input
-                  type="range"
-                  value={formData.sell_score}
-                  onChange={(e) =>
-                    setFormData({ ...formData, sell_score: parseInt(e.target.value) })
-                  }
-                  min={0}
-                  max={50}
-                  className="w-full h-3 bg-red-200 rounded-full appearance-none cursor-pointer
-                    [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:w-6 [&::-webkit-slider-thumb]:h-6
-                    [&::-webkit-slider-thumb]:bg-red-600 [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:shadow-lg
-                    [&::-webkit-slider-thumb]:border-4 [&::-webkit-slider-thumb]:border-white"
-                />
-              </div>
-              <p className="text-xs text-gray-500 mt-1">이 점수 이하로 떨어지면 매도 제안</p>
             </div>
           </div>
-        </div>
+        )}
 
-        {/* 거래 제한 설정 */}
-        <div className="bg-white rounded-xl p-4 shadow-sm">
-          <h3 className="font-bold text-gray-800 mb-3 flex items-center gap-2">
-            <Layers size={18} className="text-orange-600" />
-            거래 제한
-          </h3>
-          <div className="grid grid-cols-2 gap-4">
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">
-                최대 보유 종목
-              </label>
-              <div className="relative">
-                <input
-                  type="text"
-                  inputMode="numeric"
-                  value={formData.max_holdings || ''}
-                  onChange={(e) => {
-                    const val = parseInt(e.target.value) || 0;
-                    setFormData({ ...formData, max_holdings: Math.min(Math.max(val, 0), 20) });
-                  }}
-                  onBlur={(e) => {
-                    if (!formData.max_holdings || formData.max_holdings < 1) {
-                      setFormData({ ...formData, max_holdings: 1 });
+        {/* 매매 기준 설정 (Green Light 모드가 아닐 때만 표시) */}
+        {formData.trade_mode !== 'greenlight' && (
+          <div className="bg-white rounded-xl p-4 shadow-sm">
+            <h3 className="font-bold text-gray-800 mb-3 flex items-center gap-2">
+              <Target size={18} className="text-blue-600" />
+              매매 기준
+            </h3>
+            <div className="space-y-4">
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-2">
+                  손절률
+                </label>
+                <div className="bg-blue-50 rounded-xl p-3">
+                  <div className="flex items-center justify-between mb-2">
+                    <span className="text-xs text-gray-500">-20%</span>
+                    <span className="text-lg font-bold text-blue-600">{formData.stop_loss_rate}%</span>
+                    <span className="text-xs text-gray-500">0%</span>
+                  </div>
+                  <input
+                    type="range"
+                    value={formData.stop_loss_rate}
+                    onChange={(e) =>
+                      setFormData({ ...formData, stop_loss_rate: parseInt(e.target.value) })
                     }
-                  }}
-                  placeholder="1"
-                  className="w-full px-3 py-2 pr-8 border border-gray-300 rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-transparent text-center"
-                />
-                <span className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-500">개</span>
-              </div>
-            </div>
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">
-                일일 최대 거래
-              </label>
-              <div className="relative">
-                <input
-                  type="text"
-                  inputMode="numeric"
-                  value={formData.max_daily_trades || ''}
-                  onChange={(e) => {
-                    const val = parseInt(e.target.value) || 0;
-                    setFormData({ ...formData, max_daily_trades: Math.min(Math.max(val, 0), 50) });
-                  }}
-                  onBlur={(e) => {
-                    if (!formData.max_daily_trades || formData.max_daily_trades < 1) {
-                      setFormData({ ...formData, max_daily_trades: 1 });
-                    }
-                  }}
-                  placeholder="1"
-                  className="w-full px-3 py-2 pr-8 border border-gray-300 rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-transparent text-center"
-                />
-                <span className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-500">회</span>
-              </div>
-            </div>
-          </div>
-          <div className="mt-4">
-            <label className="block text-sm font-medium text-gray-700 mb-2">
-              최대 보유 기간
-            </label>
-            <div className="bg-orange-50 rounded-xl p-3">
-              <div className="flex items-center justify-between mb-2">
-                <span className="text-xs text-gray-500">1일</span>
-                <div className="flex items-center gap-1">
-                  <Calendar size={16} className="text-orange-600" />
-                  <span className="text-lg font-bold text-orange-600">{formData.max_holding_days}일</span>
+                    min={-20}
+                    max={0}
+                    className="w-full h-3 bg-blue-200 rounded-full appearance-none cursor-pointer
+                      [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:w-6 [&::-webkit-slider-thumb]:h-6
+                      [&::-webkit-slider-thumb]:bg-blue-600 [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:shadow-lg
+                      [&::-webkit-slider-thumb]:border-4 [&::-webkit-slider-thumb]:border-white"
+                  />
                 </div>
-                <span className="text-xs text-gray-500">30일</span>
+                <p className="text-xs text-gray-500 mt-1">예: -7% = 7% 손실시 자동 매도</p>
               </div>
-              <input
-                type="range"
-                value={formData.max_holding_days}
-                onChange={(e) =>
-                  setFormData({ ...formData, max_holding_days: parseInt(e.target.value) })
-                }
-                min={1}
-                max={30}
-                className="w-full h-3 bg-orange-200 rounded-full appearance-none cursor-pointer
-                  [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:w-6 [&::-webkit-slider-thumb]:h-6
-                  [&::-webkit-slider-thumb]:bg-orange-600 [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:shadow-lg
-                  [&::-webkit-slider-thumb]:border-4 [&::-webkit-slider-thumb]:border-white"
-              />
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-2">
+                  최소 매수 점수
+                </label>
+                <div className="bg-green-50 rounded-xl p-3">
+                  <div className="flex items-center justify-between mb-2">
+                    <span className="text-xs text-gray-500">50</span>
+                    <span className="text-lg font-bold text-green-600">{formData.min_buy_score}점</span>
+                    <span className="text-xs text-gray-500">100</span>
+                  </div>
+                  <input
+                    type="range"
+                    value={formData.min_buy_score}
+                    onChange={(e) =>
+                      setFormData({ ...formData, min_buy_score: parseInt(e.target.value) })
+                    }
+                    min={50}
+                    max={100}
+                    className="w-full h-3 bg-green-200 rounded-full appearance-none cursor-pointer
+                      [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:w-6 [&::-webkit-slider-thumb]:h-6
+                      [&::-webkit-slider-thumb]:bg-green-600 [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:shadow-lg
+                      [&::-webkit-slider-thumb]:border-4 [&::-webkit-slider-thumb]:border-white"
+                  />
+                </div>
+                <p className="text-xs text-gray-500 mt-1">높을수록 매수 기준이 엄격해집니다</p>
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-2">
+                  매도 점수
+                </label>
+                <div className="bg-red-50 rounded-xl p-3">
+                  <div className="flex items-center justify-between mb-2">
+                    <span className="text-xs text-gray-500">0</span>
+                    <span className="text-lg font-bold text-red-600">{formData.sell_score}점</span>
+                    <span className="text-xs text-gray-500">50</span>
+                  </div>
+                  <input
+                    type="range"
+                    value={formData.sell_score}
+                    onChange={(e) =>
+                      setFormData({ ...formData, sell_score: parseInt(e.target.value) })
+                    }
+                    min={0}
+                    max={50}
+                    className="w-full h-3 bg-red-200 rounded-full appearance-none cursor-pointer
+                      [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:w-6 [&::-webkit-slider-thumb]:h-6
+                      [&::-webkit-slider-thumb]:bg-red-600 [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:shadow-lg
+                      [&::-webkit-slider-thumb]:border-4 [&::-webkit-slider-thumb]:border-white"
+                  />
+                </div>
+                <p className="text-xs text-gray-500 mt-1">이 점수 이하로 떨어지면 매도 제안</p>
+              </div>
             </div>
-            <p className="text-xs text-gray-500 mt-1">이 기간 초과 시 매도 제안</p>
           </div>
-        </div>
+        )}
 
-        {/* 매매 시간 설정 */}
-        <div className="bg-white rounded-xl p-4 shadow-sm">
-          <h3 className="font-bold text-gray-800 mb-3 flex items-center gap-2">
-            <Clock size={18} className="text-indigo-600" />
-            매매 시간
-          </h3>
-          <div className="grid grid-cols-2 gap-4">
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">시작 시간</label>
-              <input
-                type="time"
-                value={formData.trading_start_time}
-                onChange={(e) => setFormData({ ...formData, trading_start_time: e.target.value })}
-                className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-transparent"
-              />
-            </div>
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">종료 시간</label>
-              <input
-                type="time"
-                value={formData.trading_end_time}
-                onChange={(e) => setFormData({ ...formData, trading_end_time: e.target.value })}
-                className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-transparent"
-              />
-            </div>
-          </div>
-          <p className="text-xs text-gray-500 mt-2">
-            정규장: 09:00 ~ 15:30 / 장전 시간외: 08:30 ~ 09:00
-          </p>
-        </div>
 
         {/* 저장 버튼 */}
         <button
@@ -508,9 +599,20 @@ export default function AutoTradeSettings() {
           <div className="text-sm text-yellow-700">
             <p className="font-medium mb-1">주의사항</p>
             <ul className="space-y-1 text-yellow-600">
-              <li>• 자동 모드는 AI가 직접 매매를 실행합니다</li>
-              <li>• 손절률은 리스크 관리에 중요합니다</li>
-              <li>• 매수 점수가 높을수록 신호가 엄격해집니다</li>
+              {formData.trade_mode === 'greenlight' ? (
+                <>
+                  <li>- Green Light 모드는 AI가 자율적으로 매매합니다</li>
+                  <li>- 손절/익절 규칙이 없어 큰 손실이 발생할 수 있습니다</li>
+                  <li>- 모의투자에서 충분히 테스트 후 사용하세요</li>
+                  <li>- LLM API 호출 비용이 발생합니다</li>
+                </>
+              ) : (
+                <>
+                  <li>- 자동 모드는 AI가 직접 매매를 실행합니다</li>
+                  <li>- 손절률은 리스크 관리에 중요합니다</li>
+                  <li>- 매수 점수가 높을수록 신호가 엄격해집니다</li>
+                </>
+              )}
             </ul>
           </div>
         </div>

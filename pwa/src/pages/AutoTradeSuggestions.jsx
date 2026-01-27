@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback } from 'react';
+import { flushSync } from 'react-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useNavigate } from 'react-router-dom';
 import { autoTradeAPI } from '../api/client';
@@ -422,30 +423,33 @@ export default function AutoTradeSuggestions() {
     );
   }
 
-  // 매수 제안 목록 조회 - 항상 최신 데이터 (캐시 사용 안함)
+  // 새로고침 키 (변경 시 쿼리 캐시 완전 무효화)
+  const [refreshKey, setRefreshKey] = useState(() => Date.now());
+
+  // 매수 제안 목록 조회 - 캐시 완전 비활성화
   const {
     data: buySuggestions,
     isLoading: buyLoading,
     refetch: refetchBuy,
     isFetching: buyFetching,
   } = useQuery({
-    queryKey: ['autoTradeSuggestions', 'buy', filter],
+    queryKey: ['autoTradeSuggestions', 'buy', filter, refreshKey],
     queryFn: () => autoTradeAPI.suggestions(filter).then((res) => res.data),
     staleTime: 0,
-    refetchOnWindowFocus: true,
+    gcTime: 0,
   });
 
-  // 매도 제안 목록 조회 - 항상 최신 데이터 (캐시 사용 안함)
+  // 매도 제안 목록 조회 - 캐시 완전 비활성화
   const {
     data: sellSuggestions,
     isLoading: sellLoading,
     refetch: refetchSell,
     isFetching: sellFetching,
   } = useQuery({
-    queryKey: ['autoTradeSuggestions', 'sell', filter],
+    queryKey: ['autoTradeSuggestions', 'sell', filter, refreshKey],
     queryFn: () => autoTradeAPI.sellSuggestions(filter).then((res) => res.data),
     staleTime: 0,
-    refetchOnWindowFocus: true,
+    gcTime: 0,
   });
 
   // 수량 조정 확인 상태
@@ -609,10 +613,36 @@ export default function AutoTradeSuggestions() {
 
   const isLoading = activeTab === 'buy' ? buyLoading : sellLoading;
   const isFetching = activeTab === 'buy' ? buyFetching : sellFetching;
-  const suggestions = activeTab === 'buy' ? buySuggestions : sellSuggestions;
+  const rawSuggestions = activeTab === 'buy' ? buySuggestions : sellSuggestions;
   const refetch = activeTab === 'buy' ? refetchBuy : refetchSell;
 
-  if (isLoading) return <Loading text="매매 제안 불러오는 중..." />;
+  // 새로고침 중 상태 (refreshKey 변경 직후)
+  const [isRefreshing, setIsRefreshing] = useState(false);
+
+  // 새로고침: 캐시 완전 삭제 후 새로 fetch (flushSync로 즉시 UI 업데이트)
+  const handleManualRefresh = useCallback(() => {
+    // flushSync로 즉시 로딩 화면 표시 (이전 데이터 깜빡임 방지)
+    flushSync(() => {
+      setIsRefreshing(true);
+    });
+    // 기존 캐시 완전 삭제 (이전 데이터 표시 방지)
+    queryClient.removeQueries({ queryKey: ['autoTradeSuggestions'] });
+    setRefreshKey(Date.now());
+  }, [queryClient]);
+
+  // 데이터 로드 완료 시 refreshing 상태 해제
+  useEffect(() => {
+    if (!isFetching && isRefreshing) {
+      setIsRefreshing(false);
+    }
+  }, [isFetching, isRefreshing]);
+
+  // 로딩 중이거나 새로고침 중이면 로딩 표시
+  if (isLoading || isRefreshing) {
+    return <Loading text="매매 제안 불러오는 중..." />;
+  }
+
+  const suggestions = rawSuggestions;
 
   const filters = [
     { value: 'pending', label: '대기중' },
@@ -738,7 +768,7 @@ export default function AutoTradeSuggestions() {
           </button>
         ))}
         <button
-          onClick={() => refetch()}
+          onClick={handleManualRefresh}
           disabled={isFetching}
           className="p-2 text-gray-600 hover:text-purple-600 transition-colors"
         >
@@ -746,12 +776,12 @@ export default function AutoTradeSuggestions() {
         </button>
       </div>
 
-      {/* 제안 목록 */}
+      {/* 제안 목록 - dataKey로 데이터 변경 시 전체 리마운트 */}
       {suggestions?.length > 0 ? (
-        <div className="space-y-3">
+        <div className="space-y-3" key={JSON.stringify(suggestions.map(s => `${s.id}-${s.change_rate}`))}>
           {suggestions.map((suggestion) => (
             <SuggestionCard
-              key={suggestion.id}
+              key={`${suggestion.id}-${suggestion.change_rate}`}
               suggestion={suggestion}
               activeTab={activeTab}
               onApprove={(id, data, stockName) => handleApprove(id, data, activeTab === 'sell', stockName)}
@@ -791,6 +821,9 @@ export default function AutoTradeSuggestions() {
           </p>
         </div>
       )}
+
+      {/* 버전 표시 (디버그용) */}
+      <div className="text-xs text-gray-400 text-center">v10-flushSync</div>
 
       {/* 안내 */}
       <div
