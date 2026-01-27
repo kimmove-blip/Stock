@@ -103,7 +103,7 @@ python -m py_compile <filename>.py
 
 ## 스코어링/전략 엔진
 
-### 기술적 분석 스코어링 (V1~V8)
+### 기술적 분석 스코어링 (V1~V10)
 
 | 버전 | 전략명 | 설명 |
 |------|--------|------|
@@ -116,6 +116,7 @@ python -m py_compile <filename>.py
 | V6 | Swing Predictor | 2~5일 홀딩, 목표가/손절가 청산 |
 | V7 | Trend Momentum | 추세필터, 3일홀딩, 트레일링스탑 |
 | V8 | Contrarian Bounce | 약세종목 모멘텀반전, 바닥확인 |
+| **V10** | **Leader-Follower** | **대장주-종속주 상관관계 캐치업 전략** |
 
 ### V9: 갭상승 확률 예측 (ML 기반)
 
@@ -172,6 +173,77 @@ python train_gap_model_v2.py
 | `backtest_v9_historical.py` | 6개월 백테스트 |
 | `models/gap_model_v9.pkl` | 학습된 모델 파일 |
 | `docs/overnight_gap_strategy_v9_v10.md` | 전략 상세 문서 |
+
+### V10: Leader-Follower (대장주-종속주)
+
+> **V10은 테마/섹터 내 상관관계를 이용한 캐치업 전략**
+
+| 항목 | 내용 |
+|------|------|
+| 전략 | 대장주 상승 → 종속주 매수 (시차 이용) |
+| 진입 | 대장주 +3% 이상 상승 시 |
+| 조건 | 종속주가 아직 따라가지 못한 경우 (갭 2%+) |
+| 상관계수 | 0.7 이상 (강한 커플링) |
+
+#### V10 점수 체계 (100점 만점)
+
+| 항목 | 배점 | 설명 |
+|------|------|------|
+| 대장주 움직임 | 35점 | 대장주 상승률 (3~7%+) |
+| 상관관계 | 25점 | 피어슨 상관계수 (0.65~0.85+) |
+| 캐치업 갭 | 25점 | 대장주 대비 언더퍼폼 (1~4%+) |
+| 기술적 지지 | 15점 | MA20 위, BB 하단, RSI 적정 |
+
+#### V10 청산 전략
+
+| 조건 | 값 |
+|------|-----|
+| 목표가 | 캐치업 갭의 70~80% 회복 |
+| 손절가 | -3% (빠른 손절) |
+| 시간손절 | 최대 3일 (모멘텀 소멸) |
+
+#### V10 테마 매핑
+
+| 테마 | 대장주 | 종속주 (예시) |
+|------|--------|---------------|
+| 반도체 | 삼성전자, SK하이닉스 | 한미반도체, HPSP, 테크윙 |
+| 2차전지 | LG에너지솔루션, 삼성SDI | 에코프로비엠, 에코프로 |
+| 바이오 | 삼성바이오, 셀트리온 | SK바이오팜, 알테오젠 |
+| 엔터 | 하이브 | 에스엠, YG, JYP |
+| 게임 | 크래프톤, 엔씨소프트 | 펄어비스, 컴투스 |
+
+#### V10 사용법
+
+```python
+from scoring import get_follower_opportunities, calculate_score_v10
+
+# 캐치업 기회 종목 조회
+opportunities = get_follower_opportunities(
+    today_changes={'000660': 5.0, '042700': 1.0},  # 종목별 등락률
+    min_leader_change=3.0,  # 대장주 최소 상승률
+    max_follower_change=1.5  # 종속주 최대 상승률
+)
+
+# 개별 종목 점수 계산
+result = calculate_score_v10(df, ticker='042700', market_data=market_data, today_changes=today_changes)
+```
+
+#### V10 관련 파일
+
+| 파일 | 설명 |
+|------|------|
+| `scoring/score_v10_leader_follower.py` | V10 스코어링 엔진 |
+| `predict_leader_follower.py` | 실시간 캐치업 기회 분석기 |
+| `api/routers/themes.py` | 테마 데이터 API |
+
+#### V10 실행 예시
+
+```bash
+python predict_leader_follower.py              # 기본 분석 (대장주 +3% 이상)
+python predict_leader_follower.py --min 2      # 대장주 +2% 이상일 때 분석
+python predict_leader_follower.py --top 10     # 상위 10개만 출력
+python predict_leader_follower.py --corr       # 실제 상관계수 계산 (느림)
+```
 
 ### 스코어링 사용법
 
