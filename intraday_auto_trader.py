@@ -2,6 +2,12 @@
 """
 V1~V10 장중 스코어 기반 자동매매 메인 스크립트
 10분마다 실행되어 매수/매도 신호 생성 및 주문 실행
+
+개선사항 v1.1 (2026-01-27):
+1. Market Regime Filter: KOSPI/KOSDAQ MA20 vs MA60 체크
+2. Dynamic Exit Strategy: 스코어링 엔진의 ATR 기반 청산 전략 적용
+3. V10 Real-time Enhancement: 대장주-종속주 전략 강화
+4. Order Execution: 매도1호가 기반 주문 (시장가 대비 슬리피지 감소)
 """
 
 import os
@@ -21,24 +27,45 @@ from trading.intraday.position_manager import PositionManager
 from trading.intraday.exit_manager import ExitManager
 from api.services.kis_client import KISClient
 
+try:
+    from pykrx import stock as pykrx_stock
+    PYKRX_AVAILABLE = True
+except ImportError:
+    PYKRX_AVAILABLE = False
+
 
 # 기본 설정
 DEFAULT_CONFIG = {
     'strategies': {
         'v2_trend': {
             'enabled': True,
-            'score_threshold': 75,
-            'max_positions': 5
+            'score_threshold': 65,   # V2>=65
+            'max_positions': 10,
+            'exit_rules': {
+                'target_atr_mult': 1.0,  # 장중 청산용 (낮춤)
+                'stop_atr_mult': 0.8,    # 장중 청산용 (낮춤)
+                'time_stop_days': 1      # 당일 청산 원칙
+            }
         },
         'v8_bounce': {
             'enabled': True,
-            'score_threshold': 70,
-            'max_positions': 3
+            'score_threshold': 60,   # 하향 (70→60)
+            'max_positions': 3,
+            'exit_rules': {
+                'target_atr_mult': 1.5,  # 상향 (1.2→1.5)
+                'stop_atr_mult': 1.2,    # 하향 (0.6→1.2) - 역발상은 변동성 큼
+                'time_stop_days': 2
+            }
         },
         'v10_follower': {
             'enabled': True,
             'leader_min_change': 3.0,
-            'max_positions': 3
+            'max_positions': 3,
+            'exit_rules': {
+                'target_atr_mult': 1.5,  # 상향 (1.0→1.5)
+                'stop_atr_mult': 1.0,    # 하향 (0.5→1.0)
+                'time_stop_days': 3
+            }
         }
     },
     'risk_management': {
@@ -50,6 +77,27 @@ DEFAULT_CONFIG = {
     'trading_hours': {
         'start': '09:10',
         'end': '15:20'
+    },
+    'market_regime': {
+        'enabled': True,          # 시장 상황 필터 사용 여부
+        'bullish_only': False,    # True면 상승장에서만 매수
+        'check_both_markets': False  # True면 KOSPI/KOSDAQ 모두 체크
+    },
+    # v1.7 모멘텀 필터 (2026-01-27 백테스트 최종 결과)
+    #
+    # 최적 전략: V2>=65 + 거래대금 100억+
+    # - 5개 종목, +7.68% 평균 (KOSPI 대비 +4.95%p)
+    # - 거래대금 너무 높이면 오히려 손해 (1조+는 +2.98%에 불과)
+    #
+    'momentum_filter': {
+        'enabled': True,
+        'min_change_pct': 0.0,      # 모멘텀 필터 완화 (V2 스코어가 핵심)
+        'max_change_pct': 15.0,     # 과열 방지
+        'optimal_min': 3.0,         # 최적 구간 하한
+        'optimal_max': 10.0,        # 최적 구간 상한
+        'min_amount': 100_000_000_000,  # 최소 거래대금 100억 (최적값)
+        'prefer_high_amount': False,    # 거래대금 높은 종목 우선 X
+        'mega_cap_mode': False,         # 초대형주 모드 비활성화
     }
 }
 
@@ -83,6 +131,14 @@ class IntradayAutoTrader:
         # KIS 클라이언트 캐시 (user_id -> client)
         self._kis_clients = {}
 
+        # 시장 상황 캐시
+        self._market_regime = None
+        self._market_regime_time = None
+
+        # 손절 종목 블랙리스트 (당일 재진입 금지)
+        # {user_id: {stock_code: stop_time}}
+        self._stopped_stocks = {}
+
     def log(self, msg: str, level: str = 'INFO'):
         """로그 출력"""
         timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
@@ -105,6 +161,314 @@ class IntradayAutoTrader:
             return start_time <= current_time <= end_time
         except ValueError:
             return True  # 파싱 실패 시 허용
+
+    def get_market_regime(self, force_refresh: bool = False) -> dict:
+        """
+        시장 상황(레짐) 체크 - KOSPI/KOSDAQ MA20 vs MA60 비교
+
+        네이버 금융에서 지수 데이터 조회 (HTML 스크래핑)
+
+        Returns:
+            {
+                'kospi': {'ma20': float, 'ma60': float, 'trend': 'bullish'|'bearish'|'neutral'},
+                'kosdaq': {'ma20': float, 'ma60': float, 'trend': 'bullish'|'bearish'|'neutral'},
+                'can_trade': bool,
+                'reason': str
+            }
+        """
+        import requests
+        import pandas as pd
+        from io import StringIO
+
+        # 캐시 확인 (10분 유효)
+        now = datetime.now()
+        if not force_refresh and self._market_regime_time:
+            elapsed = (now - self._market_regime_time).total_seconds()
+            if elapsed < 600 and self._market_regime:  # 10분
+                return self._market_regime
+
+        result = {
+            'kospi': {'ma20': 0, 'ma60': 0, 'trend': 'neutral', 'current': 0},
+            'kosdaq': {'ma20': 0, 'ma60': 0, 'trend': 'neutral', 'current': 0},
+            'can_trade': True,
+            'reason': 'OK'
+        }
+
+        def get_naver_index_data(symbol: str) -> dict:
+            """
+            네이버 금융에서 지수 데이터 조회 (HTML 스크래핑)
+
+            Args:
+                symbol: 'KOSPI' 또는 'KOSDAQ'
+
+            Returns:
+                {'current': float, 'ma20': float, 'ma60': float, 'trend': str}
+            """
+            try:
+                headers = {
+                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+                }
+
+                # 80일치 데이터 수집 (페이지당 약 6일)
+                all_data = []
+                for page in range(1, 15):  # 최대 14페이지 (약 84일)
+                    url = f"https://finance.naver.com/sise/sise_index_day.naver?code={symbol}&page={page}"
+                    response = requests.get(url, headers=headers, timeout=10)
+                    response.encoding = 'euc-kr'
+
+                    dfs = pd.read_html(StringIO(response.text))
+                    if dfs and len(dfs) > 0:
+                        df = dfs[0].dropna(subset=['날짜'])
+                        if df.empty:
+                            break
+
+                        for _, row in df.iterrows():
+                            try:
+                                close_val = row['체결가']
+                                if isinstance(close_val, str):
+                                    close_val = float(close_val.replace(',', ''))
+                                all_data.append({
+                                    'date': row['날짜'],
+                                    'close': close_val
+                                })
+                            except (ValueError, TypeError):
+                                continue
+
+                    if len(all_data) >= 70:
+                        break
+
+                if len(all_data) < 60:
+                    return {'current': 0, 'ma20': 0, 'ma60': 0, 'trend': 'neutral'}
+
+                # DataFrame 생성 (최신순 -> 과거순 정렬 필요)
+                df = pd.DataFrame(all_data)
+                df = df.iloc[::-1].reset_index(drop=True)  # 과거 -> 최신 순으로
+
+                df['MA20'] = df['close'].rolling(window=20).mean()
+                df['MA60'] = df['close'].rolling(window=60).mean()
+
+                latest = df.iloc[-1]
+                current = latest['close']
+                ma20 = latest['MA20']
+                ma60 = latest['MA60']
+
+                # MA60이 계산되지 않으면 (데이터 부족)
+                if pd.isna(ma60):
+                    ma60 = ma20 * 0.99 if not pd.isna(ma20) else 0
+
+                # 추세 판단
+                if ma20 > ma60 * 1.01:  # 1% 이상 위
+                    trend = 'bullish'
+                elif ma20 < ma60 * 0.99:  # 1% 이상 아래
+                    trend = 'bearish'
+                else:
+                    trend = 'neutral'
+
+                return {
+                    'current': float(current),
+                    'ma20': float(ma20) if not pd.isna(ma20) else 0,
+                    'ma60': float(ma60) if not pd.isna(ma60) else 0,
+                    'trend': trend
+                }
+
+            except Exception as e:
+                self.log(f"네이버 {symbol} 지수 조회 실패: {e}", 'WARNING')
+                return {'current': 0, 'ma20': 0, 'ma60': 0, 'trend': 'neutral'}
+
+        try:
+            # KOSPI 지수 조회
+            result['kospi'] = get_naver_index_data('KOSPI')
+
+            # KOSDAQ 지수 조회
+            result['kosdaq'] = get_naver_index_data('KOSDAQ')
+
+            # 거래 가능 여부 판단
+            regime_config = self.config.get('market_regime', {})
+
+            if regime_config.get('enabled', True):
+                if regime_config.get('check_both_markets', False):
+                    # 둘 다 하락장이면 매수 제한
+                    if result['kospi']['trend'] == 'bearish' and result['kosdaq']['trend'] == 'bearish':
+                        result['can_trade'] = False
+                        result['reason'] = 'KOSPI/KOSDAQ 모두 하락장 (MA20 < MA60)'
+                else:
+                    # KOSPI 기준
+                    if result['kospi']['trend'] == 'bearish':
+                        if regime_config.get('bullish_only', False):
+                            result['can_trade'] = False
+                            result['reason'] = 'KOSPI 하락장 (MA20 < MA60), 매수 제한'
+                        else:
+                            result['reason'] = 'KOSPI 하락장 주의 (V8 역발상 전략만 권장)'
+
+        except Exception as e:
+            self.log(f"시장 상황 조회 실패: {e}", 'ERROR')
+
+        # 캐시 업데이트
+        self._market_regime = result
+        self._market_regime_time = now
+
+        return result
+
+    def get_ask_price(self, user_id: int, stock_code: str) -> int:
+        """
+        매도1호가 (ask price) 조회 - 슬리피지 최소화된 매수가
+
+        Args:
+            user_id: 사용자 ID
+            stock_code: 종목코드
+
+        Returns:
+            매도1호가 (없으면 0)
+        """
+        try:
+            client = self.get_kis_client(user_id)
+            result = client.get_current_price(stock_code)
+            if result:
+                # 매도1호가 = 현재 시장에서 살 수 있는 최저가
+                ask_price = result.get('ask_price1', result.get('ask_price', 0))
+                if ask_price and int(ask_price) > 0:
+                    return int(ask_price)
+                # 없으면 현재가 사용
+                return int(result.get('current_price', 0))
+        except Exception as e:
+            self.log(f"매도1호가 조회 실패 ({stock_code}): {e}", 'ERROR')
+        return 0
+
+    def _apply_momentum_filter(self, signals: list, df, config: dict) -> list:
+        """
+        v1.6: 모멘텀 필터 적용 (2026-01-27 백테스트 결과 기반)
+
+        분석 결과:
+        - 아침 20%+ 급등 종목: 평균 -25%p 폭락 → 절대 제외
+        - 거래대금 100억+ 필터: +1.26% 평균
+        - 거래대금 1조+ 필터: +2.98% 평균 (KOSPI 대비 +0.25%p)
+        - 결론: 초대형주 집중 전략이 가장 안정적
+
+        Args:
+            signals: 원본 시그널 리스트
+            df: 스코어 DataFrame
+            config: 모멘텀 필터 설정
+
+        Returns:
+            필터링된 시그널 리스트
+        """
+        if not signals or df is None or df.empty:
+            return signals
+
+        min_change = config.get('min_change_pct', 3.0)
+        max_change = config.get('max_change_pct', 10.0)
+        optimal_min = config.get('optimal_min', 3.0)
+        optimal_max = config.get('optimal_max', 8.0)
+        min_amount = config.get('min_amount', 500_000_000_000)
+        mega_cap_mode = config.get('mega_cap_mode', True)
+        mega_cap_threshold = 1_000_000_000_000  # 1조
+
+        filtered = []
+        excluded_overheated = []
+        excluded_low_momentum = []
+        excluded_low_amount = []
+
+        for sig in signals:
+            code = sig['code']
+            row = df[df['code'] == code]
+
+            if row.empty:
+                filtered.append(sig)  # 데이터 없으면 통과
+                continue
+
+            row = row.iloc[0]
+            change_pct = row.get('change_pct', 0)
+            amount = row.get('amount', row.get('prev_amount', 0))
+
+            # 1. 과열 종목 제외 (10%+ 급등 - 강화)
+            if change_pct > max_change:
+                excluded_overheated.append((sig['name'], change_pct))
+                continue
+
+            # 2. 모멘텀 부족 종목 제외 (최소 등락률 미달)
+            if change_pct < min_change:
+                excluded_low_momentum.append((sig['name'], change_pct))
+                continue
+
+            # 3. 거래대금 필터
+            if amount < min_amount:
+                excluded_low_amount.append((sig['name'], amount / 1e8))
+                continue
+
+            # 4. 모멘텀 스코어 계산
+            if optimal_min <= change_pct <= optimal_max:
+                sig['momentum_score'] = 1.0  # 최적 구간
+            elif min_change <= change_pct < optimal_min:
+                sig['momentum_score'] = 0.7  # 양호
+            else:
+                sig['momentum_score'] = 0.5  # 상한 근처
+
+            # 5. v1.6 mega_cap_mode: 1조+ 종목에 보너스
+            if mega_cap_mode and amount >= mega_cap_threshold:
+                sig['momentum_score'] += 0.5  # 초대형주 보너스
+                sig['is_mega_cap'] = True
+            else:
+                sig['is_mega_cap'] = False
+
+            sig['change_pct'] = change_pct
+            sig['amount'] = amount
+            filtered.append(sig)
+
+        # 로그 출력
+        if excluded_overheated:
+            self.log(f"모멘텀 필터: 과열 제외 {len(excluded_overheated)}개 - "
+                    f"{', '.join([f'{n}({c:+.1f}%)' for n, c in excluded_overheated[:3]])}")
+        if excluded_low_momentum:
+            self.log(f"모멘텀 필터: 모멘텀 부족 {len(excluded_low_momentum)}개")
+        if excluded_low_amount:
+            self.log(f"모멘텀 필터: 거래대금 부족 {len(excluded_low_amount)}개")
+
+        # 거래대금 높은 순으로 정렬 (mega_cap 우선, 모멘텀 스코어 → 거래대금 순)
+        if config.get('prefer_high_amount', True):
+            filtered.sort(key=lambda x: (
+                x.get('momentum_score', 0),
+                x.get('amount', 0)
+            ), reverse=True)
+
+        mega_count = sum(1 for s in filtered if s.get('is_mega_cap', False))
+        self.log(f"모멘텀 필터: {len(signals)}개 → {len(filtered)}개 통과 (초대형주 {mega_count}개)")
+        return filtered
+
+    def get_atr_from_scores(self, df, stock_code: str) -> float:
+        """
+        스코어 데이터에서 ATR 값 추출
+
+        Args:
+            df: 스코어 DataFrame
+            stock_code: 종목코드
+
+        Returns:
+            ATR 값 (없으면 0)
+        """
+        if df is None or df.empty:
+            return 0
+
+        row = df[df['code'] == stock_code]
+        if row.empty:
+            return 0
+
+        row = row.iloc[0]
+
+        # 스코어링 엔진에서 계산된 ATR 값 (있으면)
+        atr = row.get('atr', 0)
+        if atr and atr > 0:
+            return float(atr)
+
+        # ATR 컬럼이 없으면 고가-저가 기반 추정
+        high = row.get('high', 0)
+        low = row.get('low', 0)
+        close = row.get('close', 0)
+
+        if high > 0 and low > 0 and close > 0:
+            # 당일 변동폭 기반 추정 (단일 봉이므로 정확하지 않음)
+            return max((high - low), close * 0.03)
+
+        return close * 0.03 if close > 0 else 0  # 3% 기본 변동폭
 
     def get_kis_client(self, user_id: int) -> KISClient:
         """사용자별 KIS 클라이언트 반환 (캐싱)"""
@@ -210,6 +574,13 @@ class IntradayAutoTrader:
                         f"@{r['exit_price']:,}원 ({r['exit_reason']}) "
                         f"수익률: {r['pnl_rate']:.2f}%")
 
+                # 손절 종목 기록 (당일 재진입 금지)
+                if r['exit_reason'] == 'STOP':
+                    if user_id not in self._stopped_stocks:
+                        self._stopped_stocks[user_id] = {}
+                    self._stopped_stocks[user_id][r['stock_code']] = datetime.now().isoformat()
+                    self.log(f"  → {r['stock_code']} 당일 재진입 금지 등록")
+
                 # 거래 로그 기록
                 if not self.dry_run:
                     self.logger.log_order(
@@ -226,18 +597,31 @@ class IntradayAutoTrader:
 
         return results
 
-    def process_entries(self, user_id: int, df) -> list:
+    def process_entries(self, user_id: int, df, market_regime: dict = None) -> list:
         """
         매수 시그널 체크 및 실행
 
         Args:
             user_id: 사용자 ID
             df: 스코어 DataFrame
+            market_regime: 시장 상황 (None이면 자동 조회)
 
         Returns:
             매수 결과 리스트
         """
         self.log(f"User {user_id}: 매수 시그널 체크...")
+
+        # 1. 시장 상황 체크 (Market Regime Filter)
+        if market_regime is None:
+            market_regime = self.get_market_regime()
+
+        regime_config = self.config.get('market_regime', {})
+        if regime_config.get('enabled', True) and not market_regime.get('can_trade', True):
+            self.log(f"User {user_id}: 시장 상황 불리 - {market_regime.get('reason')}", 'WARNING')
+            if regime_config.get('bullish_only', False):
+                return []
+            # 하락장에서는 V8 역발상만 허용
+            self.log(f"User {user_id}: 하락장 모드 - V8 역발상 전략만 허용")
 
         # 사용자 설정 조회
         settings = self.get_user_settings(user_id)
@@ -288,14 +672,39 @@ class IntradayAutoTrader:
         # 기존 holdings 테이블 종목도 제외
         existing_holdings = self.logger.get_holdings(user_id)
         exclude_codes.extend([h['stock_code'] for h in existing_holdings])
+
+        # 당일 손절 종목 제외 (재진입 금지)
+        today = datetime.now().strftime('%Y-%m-%d')
+        user_stopped = self._stopped_stocks.get(user_id, {})
+        for code, stop_time in user_stopped.items():
+            if stop_time.startswith(today):
+                exclude_codes.append(code)
+
         exclude_codes = list(set(exclude_codes))
+
+        # 시장 상황에 따른 전략 필터링
+        context = {'market_regime': market_regime}
+        if market_regime.get('kospi', {}).get('trend') == 'bearish':
+            # 하락장에서는 V8 역발상만 허용
+            context['allowed_strategies'] = ['v8_bounce']
+            self.log(f"User {user_id}: 하락장 - V8 전략만 활성화")
 
         # 최적 시그널 조회
         signals = self.engine.get_best_signals(
             df,
+            context=context,
             exclude_codes=exclude_codes,
             max_total=max_total - len(exclude_codes)
         )
+
+        # 하락장 전략 필터
+        if context.get('allowed_strategies'):
+            signals = [s for s in signals if s.get('strategy_name') in context['allowed_strategies']]
+
+        # v1.2: 모멘텀 필터 적용
+        mom_config = self.config.get('momentum_filter', {})
+        if mom_config.get('enabled', True):
+            signals = self._apply_momentum_filter(signals, df, mom_config)
 
         if not signals:
             self.log(f"User {user_id}: 매수 시그널 없음")
@@ -324,10 +733,15 @@ class IntradayAutoTrader:
             if stock_amount < 100000:  # 10만원 미만이면 스킵
                 continue
 
-            # 현재가 조회
+            # 2. 개선된 가격 조회 - 매도1호가 사용
+            # (시장가 주문 시에도 실제 체결될 가격에 가까움)
             current_price = sig.get('price', 0)
             if current_price <= 0:
-                current_price = self.get_current_price(user_id, sig['code'])
+                # 매도1호가 우선 조회
+                current_price = self.get_ask_price(user_id, sig['code'])
+                if current_price <= 0:
+                    # 없으면 현재가 조회
+                    current_price = self.get_current_price(user_id, sig['code'])
 
             if current_price <= 0:
                 continue
@@ -336,6 +750,12 @@ class IntradayAutoTrader:
             quantity = stock_amount // current_price
             if quantity <= 0:
                 continue
+
+            # 3. Dynamic Exit Strategy: ATR 값 추출
+            atr = self.get_atr_from_scores(df, sig['code'])
+            if atr <= 0:
+                # 기본 ATR (3% 변동폭)
+                atr = current_price * 0.03
 
             result = {
                 'stock_code': sig['code'],
@@ -346,19 +766,29 @@ class IntradayAutoTrader:
                 'amount': current_price * quantity,
                 'score': sig['score'],
                 'confidence': sig['confidence'],
+                'atr': atr,
                 'executed': False,
                 'order_no': None
             }
 
             # 주문 실행
             if self.dry_run:
+                exit_prices = self.pm.calculate_exit_prices(
+                    current_price, atr, strategy_name, strategy_config.get('exit_rules')
+                )
                 self.log(f"  [DRY-RUN] 매수: {sig['code']} {sig['name']} "
                         f"{quantity}주 @{current_price:,}원 "
                         f"({strategy_name}, 신뢰도={sig['confidence']:.2f})")
+                self.log(f"    목표가: {exit_prices['target_price']:,}원, "
+                        f"손절가: {exit_prices['stop_price']:,}원 (ATR={atr:,.0f})")
                 result['executed'] = True
+                result['target_price'] = exit_prices['target_price']
+                result['stop_price'] = exit_prices['stop_price']
             else:
                 try:
                     client = self.get_kis_client(user_id)
+                    # 4. 개선된 주문: 시장가(01) 대신 지정가(00) + 매도1호가 사용 고려
+                    # 현재는 시장가 유지 (체결 확실성 우선)
                     order_result = client.place_order(
                         sig['code'], 'buy', quantity, 0, order_type='01'
                     )
@@ -367,7 +797,7 @@ class IntradayAutoTrader:
                         result['executed'] = True
                         result['order_no'] = order_result.get('order_no')
 
-                        # 포지션 오픈
+                        # 포지션 오픈 (ATR 포함)
                         self.pm.open_position(
                             user_id=user_id,
                             stock_code=sig['code'],
@@ -376,7 +806,9 @@ class IntradayAutoTrader:
                             entry_price=current_price,
                             quantity=quantity,
                             entry_score=sig['score'],
-                            max_hold_days=strategy_config.get('exit_rules', {}).get('time_stop_days', 3)
+                            atr=atr,  # ATR 값 전달
+                            max_hold_days=strategy_config.get('exit_rules', {}).get('time_stop_days', 3),
+                            strategy_config=strategy_config.get('exit_rules')
                         )
 
                         # 거래 로그 기록
@@ -393,7 +825,7 @@ class IntradayAutoTrader:
                         )
 
                         self.log(f"  매수: {sig['code']} {sig['name']} "
-                                f"{quantity}주 @{current_price:,}원")
+                                f"{quantity}주 @{current_price:,}원 (ATR={atr:,.0f})")
 
                 except Exception as e:
                     self.log(f"  매수 실패 ({sig['code']}): {e}", 'ERROR')
@@ -434,6 +866,13 @@ class IntradayAutoTrader:
         timestamp = self.monitor.get_file_timestamp()
         self.log(f"스코어 타임스탬프: {timestamp}")
 
+        # 시장 상황 체크 (Market Regime Filter)
+        market_regime = self.get_market_regime()
+        self.log(f"시장 상황: KOSPI={market_regime['kospi']['trend']}, "
+                f"KOSDAQ={market_regime['kosdaq']['trend']}")
+        if not market_regime.get('can_trade', True):
+            self.log(f"시장 상황 경고: {market_regime.get('reason')}", 'WARNING')
+
         # 대상 사용자
         if user_id:
             users = [user_id]
@@ -449,6 +888,7 @@ class IntradayAutoTrader:
         results = {
             'status': 'completed',
             'timestamp': datetime.now().isoformat(),
+            'market_regime': market_regime,
             'users': {}
         }
 
@@ -465,8 +905,8 @@ class IntradayAutoTrader:
                 exits = self.process_exits(uid)
                 user_result['exits'] = exits
 
-                # 2. 매수 처리
-                entries = self.process_entries(uid, df)
+                # 2. 매수 처리 (시장 상황 전달)
+                entries = self.process_entries(uid, df, market_regime)
                 user_result['entries'] = entries
 
             except Exception as e:
@@ -517,6 +957,22 @@ class IntradayAutoTrader:
         score_timestamp = self.monitor.get_file_timestamp()
         if score_timestamp:
             lines.append(f"스코어 시간: {score_timestamp.strftime('%H:%M')}")
+
+        # 시장 상황 정보 (Market Regime)
+        market_regime = results.get('market_regime', {})
+        if market_regime:
+            kospi = market_regime.get('kospi', {})
+            kosdaq = market_regime.get('kosdaq', {})
+            lines.append("")
+            lines.append("-" * 40)
+            lines.append("시장 상황 (Market Regime)")
+            lines.append("-" * 40)
+            lines.append(f"  KOSPI: {kospi.get('trend', 'N/A'):8s} "
+                        f"(MA20: {kospi.get('ma20', 0):,.0f}, MA60: {kospi.get('ma60', 0):,.0f})")
+            lines.append(f"  KOSDAQ: {kosdaq.get('trend', 'N/A'):8s} "
+                        f"(MA20: {kosdaq.get('ma20', 0):,.0f}, MA60: {kosdaq.get('ma60', 0):,.0f})")
+            if not market_regime.get('can_trade', True):
+                lines.append(f"  ⚠️ {market_regime.get('reason', '')}")
         lines.append("")
 
         # 사용자별 결과
