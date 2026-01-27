@@ -1,0 +1,1075 @@
+{
+  "반도체": {
+    "leaders": [
+      {
+        "code": "005930",
+        "name": "삼성전자",
+        "weight": 1.0
+      },
+      {
+        "code": "000660",
+        "name": "SK하이닉스",
+        "weight": 0.9
+      }
+    ],
+    "followers": [
+      {
+        "code": "042700",
+        "name": "한미반도체",
+        "corr_target": "000660"
+      },
+      {
+        "code": "403870",
+        "name": "HPSP",
+        "corr_target": "000660"
+      },
+      {
+        "code": "058470",
+        "name": "리노공업",
+        "corr_target": "000660"
+      },
+      {
+        "code": "089030",
+        "name": "테크윙",
+        "corr_target": "000660"
+      },
+      {
+        "code": "166090",
+        "name": "하나머티리얼즈",
+        "corr_target": "000660"
+      },
+      {
+        "code": "240810",
+        "name": "원익IPS",
+        "corr_target": "000660"
+      },
+      {
+        "code": "039030",
+        "name": "이오테크닉스",
+        "corr_target": "000660"
+      },
+      {
+        "code": "036830",
+        "name": "솔브레인홀딩스",
+        "corr_target": "000660"
+      },
+      {
+        "code": "357780",
+        "name": "솔브레인",
+        "corr_target": "000660"
+      },
+      {
+        "code": "007660",
+        "name": "이수페타시스",
+        "corr_target": "005930"
+      },
+      {
+        "code": "009150",
+        "name": "삼성전기",
+        "corr_target": "005930"
+      },
+      {
+        "code": "006400",
+        "name": "삼성SDI",
+        "corr_target": "005930"
+      },
+      {
+        "code": "005290",
+        "name": "동진쎄미켐",
+        "corr_target": "005930"
+      }
+    ]
+  },
+  "HBM/AI반도체": {
+    "leaders": [
+      {
+        "code": "000660",
+        "name": "SK하이닉스",
+        "weight": 1.0
+      }
+    ],
+    "followers": [
+      {
+        "code": "042700",
+        "name": "한미반도체",
+        "corr_target": "000660"
+      },
+      {
+        "code": "403870",
+        "name": "HPSP",
+        "corr_target": "000660"
+      },
+      {
+        "code": "058470",
+        "name": "리노공업",
+        "corr_target": "000660"
+      },
+      {
+        "code": "036830",
+        "name": "솔브레인홀딩스",
+        "corr_target": "000660"
+      },
+      {
+        "code": "025560",
+        "name": "미래산업",
+        "corr_target": "000660"
+      },
+      {
+        "code": "185750",
+        "name": "종근당",
+        "corr_target": "000660"
+      }
+    ]
+  },
+  "디스플레이": {
+    "leaders": [
+      {
+        "code": "034220",
+        "name": "LG디스플레이",
+        "weight": 1.0
+      }
+    ],
+    "followers": [
+      {
+        "code": "131970",
+        "name": "테스나",
+        "corr_target": "034220"
+      },
+      {
+        "code": "272290",
+        "name": "이녹스첨단소재",
+        "corr_target": "034220"
+      },
+      {
+        "code": "096530",
+        "name": "씨젠",
+        "corr_target": "034220"
+      },
+      {
+        "code": "036490",
+        "name": "SK가스",
+        "corr_target": "034220"
+      }
+    ]
+  },
+  "2차전지": {
+    "leaders": [
+      {
+        "code": "373220",
+        "name": "LG에너지솔루션",
+        "weight": 1.0
+      },
+      {
+        "code": "006400",
+        "name": "삼성SDI",
+        "weight": 0.9
+      }
+    ],
+    "followers": [
+      {
+        "code": "247540",
+        "name": "에코프로비엠",
+        "corr_target": "373220"
+      },
+      {
+        "code": "086520",
+        "name": "에코프로",
+        "corr_target": "373220"
+      },
+      {
+        "code": "003670",
+        "name": "포스코퓨처엠",
+        "corr_target": "373220"
+      },
+      {
+        "code": "051910",
+        "name": "LG화학",
+        "corr_target": "373220"
+      },
+      {
+        "code": "096770",
+        "name": "SK이노베이션",
+        "corr_target": "006400"
+      },
+      {
+        "code": "011790",
+        "name": "SKC",
+        "corr_target": "373220"
+      },
+      {
+        "code": "108320",
+        "name": "LX세미콘",
+        "corr_target": "373220"
+      },
+      {
+        "code": "006260",
+        "name": "LS",
+        "corr_target": "373220"
+      }
+    ]
+  },
+  "원전": {
+    "leaders": [
+      {
+        "code": "034020",
+        "name": "두산에너빌리티",
+        "weight": 1.0
+      }
+    ],
+    "followers": [
+      {
+        "code": "052690",
+        "name": "한전기술",
+        "corr_target": "034020"
+      },
+      {
+        "code": "083650",
+        "name": "비에이치아이",
+        "corr_target": "034020"
+      },
+      {
+        "code": "092200",
+        "name": "디아이씨",
+        "corr_target": "034020"
+      },
+      {
+        "code": "267270",
+        "name": "현대건설기계",
+        "corr_target": "034020"
+      }
+    ]
+  },
+  "전력/에너지": {
+    "leaders": [
+      {
+        "code": "015760",
+        "name": "한국전력",
+        "weight": 1.0
+      }
+    ],
+    "followers": [
+      {
+        "code": "036460",
+        "name": "한국가스공사",
+        "corr_target": "015760"
+      },
+      {
+        "code": "017390",
+        "name": "서울가스",
+        "corr_target": "015760"
+      },
+      {
+        "code": "034020",
+        "name": "두산에너빌리티",
+        "corr_target": "015760"
+      },
+      {
+        "code": "267250",
+        "name": "HD현대중공업",
+        "corr_target": "015760"
+      }
+    ]
+  },
+  "바이오": {
+    "leaders": [
+      {
+        "code": "207940",
+        "name": "삼성바이오로직스",
+        "weight": 1.0
+      },
+      {
+        "code": "068270",
+        "name": "셀트리온",
+        "weight": 0.9
+      }
+    ],
+    "followers": [
+      {
+        "code": "326030",
+        "name": "SK바이오팜",
+        "corr_target": "207940"
+      },
+      {
+        "code": "196170",
+        "name": "알테오젠",
+        "corr_target": "207940"
+      },
+      {
+        "code": "145020",
+        "name": "휴젤",
+        "corr_target": "068270"
+      },
+      {
+        "code": "141080",
+        "name": "레고켐바이오",
+        "corr_target": "068270"
+      },
+      {
+        "code": "091990",
+        "name": "셀트리온헬스케어",
+        "corr_target": "068270"
+      },
+      {
+        "code": "302440",
+        "name": "SK바이오사이언스",
+        "corr_target": "207940"
+      },
+      {
+        "code": "328130",
+        "name": "루닛",
+        "corr_target": "207940"
+      }
+    ]
+  },
+  "제약": {
+    "leaders": [
+      {
+        "code": "000100",
+        "name": "유한양행",
+        "weight": 1.0
+      },
+      {
+        "code": "128940",
+        "name": "한미약품",
+        "weight": 0.9
+      }
+    ],
+    "followers": [
+      {
+        "code": "006280",
+        "name": "녹십자",
+        "corr_target": "000100"
+      },
+      {
+        "code": "185750",
+        "name": "종근당",
+        "corr_target": "000100"
+      },
+      {
+        "code": "003060",
+        "name": "에이프로젠",
+        "corr_target": "128940"
+      },
+      {
+        "code": "003850",
+        "name": "보령",
+        "corr_target": "000100"
+      },
+      {
+        "code": "000020",
+        "name": "동화약품",
+        "corr_target": "000100"
+      }
+    ]
+  },
+  "의료기기": {
+    "leaders": [
+      {
+        "code": "096530",
+        "name": "씨젠",
+        "weight": 1.0
+      }
+    ],
+    "followers": [
+      {
+        "code": "048260",
+        "name": "오스템임플란트",
+        "corr_target": "096530"
+      },
+      {
+        "code": "039840",
+        "name": "디오",
+        "corr_target": "096530"
+      },
+      {
+        "code": "214370",
+        "name": "케어젠",
+        "corr_target": "096530"
+      },
+      {
+        "code": "298380",
+        "name": "에이비엘바이오",
+        "corr_target": "096530"
+      }
+    ]
+  },
+  "플랫폼": {
+    "leaders": [
+      {
+        "code": "035420",
+        "name": "NAVER",
+        "weight": 1.0
+      },
+      {
+        "code": "035720",
+        "name": "카카오",
+        "weight": 0.9
+      }
+    ],
+    "followers": [
+      {
+        "code": "377300",
+        "name": "카카오페이",
+        "corr_target": "035720"
+      },
+      {
+        "code": "293490",
+        "name": "카카오게임즈",
+        "corr_target": "035720"
+      },
+      {
+        "code": "263750",
+        "name": "펄어비스",
+        "corr_target": "035720"
+      },
+      {
+        "code": "030200",
+        "name": "KT",
+        "corr_target": "035420"
+      },
+      {
+        "code": "032640",
+        "name": "LG유플러스",
+        "corr_target": "035420"
+      }
+    ]
+  },
+  "AI/클라우드": {
+    "leaders": [
+      {
+        "code": "018260",
+        "name": "삼성에스디에스",
+        "weight": 1.0
+      }
+    ],
+    "followers": [
+      {
+        "code": "181710",
+        "name": "NHN",
+        "corr_target": "018260"
+      },
+      {
+        "code": "035760",
+        "name": "CJ ENM",
+        "corr_target": "018260"
+      },
+      {
+        "code": "030520",
+        "name": "한글과컴퓨터",
+        "corr_target": "018260"
+      },
+      {
+        "code": "053800",
+        "name": "안랩",
+        "corr_target": "018260"
+      }
+    ]
+  },
+  "엔터": {
+    "leaders": [
+      {
+        "code": "352820",
+        "name": "하이브",
+        "weight": 1.0
+      }
+    ],
+    "followers": [
+      {
+        "code": "041510",
+        "name": "에스엠",
+        "corr_target": "352820"
+      },
+      {
+        "code": "122870",
+        "name": "와이지엔터테인먼트",
+        "corr_target": "352820"
+      },
+      {
+        "code": "035900",
+        "name": "JYP Ent.",
+        "corr_target": "352820"
+      },
+      {
+        "code": "253450",
+        "name": "스튜디오드래곤",
+        "corr_target": "352820"
+      }
+    ]
+  },
+  "게임": {
+    "leaders": [
+      {
+        "code": "259960",
+        "name": "크래프톤",
+        "weight": 1.0
+      },
+      {
+        "code": "036570",
+        "name": "엔씨소프트",
+        "weight": 0.8
+      }
+    ],
+    "followers": [
+      {
+        "code": "263750",
+        "name": "펄어비스",
+        "corr_target": "259960"
+      },
+      {
+        "code": "078340",
+        "name": "컴투스",
+        "corr_target": "036570"
+      },
+      {
+        "code": "112040",
+        "name": "위메이드",
+        "corr_target": "036570"
+      },
+      {
+        "code": "293490",
+        "name": "카카오게임즈",
+        "corr_target": "259960"
+      },
+      {
+        "code": "194480",
+        "name": "데브시스터즈",
+        "corr_target": "259960"
+      },
+      {
+        "code": "069080",
+        "name": "웹젠",
+        "corr_target": "036570"
+      }
+    ]
+  },
+  "조선": {
+    "leaders": [
+      {
+        "code": "009540",
+        "name": "HD한국조선해양",
+        "weight": 1.0
+      }
+    ],
+    "followers": [
+      {
+        "code": "010140",
+        "name": "삼성중공업",
+        "corr_target": "009540"
+      },
+      {
+        "code": "042660",
+        "name": "한화오션",
+        "corr_target": "009540"
+      },
+      {
+        "code": "329180",
+        "name": "HD현대마린솔루션",
+        "corr_target": "009540"
+      },
+      {
+        "code": "010620",
+        "name": "HD현대미포",
+        "corr_target": "009540"
+      },
+      {
+        "code": "267250",
+        "name": "HD현대중공업",
+        "corr_target": "009540"
+      }
+    ]
+  },
+  "해운": {
+    "leaders": [
+      {
+        "code": "011200",
+        "name": "HMM",
+        "weight": 1.0
+      }
+    ],
+    "followers": [
+      {
+        "code": "028670",
+        "name": "팬오션",
+        "corr_target": "011200"
+      },
+      {
+        "code": "003480",
+        "name": "한진중공업홀딩스",
+        "corr_target": "011200"
+      },
+      {
+        "code": "000700",
+        "name": "유수홀딩스",
+        "corr_target": "011200"
+      }
+    ]
+  },
+  "방산": {
+    "leaders": [
+      {
+        "code": "012450",
+        "name": "한화에어로스페이스",
+        "weight": 1.0
+      }
+    ],
+    "followers": [
+      {
+        "code": "047810",
+        "name": "한국항공우주",
+        "corr_target": "012450"
+      },
+      {
+        "code": "064350",
+        "name": "현대로템",
+        "corr_target": "012450"
+      },
+      {
+        "code": "272210",
+        "name": "한화시스템",
+        "corr_target": "012450"
+      },
+      {
+        "code": "000880",
+        "name": "한화",
+        "corr_target": "012450"
+      },
+      {
+        "code": "009830",
+        "name": "한화솔루션",
+        "corr_target": "012450"
+      }
+    ]
+  },
+  "항공": {
+    "leaders": [
+      {
+        "code": "003490",
+        "name": "대한항공",
+        "weight": 1.0
+      }
+    ],
+    "followers": [
+      {
+        "code": "020560",
+        "name": "아시아나항공",
+        "corr_target": "003490"
+      },
+      {
+        "code": "272450",
+        "name": "진에어",
+        "corr_target": "003490"
+      },
+      {
+        "code": "089590",
+        "name": "제주항공",
+        "corr_target": "003490"
+      },
+      {
+        "code": "039130",
+        "name": "하나투어",
+        "corr_target": "003490"
+      }
+    ]
+  },
+  "자동차": {
+    "leaders": [
+      {
+        "code": "005380",
+        "name": "현대차",
+        "weight": 1.0
+      },
+      {
+        "code": "000270",
+        "name": "기아",
+        "weight": 0.95
+      }
+    ],
+    "followers": [
+      {
+        "code": "012330",
+        "name": "현대모비스",
+        "corr_target": "005380"
+      },
+      {
+        "code": "018880",
+        "name": "한온시스템",
+        "corr_target": "005380"
+      },
+      {
+        "code": "161390",
+        "name": "한국타이어앤테크놀로지",
+        "corr_target": "005380"
+      },
+      {
+        "code": "011210",
+        "name": "현대위아",
+        "corr_target": "005380"
+      },
+      {
+        "code": "204320",
+        "name": "만도",
+        "corr_target": "005380"
+      },
+      {
+        "code": "298050",
+        "name": "효성첨단소재",
+        "corr_target": "005380"
+      }
+    ]
+  },
+  "로봇": {
+    "leaders": [
+      {
+        "code": "454910",
+        "name": "두산로보틱스",
+        "weight": 1.0
+      }
+    ],
+    "followers": [
+      {
+        "code": "277810",
+        "name": "레인보우로보틱스",
+        "corr_target": "454910"
+      },
+      {
+        "code": "108490",
+        "name": "로보티즈",
+        "corr_target": "454910"
+      },
+      {
+        "code": "090460",
+        "name": "비에이치",
+        "corr_target": "454910"
+      },
+      {
+        "code": "264660",
+        "name": "씨앤지하이테크",
+        "corr_target": "454910"
+      }
+    ]
+  },
+  "은행": {
+    "leaders": [
+      {
+        "code": "105560",
+        "name": "KB금융",
+        "weight": 1.0
+      },
+      {
+        "code": "055550",
+        "name": "신한지주",
+        "weight": 0.95
+      }
+    ],
+    "followers": [
+      {
+        "code": "086790",
+        "name": "하나금융지주",
+        "corr_target": "105560"
+      },
+      {
+        "code": "316140",
+        "name": "우리금융지주",
+        "corr_target": "105560"
+      },
+      {
+        "code": "024110",
+        "name": "기업은행",
+        "corr_target": "055550"
+      },
+      {
+        "code": "175330",
+        "name": "JB금융지주",
+        "corr_target": "055550"
+      },
+      {
+        "code": "138930",
+        "name": "BNK금융지주",
+        "corr_target": "055550"
+      },
+      {
+        "code": "139130",
+        "name": "DGB금융지주",
+        "corr_target": "055550"
+      }
+    ]
+  },
+  "보험": {
+    "leaders": [
+      {
+        "code": "000810",
+        "name": "삼성화재",
+        "weight": 1.0
+      }
+    ],
+    "followers": [
+      {
+        "code": "001450",
+        "name": "현대해상",
+        "corr_target": "000810"
+      },
+      {
+        "code": "005830",
+        "name": "DB손해보험",
+        "corr_target": "000810"
+      },
+      {
+        "code": "138040",
+        "name": "메리츠화재",
+        "corr_target": "000810"
+      },
+      {
+        "code": "088350",
+        "name": "한화생명",
+        "corr_target": "000810"
+      },
+      {
+        "code": "032830",
+        "name": "삼성생명",
+        "corr_target": "000810"
+      }
+    ]
+  },
+  "증권": {
+    "leaders": [
+      {
+        "code": "006800",
+        "name": "미래에셋증권",
+        "weight": 1.0
+      }
+    ],
+    "followers": [
+      {
+        "code": "016360",
+        "name": "삼성증권",
+        "corr_target": "006800"
+      },
+      {
+        "code": "071050",
+        "name": "한국금융지주",
+        "corr_target": "006800"
+      },
+      {
+        "code": "005940",
+        "name": "NH투자증권",
+        "corr_target": "006800"
+      },
+      {
+        "code": "003540",
+        "name": "대신증권",
+        "corr_target": "006800"
+      },
+      {
+        "code": "030610",
+        "name": "교보증권",
+        "corr_target": "006800"
+      }
+    ]
+  },
+  "건설": {
+    "leaders": [
+      {
+        "code": "000720",
+        "name": "현대건설",
+        "weight": 1.0
+      },
+      {
+        "code": "028260",
+        "name": "삼성물산",
+        "weight": 0.9
+      }
+    ],
+    "followers": [
+      {
+        "code": "047040",
+        "name": "대우건설",
+        "corr_target": "000720"
+      },
+      {
+        "code": "006360",
+        "name": "GS건설",
+        "corr_target": "000720"
+      },
+      {
+        "code": "375500",
+        "name": "DL이앤씨",
+        "corr_target": "000720"
+      },
+      {
+        "code": "000210",
+        "name": "DL",
+        "corr_target": "028260"
+      },
+      {
+        "code": "005850",
+        "name": "에스엘",
+        "corr_target": "028260"
+      }
+    ]
+  },
+  "철강": {
+    "leaders": [
+      {
+        "code": "005490",
+        "name": "POSCO홀딩스",
+        "weight": 1.0
+      }
+    ],
+    "followers": [
+      {
+        "code": "004020",
+        "name": "현대제철",
+        "corr_target": "005490"
+      },
+      {
+        "code": "001230",
+        "name": "동국제강",
+        "corr_target": "005490"
+      },
+      {
+        "code": "103140",
+        "name": "풍산",
+        "corr_target": "005490"
+      },
+      {
+        "code": "004890",
+        "name": "동일산업",
+        "corr_target": "005490"
+      }
+    ]
+  },
+  "유통": {
+    "leaders": [
+      {
+        "code": "004170",
+        "name": "신세계",
+        "weight": 1.0
+      }
+    ],
+    "followers": [
+      {
+        "code": "069960",
+        "name": "현대백화점",
+        "corr_target": "004170"
+      },
+      {
+        "code": "023530",
+        "name": "롯데쇼핑",
+        "corr_target": "004170"
+      },
+      {
+        "code": "139480",
+        "name": "이마트",
+        "corr_target": "004170"
+      },
+      {
+        "code": "007070",
+        "name": "GS리테일",
+        "corr_target": "004170"
+      },
+      {
+        "code": "282330",
+        "name": "BGF리테일",
+        "corr_target": "004170"
+      }
+    ]
+  },
+  "음식료": {
+    "leaders": [
+      {
+        "code": "097950",
+        "name": "CJ제일제당",
+        "weight": 1.0
+      }
+    ],
+    "followers": [
+      {
+        "code": "271560",
+        "name": "오리온",
+        "corr_target": "097950"
+      },
+      {
+        "code": "004370",
+        "name": "농심",
+        "corr_target": "097950"
+      },
+      {
+        "code": "003230",
+        "name": "삼양식품",
+        "corr_target": "097950"
+      },
+      {
+        "code": "033780",
+        "name": "KT&G",
+        "corr_target": "097950"
+      },
+      {
+        "code": "005300",
+        "name": "롯데칠성",
+        "corr_target": "097950"
+      }
+    ]
+  },
+  "화장품": {
+    "leaders": [
+      {
+        "code": "090430",
+        "name": "아모레퍼시픽",
+        "weight": 1.0
+      }
+    ],
+    "followers": [
+      {
+        "code": "002790",
+        "name": "아모레G",
+        "corr_target": "090430"
+      },
+      {
+        "code": "051900",
+        "name": "LG생활건강",
+        "corr_target": "090430"
+      },
+      {
+        "code": "214150",
+        "name": "클래시스",
+        "corr_target": "090430"
+      },
+      {
+        "code": "092730",
+        "name": "네오팜",
+        "corr_target": "090430"
+      },
+      {
+        "code": "078520",
+        "name": "에이블씨엔씨",
+        "corr_target": "090430"
+      }
+    ]
+  },
+  "통신": {
+    "leaders": [
+      {
+        "code": "017670",
+        "name": "SK텔레콤",
+        "weight": 1.0
+      }
+    ],
+    "followers": [
+      {
+        "code": "030200",
+        "name": "KT",
+        "corr_target": "017670"
+      },
+      {
+        "code": "032640",
+        "name": "LG유플러스",
+        "corr_target": "017670"
+      },
+      {
+        "code": "036570",
+        "name": "엔씨소프트",
+        "corr_target": "017670"
+      }
+    ]
+  }
+}
