@@ -368,11 +368,39 @@ def get_follower_opportunities(
             gap = leader_change - follower_change
             correlation = follower['correlation']
 
-            # V10 점수 계산 (간이)
-            score = 50
-            score += min(35, leader_change * 7)  # 대장주 움직임
-            score += min(25, correlation * 30)   # 상관계수
-            score += min(25, gap * 5)            # 캐치업 갭
+            # V10 점수 계산 (상관계수 기반 차등)
+            score = 40  # 기본 점수
+
+            # 1. 대장주 움직임 (최대 20점)
+            if leader_change >= 10:
+                score += 20
+            elif leader_change >= 7:
+                score += 16
+            elif leader_change >= 5:
+                score += 12
+            elif leader_change >= 3:
+                score += 8
+
+            # 2. 실측 상관계수 (최대 25점) - 핵심 요소
+            if correlation >= 0.8:
+                score += 25
+            elif correlation >= 0.7:
+                score += 20
+            elif correlation >= 0.6:
+                score += 14
+            elif correlation >= 0.5:
+                score += 8
+
+            # 3. 캐치업 갭 (최대 15점)
+            if gap >= 8:
+                score += 15
+            elif gap >= 6:
+                score += 12
+            elif gap >= 4:
+                score += 8
+            elif gap >= 2:
+                score += 4
+
             score = min(100, score)
 
             opportunities.append({
