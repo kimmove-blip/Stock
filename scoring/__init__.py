@@ -28,7 +28,8 @@ from .score_v10_leader_follower import (
     calculate_score_v10,
     calculate_score_v10_with_market_data,
     get_follower_opportunities,
-    THEME_STOCK_MAP,
+    get_reference_info,
+    load_reference,
 )
 
 # 버전별 함수 매핑
@@ -142,7 +143,8 @@ __all__ = [
     'calculate_score_v10',
     'calculate_score_v10_with_market_data',
     'get_follower_opportunities',
-    'THEME_STOCK_MAP',
+    'get_reference_info',
+    'load_reference',
     'calculate_score',
     'compare_scores',
     'list_versions',
