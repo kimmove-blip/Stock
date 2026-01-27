@@ -139,6 +139,7 @@ class PortfolioAdvisor:
         1. 기술적 점수 + 신호
         2. 현재 수익률
         3. 위험 신호 여부
+        4. 점수 기반 매도 신호 필터링 (점수 >= 70이면 매도 신호 무시)
         """
         score = analysis['score']
         signals = analysis['signals'] or []
@@ -161,34 +162,35 @@ class PortfolioAdvisor:
         danger_count = sum(1 for s in signals if s in danger_signals)
         positive_count = sum(1 for s in signals if s in positive_signals)
 
-        reasons = []
-
-        # 1. 강력 매도: 위험 신호 2개 이상 + 수익 중
-        if danger_count >= 2 and profit_rate > 5:
-            return '강력매도', '위험 신호 다수 감지, 수익 실현 권장'
-
-        # 2. 매도 권장
-        if has_danger and profit_rate > 10:
-            return '매도', f'수익률 {profit_rate:.1f}%, 하락 신호 감지'
-
-        if score < 30 and profit_rate > 0:
-            return '매도', f'기술적 점수 낮음({score}점), 수익 실현 권장'
-
-        # 3. 손절 권장
+        # 1. 손절 권장 (점수와 무관하게 항상 적용)
         if profit_rate < -15 and score < 40:
             return '손절', f'손실률 {profit_rate:.1f}%, 반등 신호 약함'
 
         if profit_rate < -20:
             return '손절검토', f'손실률 {profit_rate:.1f}%, 추가 하락 위험'
 
-        # 4. 추가매수
+        # 2. 점수 기반 필터링: 점수 >= 70이면 매도 신호 무시
+        if score >= 70:
+            if has_positive or profit_rate < 0:
+                return '추가매수', f'기술적 점수 우수({score}점), 반등 예상'
+            return '보유', f'점수 우수({score}점), 추세 유지 중'
+
+        # 3. 과열 주의: 위험 신호 2개 이상 (점수 < 70)
+        if danger_count >= 2:
+            return '과열 주의', '위험 신호 다수 감지'
+
+        # 4. 주의 권장 (점수 < 70)
+        if has_danger:
+            return '주의', '하락 신호 감지'
+
+        if score < 30:
+            return '주의', f'기술적 점수 낮음({score}점)'
+
+        # 5. 추가매수
         if has_positive and profit_rate < -5 and score >= 50:
             return '추가매수', f'긍정 신호 감지, 저점 매수 기회'
 
-        if score >= 70 and profit_rate < 0:
-            return '추가매수', f'기술적 점수 우수({score}점), 반등 예상'
-
-        # 5. 보유 (기본)
+        # 6. 보유 (기본)
         if score >= 50:
             if profit_rate > 0:
                 return '보유', f'점수 양호({score}점), 추세 유지 중'

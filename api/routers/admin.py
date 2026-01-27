@@ -29,6 +29,7 @@ class UserInfo(BaseModel):
     last_login: Optional[str] = None
     is_active: bool = True
     is_admin: bool = False
+    auto_trade_enabled: bool = False
     email_subscription: bool = False
     telegram_enabled: bool = False
     portfolio_count: int = 0
@@ -53,7 +54,7 @@ async def get_all_users(
             SELECT
                 u.id, u.email, u.username, u.name,
                 u.created_at, u.last_login, u.is_active, u.is_admin,
-                u.email_subscription, u.telegram_alerts_enabled,
+                u.auto_trade_enabled, u.email_subscription, u.telegram_alerts_enabled,
                 (SELECT COUNT(*) FROM portfolios WHERE user_id = u.id) as portfolio_count,
                 (SELECT COUNT(*) FROM watchlists WHERE user_id = u.id) as watchlist_count
             FROM users u
@@ -72,6 +73,7 @@ async def get_all_users(
             last_login=row['last_login'] if row['last_login'] else None,
             is_active=bool(row['is_active']),
             is_admin=bool(row['is_admin']),
+            auto_trade_enabled=bool(row['auto_trade_enabled']),
             email_subscription=bool(row['email_subscription']),
             telegram_enabled=bool(row['telegram_alerts_enabled']),
             portfolio_count=row['portfolio_count'] or 0,
@@ -85,6 +87,7 @@ class UserUpdateRequest(BaseModel):
     """회원 정보 수정 요청"""
     is_admin: Optional[bool] = None
     is_active: Optional[bool] = None
+    auto_trade_enabled: Optional[bool] = None
 
 
 @router.put("/users/{user_id}")
@@ -112,6 +115,11 @@ async def update_user(
             conn.execute(
                 "UPDATE users SET is_active = ? WHERE id = ?",
                 (1 if request.is_active else 0, user_id)
+            )
+        if request.auto_trade_enabled is not None:
+            conn.execute(
+                "UPDATE users SET auto_trade_enabled = ? WHERE id = ?",
+                (1 if request.auto_trade_enabled else 0, user_id)
             )
         conn.commit()
 

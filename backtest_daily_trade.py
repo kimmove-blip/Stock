@@ -39,7 +39,8 @@ class DailyTradeBacktest:
     """일일매매 백테스트 시스템"""
 
     def __init__(self, max_workers: int = 10, engines: List[str] = None,
-                 top_n: int = 10, fixed_allocation: int = None):
+                 top_n: int = 10, fixed_allocation: int = None,
+                 score_based: bool = False, no_marcap_limit: bool = False):
         self.max_workers = max_workers
         self.stock_data_cache: Dict[str, pd.DataFrame] = {}
         self.all_stocks: Optional[pd.DataFrame] = None
@@ -53,6 +54,12 @@ class DailyTradeBacktest:
 
         # 고정 투자금액 (None이면 차등 금액 사용)
         self.fixed_allocation = fixed_allocation
+
+        # 점수 기반 투자 모드 (85점↑: 50만원, 75~84점: 20만원)
+        self.score_based = score_based
+
+        # 시총 상한 제거 여부
+        self.no_marcap_limit = no_marcap_limit
 
         # 케이스별 결과 저장
         self.results = {
@@ -79,7 +86,7 @@ class DailyTradeBacktest:
         return (11 - rank) * 50_000
 
     def load_stock_list(self) -> pd.DataFrame:
-        """종목 리스트 로드 (시총 300억~1조, 특수종목 제외)"""
+        """종목 리스트 로드 (시총 300억 이상, 특수종목 제외)"""
         print("[1] 종목 리스트 로딩...")
         krx = fdr.StockListing("KRX")
 
@@ -87,9 +94,12 @@ class DailyTradeBacktest:
         df = krx[['Code', 'Name', 'Market', 'Marcap', 'Amount', 'Close']].copy()
         df['Code'] = df['Code'].astype(str).str.zfill(6)
 
-        # 시총 300억 이상, 1조 이하
+        # 시총 300억 이상
         df = df[df['Marcap'] >= 30_000_000_000]
-        df = df[df['Marcap'] <= 1_000_000_000_000]
+
+        # 시총 상한 (옵션)
+        if not self.no_marcap_limit:
+            df = df[df['Marcap'] <= 1_000_000_000_000]
 
         # 특수 종목 제외
         exclude_keywords = [
@@ -305,6 +315,34 @@ class DailyTradeBacktest:
 
         return selected
 
+    def select_by_score(self, scored_stocks: List[Dict]) -> List[Dict]:
+        """점수 기준 종목 선정 (50점↑: 30만원)"""
+        selected = []
+        rank = 1
+
+        for stock in scored_stocks:
+            score = stock['score']
+
+            # 50점 이상만 30만원 투자
+            if score >= 50:
+                allocation = 300_000
+            else:
+                continue  # 50점 미만은 투자 안함
+
+            close_price = stock['close']
+
+            # 1주도 못 사는 경우 스킵
+            if close_price > allocation:
+                continue
+
+            stock_with_rank = stock.copy()
+            stock_with_rank['rank'] = rank
+            stock_with_rank['allocation'] = allocation
+            selected.append(stock_with_rank)
+            rank += 1
+
+        return selected
+
     def get_next_trading_day_ohlcv(self, code: str, current_date: datetime) -> Optional[Dict]:
         """다음 거래일의 시가/종가 조회 (전일 종가 포함)"""
         if code not in self.stock_data_cache:
@@ -489,10 +527,14 @@ class DailyTradeBacktest:
 
         print(f"  기간: {start_date.strftime('%Y-%m-%d')} ~ {end_date.strftime('%Y-%m-%d')} ({weeks}주)")
         print(f"  매매 규칙: 다음날 시가 매수 → 당일 종가 매도")
-        if self.fixed_allocation:
+        if self.score_based:
+            print(f"  투자 기준: 점수 기반 (50점↑: 30만원)")
+        elif self.fixed_allocation:
             print(f"  투자 한도: TOP {self.top_n} 종목 각 {self.fixed_allocation:,}원")
         else:
             print(f"  순위별 한도: 1위 50만원 ~ 10위 5만원")
+        if self.no_marcap_limit:
+            print(f"  시총 조건: 300억 이상 (상한 없음)")
         print(f"  스킵 조건: 시가 갭 상승 15% 이상 시 매수 제외")
         print("=" * 80)
 
@@ -538,11 +580,15 @@ class DailyTradeBacktest:
                     scores['v1'], scores['v2'], scores['v4']
                 )
 
-            # 선택된 엔진별 TOP 10 선정 및 매매 시뮬레이션
+            # 선택된 엔진별 종목 선정 및 매매 시뮬레이션
             engine_score_map = {'v1': scores['v1'], 'v2': scores['v2'], 'v4': scores['v4'], 'v5': scores['v5'], 'avg': avg_scores}
             for engine in self.engines:
                 engine_scores = engine_score_map.get(engine, [])
-                selected = self.select_top10_with_skip(engine_scores)
+                # 점수 기반 모드 vs TOP N 모드
+                if self.score_based:
+                    selected = self.select_by_score(engine_scores)
+                else:
+                    selected = self.select_top10_with_skip(engine_scores)
                 daily_result = self.simulate_daily_trades(engine, selected, screening_date)
 
                 self.results[engine]['daily'].append(daily_result)
@@ -746,6 +792,10 @@ def main():
     parser.add_argument('--top-n', type=int, default=10, help='TOP N 종목 수 (기본: 10)')
     parser.add_argument('--fixed-amount', type=int, default=None,
                         help='고정 투자금액 (미설정 시 차등 금액)')
+    parser.add_argument('--score-based', action='store_true',
+                        help='점수 기반 투자 (85점↑: 50만원, 75~84점: 20만원)')
+    parser.add_argument('--no-marcap-limit', action='store_true',
+                        help='시총 상한 제거 (기본: 1조 이하)')
     args = parser.parse_args()
 
     engines = [e.strip().lower() for e in args.engines.split(',')]
@@ -753,7 +803,9 @@ def main():
         max_workers=args.workers,
         engines=engines,
         top_n=args.top_n,
-        fixed_allocation=args.fixed_amount
+        fixed_allocation=args.fixed_amount,
+        score_based=args.score_based,
+        no_marcap_limit=args.no_marcap_limit
     )
     backtester.run_backtest(weeks=args.weeks, resume=args.resume)
 

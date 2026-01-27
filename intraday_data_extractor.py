@@ -1,15 +1,12 @@
 #!/usr/bin/env python3
 """
-V1-V4 상위 종목 장중 데이터 추출기
+V1-V4 상위 종목 일봉 데이터 추출기
 
-각 스코어링 버전의 상위 20종목에 대해 장중 데이터를 추출합니다.
+각 스코어링 버전의 상위 20종목에 대해 일봉 데이터를 추출합니다.
 
 추출 데이터:
 - 전일 거래대금
-- 당일 시초가
-- 당일 09:05 주가/누적거래량
-- 당일 09:20 주가/누적거래량
-- 고가, 저가, 종가, 거래량, 거래대금
+- 당일 시초가, 고가, 저가, 종가, 거래량, 거래대금
 
 사용법:
     python intraday_data_extractor.py              # 기본 실행 (20일)
@@ -30,7 +27,6 @@ import FinanceDataReader as fdr
 
 from scoring import SCORING_FUNCTIONS
 from config import OUTPUT_DIR
-from trading.trade_logger import TradeLogger
 
 warnings.filterwarnings("ignore")
 
@@ -39,31 +35,6 @@ MIN_MARKET_CAP = 30_000_000_000
 MAX_MARKET_CAP = 1_000_000_000_000
 MIN_TRADING_AMOUNT = 300_000_000
 MAX_WORKERS = 5
-
-
-def get_kis_client():
-    """KIS 클라이언트 초기화 (실전투자용)"""
-    try:
-        # 사용자 2번 (실전투자)의 API 키 사용
-        logger = TradeLogger()
-        api_key_data = logger.get_api_key_settings(2)
-
-        if not api_key_data or not api_key_data.get('app_key'):
-            print("[오류] API 키 설정을 찾을 수 없습니다.")
-            return None
-
-        from api.services.kis_client import KISClient
-        client = KISClient(
-            app_key=api_key_data['app_key'],
-            app_secret=api_key_data['app_secret'],
-            account_number=api_key_data.get('account_number'),
-            account_product_code=api_key_data.get('account_product_code', '01'),
-            is_virtual=False  # 실전투자
-        )
-        return client
-    except Exception as e:
-        print(f"[오류] KIS 클라이언트 초기화 실패: {e}")
-        return None
 
 
 def get_trading_days(num_days: int = 20) -> list:
@@ -178,63 +149,7 @@ def get_daily_data(code: str, target_date: str) -> dict:
         return None
 
 
-def get_intraday_data(kis_client, code: str, target_date: str) -> dict:
-    """
-    특정 날짜의 분봉 데이터에서 09:05, 09:20 시점 추출
-
-    Returns:
-        {
-            'price_0905': 09:05 주가,
-            'price_0920': 09:20 주가,
-            'cum_vol_0905': 09:05 누적거래량,
-            'cum_vol_0920': 09:20 누적거래량,
-        }
-    """
-    result = {
-        'price_0905': None,
-        'price_0920': None,
-        'cum_vol_0905': None,
-        'cum_vol_0920': None,
-    }
-
-    if kis_client is None:
-        return result
-
-    try:
-        # YYYYMMDD 형식으로 변환
-        date_yyyymmdd = target_date.replace('-', '')
-
-        # 분봉 데이터 조회
-        minute_data = kis_client.get_minute_chart_by_date(code, date_yyyymmdd)
-
-        if not minute_data:
-            # 당일 분봉 조회 시도
-            minute_data = kis_client.get_minute_chart(code)
-
-        if not minute_data:
-            return result
-
-        # 09:05, 09:20 시점 찾기
-        for item in minute_data:
-            time_str = item.get('time', '')
-
-            # 09:05 근처 (090500 ~ 090559)
-            if time_str.startswith('0905'):
-                result['price_0905'] = item.get('close')
-                result['cum_vol_0905'] = item.get('cum_volume')
-
-            # 09:20 근처 (092000 ~ 092059)
-            if time_str.startswith('0920'):
-                result['price_0920'] = item.get('close')
-                result['cum_vol_0920'] = item.get('cum_volume')
-
-        return result
-
-    except Exception as e:
-        return result
-
-
-def analyze_single_stock(stock_info: dict, target_date: str, kis_client) -> dict:
+def analyze_single_stock(stock_info: dict, target_date: str) -> dict:
     """단일 종목 분석"""
     code = stock_info['Code']
     name = stock_info['Name']
@@ -253,9 +168,6 @@ def analyze_single_stock(stock_info: dict, target_date: str, kis_client) -> dict
         if daily is None:
             return None
 
-        # 분봉 데이터 (09:05, 09:20)
-        intraday = get_intraday_data(kis_client, code, target_date)
-
         return {
             'code': code,
             'name': name,
@@ -267,16 +179,12 @@ def analyze_single_stock(stock_info: dict, target_date: str, kis_client) -> dict
             'close': daily['close'],
             'volume': daily['volume'],
             'trading_value': daily['trading_value'],
-            'price_0905': intraday['price_0905'],
-            'price_0920': intraday['price_0920'],
-            'cum_vol_0905': intraday['cum_vol_0905'],
-            'cum_vol_0920': intraday['cum_vol_0920'],
         }
     except Exception as e:
         return None
 
 
-def analyze_date(date_str: str, kis_client, top_n: int = 20) -> dict:
+def analyze_date(date_str: str, top_n: int = 20) -> dict:
     """특정 날짜 분석"""
     print(f"\n[{date_str}] 분석 시작...")
 
@@ -293,7 +201,7 @@ def analyze_date(date_str: str, kis_client, top_n: int = 20) -> dict:
 
     with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
         futures = {
-            executor.submit(analyze_single_stock, stock, date_str, kis_client): stock
+            executor.submit(analyze_single_stock, stock, date_str): stock
             for stock in stock_list
         }
 
@@ -322,10 +230,6 @@ def analyze_date(date_str: str, kis_client, top_n: int = 20) -> dict:
                 'score': r['scores'].get(version, 0),
                 'prev_trading_value': r['prev_trading_value'],
                 'open': r['open'],
-                'price_0905': r['price_0905'],
-                'price_0920': r['price_0920'],
-                'cum_vol_0905': r['cum_vol_0905'],
-                'cum_vol_0920': r['cum_vol_0920'],
                 'high': r['high'],
                 'low': r['low'],
                 'close': r['close'],
@@ -361,10 +265,6 @@ def save_to_excel(results: list, output_path: str):
                         '점수': stock['score'],
                         '전일거래대금(억)': round(stock['prev_trading_value'] / 1e8, 1) if stock['prev_trading_value'] else '',
                         '시가': stock['open'],
-                        '09:05주가': stock['price_0905'] if stock['price_0905'] else '',
-                        '09:20주가': stock['price_0920'] if stock['price_0920'] else '',
-                        '09:05누적거래량': stock['cum_vol_0905'] if stock['cum_vol_0905'] else '',
-                        '09:20누적거래량': stock['cum_vol_0920'] if stock['cum_vol_0920'] else '',
                         '고가': stock['high'],
                         '저가': stock['low'],
                         '종가': stock['close'],
@@ -379,27 +279,19 @@ def save_to_excel(results: list, output_path: str):
 
 
 def main():
-    parser = argparse.ArgumentParser(description='V1-V4 상위 종목 장중 데이터 추출')
+    parser = argparse.ArgumentParser(description='V1-V4 상위 종목 일봉 데이터 추출')
     parser.add_argument('--days', type=int, default=20, help='분석할 거래일 수')
     parser.add_argument('--top', type=int, default=20, help='버전별 상위 종목 수')
     args = parser.parse_args()
 
     print("\n" + "=" * 70)
-    print(f"  V1-V4 상위 종목 장중 데이터 추출")
+    print(f"  V1-V4 상위 종목 일봉 데이터 추출")
     print(f"  분석 기간: {args.days} 거래일, 버전별 상위 {args.top}종목")
     print(f"  실행 시간: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     print("=" * 70)
 
-    # KIS 클라이언트 초기화
-    print("\n[1/4] KIS 클라이언트 초기화...")
-    kis_client = get_kis_client()
-    if kis_client:
-        print("  → 초기화 성공 (분봉 데이터 조회 가능)")
-    else:
-        print("  → 초기화 실패 (분봉 데이터 없이 진행)")
-
     # 거래일 목록
-    print("\n[2/4] 거래일 목록 조회...")
+    print("\n[1/3] 거래일 목록 조회...")
     trading_days = get_trading_days(args.days)
     if not trading_days:
         print("[오류] 거래일 조회 실패")
@@ -408,20 +300,20 @@ def main():
     print(f"  → {len(trading_days)}일: {trading_days[0]} ~ {trading_days[-1]}")
 
     # 날짜별 분석
-    print(f"\n[3/4] 날짜별 분석...")
+    print(f"\n[2/3] 날짜별 분석...")
     all_results = []
 
     for i, date_str in enumerate(trading_days, 1):
         print(f"\n--- [{i}/{len(trading_days)}] ---")
-        result = analyze_date(date_str, kis_client, top_n=args.top)
+        result = analyze_date(date_str, top_n=args.top)
         all_results.append(result)
 
         if i < len(trading_days):
             time.sleep(1)
 
     # 저장
-    print(f"\n[4/4] 결과 저장...")
-    output_filename = f"intraday_data_v1_v4_{datetime.now().strftime('%Y%m%d')}.xlsx"
+    print(f"\n[3/3] 결과 저장...")
+    output_filename = f"daily_data_v1_v4_{datetime.now().strftime('%Y%m%d')}.xlsx"
     output_path = os.path.join(OUTPUT_DIR, output_filename)
     save_to_excel(all_results, output_path)
 

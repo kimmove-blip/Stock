@@ -20,6 +20,7 @@ router = APIRouter()
 
 class AlertItem(BaseModel):
     """알림 항목"""
+    id: int
     stock_code: str
     stock_name: Optional[str] = None
     alert_type: str
@@ -44,6 +45,7 @@ async def get_alert_history(
 
     items = [
         AlertItem(
+            id=alert['id'],
             stock_code=alert['stock_code'],
             stock_name=alert.get('stock_name'),
             alert_type=alert['alert_type'],
@@ -66,3 +68,13 @@ async def clear_alert_history(
 ):
     """알림 기록 전체 삭제"""
     db.clear_alert_history(current_user['id'])
+
+
+@router.delete("/{alert_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_alert(
+    alert_id: int,
+    current_user: dict = Depends(get_current_user_required),
+    db: DatabaseManager = Depends(get_db)
+):
+    """알림 개별 삭제"""
+    db.delete_alert(current_user['id'], alert_id)

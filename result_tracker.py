@@ -17,6 +17,7 @@ from config import OUTPUT_DIR
 
 def get_previous_result_file():
     """전날 결과 파일 찾기 (오늘 파일 제외)"""
+    import re
     pattern = os.path.join(OUTPUT_DIR, "top100_*.xlsx")
     files = glob.glob(pattern)
 
@@ -25,8 +26,9 @@ def get_previous_result_file():
 
     today_str = datetime.now().strftime("%Y%m%d")
 
-    # 오늘 파일 제외하고 가장 최근 파일
-    files = [f for f in files if today_str not in f]
+    # top100_YYYYMMDD.xlsx 형식만 필터링 (strict_report, trend 등 제외)
+    date_pattern = re.compile(r'top100_\d{8}\.xlsx$')
+    files = [f for f in files if date_pattern.search(f) and today_str not in f]
 
     if not files:
         return None

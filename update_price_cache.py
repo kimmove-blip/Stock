@@ -89,7 +89,10 @@ def fetch_prices_from_naver(stock_codes: list, batch_size: int = 100) -> list:
                                 return None
                             if isinstance(val, (int, float)):
                                 return int(val)
-                            return int(str(val).replace(',', '').replace('원', '').strip() or 0)
+                            s = str(val).replace(',', '').replace('원', '').strip()
+                            if not s or s == '-':
+                                return None
+                            return int(s)
 
                         def parse_float(val):
                             if val is None:
@@ -117,13 +120,14 @@ def fetch_prices_from_naver(stock_codes: list, batch_size: int = 100) -> list:
                                 return 0
 
                         current_price = parse_price(item.get('closePrice'))
-                        prev_close = current_price - parse_price(item.get('compareToPreviousClosePrice', 0)) if current_price else None
+                        change = parse_price(item.get('compareToPreviousClosePrice'))
+                        prev_close = (current_price - change) if (current_price and change is not None) else None
 
                         price_data = {
                             'stock_code': item.get('itemCode'),
                             'stock_name': item.get('stockName'),
                             'current_price': current_price,
-                            'change': parse_price(item.get('compareToPreviousClosePrice')),
+                            'change': change,
                             'change_rate': parse_float(item.get('fluctuationsRatio')),
                             'volume': parse_volume(item.get('accumulatedTradingVolume')),
                             'trading_value': parse_trading_value(item.get('accumulatedTradingValue')),

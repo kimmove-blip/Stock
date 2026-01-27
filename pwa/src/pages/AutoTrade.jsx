@@ -41,9 +41,11 @@ export default function AutoTrade() {
   const { data: accountData } = useQuery({
     queryKey: ['autoTradeAccount'],
     queryFn: () => autoTradeAPI.getAccount().then((res) => res.data),
-    staleTime: 1000 * 60,
+    staleTime: 1000 * 30,
     refetchOnWindowFocus: true,
-    retry: false,
+    refetchOnMount: 'always',
+    retry: 2,
+    retryDelay: 1000,
   });
 
   // API 키 설정 조회

@@ -93,34 +93,14 @@ export default function RealtimePicks() {
     }
   }, [hasSeenAnimation]);
 
-  // 하이브리드 시세 조회 함수 (캐시 우선 → 실시간)
+  // 실시간 시세 조회 함수 (캐시 스킵 - 항상 최신 데이터만)
   const fetchRealtimePrices = useCallback(async (codes) => {
     if (!codes || codes.length === 0) return;
 
     try {
       setIsRefreshing(true);
 
-      // 1단계: 캐시된 가격 먼저 조회 (빠름)
-      try {
-        const cachedResponse = await realtimeAPI.cachedPrices(codes);
-        if (cachedResponse.data?.prices?.length > 0) {
-          const priceMap = {};
-          cachedResponse.data.prices.forEach((p) => {
-            priceMap[p.stock_code] = {
-              current_price: p.current_price,
-              change: p.change,
-              change_rate: p.change_rate,
-              volume: p.volume,
-            };
-          });
-          setRealtimePrices(priceMap);
-          setLastUpdate(new Date(cachedResponse.data.cache_updated_at || Date.now()));
-        }
-      } catch (cacheError) {
-        console.log('캐시 조회 실패, 실시간 조회로 대체');
-      }
-
-      // 2단계: 실시간 시세 조회 (캐시 덮어쓰기)
+      // 실시간 시세만 조회 (캐시된 데이터 사용 안함 - 오래된 데이터 표시 방지)
       const response = await realtimeAPI.prices(codes);
       if (response.data?.prices) {
         const priceMap = {};
@@ -162,16 +142,20 @@ export default function RealtimePicks() {
     return () => clearInterval(interval);
   }, [autoRefresh, data, fetchRealtimePrices, showAnalyzing]);
 
-  // 수동 새로고침
+  // 수동 새로고침 (이전 데이터 즉시 삭제 후 새로 조회)
   const handleRefresh = () => {
     if (data?.items) {
+      // 이전 실시간 데이터 삭제 (오래된 데이터 표시 방지)
+      setRealtimePrices({});
       const codes = data.items.slice(0, 20).map((item) => item.code);
       fetchRealtimePrices(codes);
     }
   };
 
-  // 분석 애니메이션 또는 데이터 로딩 중
-  if (showAnalyzing || isLoading) {
+  // 분석 애니메이션 또는 데이터 로딩 중 또는 실시간 시세 첫 로딩 중
+  // (실시간 데이터 없으면 로딩 표시 - 오래된 TOP100 데이터 표시 방지)
+  const hasRealtimeData = Object.keys(realtimePrices).length > 0;
+  if (showAnalyzing || isLoading || (!hasRealtimeData && data?.items)) {
     return <AnalyzingLoader />;
   }
 

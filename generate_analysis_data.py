@@ -65,20 +65,28 @@ def load_stock_data(codes: List[str], names: Dict[str, str],
                 df = df[df['Volume'] > 0]
                 if len(df) >= 60:
                     return (code, df)
-        except:
+        except Exception as e:
             pass
         return None
 
+    from concurrent.futures import TimeoutError as FuturesTimeoutError
+
     success = 0
+    failed = 0
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
         futures = {executor.submit(fetch, code): code for code in codes}
-        for i, future in enumerate(as_completed(futures), 1):
-            result = future.result()
-            if result:
-                cache[result[0]] = result[1]
-                success += 1
+        for i, future in enumerate(as_completed(futures, timeout=300), 1):
+            try:
+                result = future.result(timeout=10)
+                if result:
+                    cache[result[0]] = result[1]
+                    success += 1
+                else:
+                    failed += 1
+            except Exception:
+                failed += 1
             if i % 100 == 0:
-                print(f"    → {i}/{len(codes)} 처리 ({success} 성공)")
+                print(f"    → {i}/{len(codes)} 처리 ({success} 성공, {failed} 실패)")
 
     print(f"    → {len(cache):,}개 종목 로드 완료")
     return cache
@@ -209,7 +217,7 @@ def generate_data(months: int = 3):
         name = names.get(code, code)
         for trade_date in trading_days:
             processed += 1
-            if processed % 5000 == 0:
+            if processed % 1000 == 0:
                 print(f"    → {processed:,}/{total:,} 처리 ({processed/total*100:.1f}%)")
 
             try:

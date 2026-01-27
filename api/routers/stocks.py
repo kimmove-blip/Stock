@@ -442,9 +442,41 @@ def get_stock_name(code: str) -> str:
 @router.get("/{code}", response_model=StockDetail)
 async def get_stock_detail(code: str):
     """종목 상세 정보 - DB캐시 우선, KIS API 보조, FDR 폴백 (5분 캐싱)"""
-    # 메모리 캐시 확인
+    # 메모리 캐시 확인 - 있으면 실시간 가격만 업데이트해서 반환
     cached = get_cached_stock_detail(code)
     if cached:
+        # 실시간 가격/등락률로 업데이트 (HTTP 호출 대신 직접 함수 사용)
+        try:
+            from api.routers.realtime import get_cached_realtime, set_realtime_cache, get_kis
+            rt = get_cached_realtime(code)
+            if not rt:
+                kis = get_kis()
+                if kis:
+                    rt = kis.get_current_price(code)
+                    if rt:
+                        set_realtime_cache(code, rt)
+            if rt:
+                return StockDetail(
+                    code=cached.code,
+                    name=cached.name,
+                    market=cached.market,
+                    current_price=rt.get('current_price', cached.current_price),
+                    change=rt.get('change', cached.change),
+                    change_rate=rt.get('change_rate', cached.change_rate),
+                    volume=rt.get('volume', cached.volume),
+                    market_cap=cached.market_cap,
+                    ma5=cached.ma5,
+                    ma20=cached.ma20,
+                    ma60=cached.ma60,
+                    rsi=cached.rsi,
+                    macd=cached.macd,
+                    macd_signal=cached.macd_signal,
+                    bb_mid=cached.bb_mid,
+                    bb_upper=cached.bb_upper,
+                    bb_lower=cached.bb_lower
+                )
+        except Exception as e:
+            print(f"[stocks/{code}] 실시간 조회 실패: {e}")
         return cached
 
     stock_name = get_stock_name(code)
@@ -537,13 +569,49 @@ async def get_stock_detail(code: str):
         except Exception:
             pass
 
+        # 실시간 가격/등락률/시가총액 조회 (DB캐시가 오래된 경우 대비)
+        realtime_price = kis_data.get('current_price', 0)
+        realtime_change = kis_data.get('change', 0)
+        realtime_rate = kis_data.get('change_rate', 0)
+        realtime_market_cap = market_cap  # 기본값
+        try:
+            # HTTP 호출 대신 직접 realtime 캐시/KIS API 사용 (deadlock 방지)
+            from api.routers.realtime import get_cached_realtime, set_realtime_cache, get_kis
+            rt_cached = get_cached_realtime(code)
+            if rt_cached:
+                realtime_price = rt_cached.get('current_price', realtime_price)
+                realtime_change = rt_cached.get('change', realtime_change)
+                realtime_rate = rt_cached.get('change_rate', realtime_rate)
+                # 시가총액: 억원 단위로 반환되므로 원 단위로 변환
+                if rt_cached.get('market_cap'):
+                    realtime_market_cap = rt_cached.get('market_cap') * 100000000
+            else:
+                # 캐시 없으면 KIS API 직접 호출
+                kis = get_kis()
+                if kis:
+                    rt_data = kis.get_current_price(code)
+                    if rt_data:
+                        realtime_price = rt_data.get('current_price', realtime_price)
+                        realtime_change = rt_data.get('change', realtime_change)
+                        realtime_rate = rt_data.get('change_rate', realtime_rate)
+                        if rt_data.get('market_cap'):
+                            realtime_market_cap = rt_data.get('market_cap') * 100000000
+                        set_realtime_cache(code, rt_data)
+        except Exception as e:
+            print(f"[stocks/{code}] 실시간 조회 실패: {e}")
+            pass  # 실패 시 기존 데이터 사용
+
+        # 시가총액 업데이트
+        if realtime_market_cap:
+            market_cap = realtime_market_cap
+
         result = StockDetail(
             code=code,
             name=name,
             market=market_type,
-            current_price=kis_data.get('current_price', 0),
-            change=kis_data.get('change', 0),
-            change_rate=kis_data.get('change_rate', 0),
+            current_price=realtime_price,
+            change=realtime_change,
+            change_rate=realtime_rate,
             volume=kis_data.get('volume', 0),
             market_cap=market_cap,
             ma5=ma5,
@@ -633,13 +701,28 @@ async def get_stock_detail(code: str):
         except Exception as mc_err:
             print(f"시가총액 조회 실패: {mc_err}")
 
+        # 실시간 가격/등락률 조회 (FDR 데이터가 오래된 경우 대비)
+        realtime_price = current_price
+        realtime_change = change
+        realtime_rate = change_rate
+        try:
+            import httpx
+            resp = httpx.get(f"http://localhost:8000/api/realtime/price/{code}", timeout=5.0)
+            if resp.status_code == 200:
+                rt_data = resp.json()
+                realtime_price = rt_data.get('current_price', realtime_price)
+                realtime_change = rt_data.get('change', realtime_change)
+                realtime_rate = rt_data.get('change_rate', realtime_rate)
+        except Exception:
+            pass  # 실패 시 FDR 데이터 사용
+
         result = StockDetail(
             code=code,
             name=stock_name,  # 이미 위에서 조회함
             market=market_type,
-            current_price=current_price,
-            change=change,
-            change_rate=change_rate,
+            current_price=realtime_price,
+            change=realtime_change,
+            change_rate=realtime_rate,
             volume=int(latest['거래량']),
             market_cap=market_cap,
             ma5=ma5,

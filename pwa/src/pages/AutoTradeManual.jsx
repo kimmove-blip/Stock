@@ -81,6 +81,21 @@ export default function AutoTradeManual() {
     enabled: activeTab === 'buy',
   });
 
+  // 미체결 주문 조회 (매도 주문 중복 방지용)
+  const { data: pendingOrdersData } = useQuery({
+    queryKey: ['autoTradePendingOrders'],
+    queryFn: () => autoTradeAPI.getPendingOrders().then((res) => res.data),
+    staleTime: 1000 * 10,
+    enabled: activeTab === 'sell',
+  });
+
+  // 미체결 매도 주문이 있는 종목 코드 Set
+  const pendingSellCodes = new Set(
+    (pendingOrdersData?.orders || [])
+      .filter(o => o.side === 'sell')
+      .map(o => o.stock_code)
+  );
+
   // 종목 검색
   const { data: searchResults, isLoading: searchLoading } = useQuery({
     queryKey: ['stockSearch', searchQuery],
@@ -310,27 +325,49 @@ export default function AutoTradeManual() {
             <div>
               <p className="text-sm font-medium text-gray-700 mb-2">보유 종목 선택</p>
               {holdings.length > 0 ? (
-                <div className="space-y-2 max-h-64 overflow-y-auto">
-                  {holdings.map((h) => (
-                    <button
-                      key={h.stock_code}
-                      onClick={() => handleSelectStock(h)}
-                      className="w-full p-3 text-left rounded-lg border border-gray-200 hover:border-blue-400 hover:bg-blue-50 transition-colors"
-                    >
-                      <div className="flex justify-between">
-                        <div>
-                          <p className="font-bold text-gray-800">{h.stock_name}</p>
-                          <p className="text-xs text-gray-500">{h.quantity}주 보유</p>
+                <div className="space-y-2">
+                  {holdings.map((h) => {
+                    const hasPendingSell = pendingSellCodes.has(h.stock_code);
+                    return (
+                      <button
+                        key={h.stock_code}
+                        onClick={() => !hasPendingSell && handleSelectStock(h)}
+                        disabled={hasPendingSell}
+                        className={`w-full p-3 text-left rounded-lg border transition-colors ${
+                          hasPendingSell
+                            ? 'border-gray-200 bg-gray-100 opacity-60 cursor-not-allowed'
+                            : 'border-gray-200 hover:border-blue-400 hover:bg-blue-50'
+                        }`}
+                      >
+                        <div className="flex justify-between">
+                          <div>
+                            <p className={`font-bold ${hasPendingSell ? 'text-gray-500' : 'text-gray-800'}`}>
+                              {h.stock_name}
+                              {hasPendingSell && <span className="ml-2 text-xs text-orange-500 font-normal">매도주문중</span>}
+                            </p>
+                            <p className="text-xs text-gray-500">
+                              {h.quantity}주 보유
+                              {h.score != null && (
+                                <span className={`ml-2 font-medium ${
+                                  h.score >= 80 ? 'text-red-500' :
+                                  h.score >= 60 ? 'text-orange-500' :
+                                  h.score >= 40 ? 'text-gray-600' : 'text-blue-500'
+                                }`}>
+                                  {h.score}점
+                                </span>
+                              )}
+                            </p>
+                          </div>
+                          <div className="text-right">
+                            <p className="font-medium">{h.current_price?.toLocaleString()}원</p>
+                            <p className={`text-xs ${(h.profit_rate || 0) >= 0 ? 'text-red-500' : 'text-blue-500'}`}>
+                              {(h.profit_rate || 0) >= 0 ? '+' : ''}{h.profit_rate?.toFixed(1)}%
+                            </p>
+                          </div>
                         </div>
-                        <div className="text-right">
-                          <p className="font-medium">{h.current_price?.toLocaleString()}원</p>
-                          <p className={`text-xs ${(h.profit_rate || 0) >= 0 ? 'text-red-500' : 'text-blue-500'}`}>
-                            {(h.profit_rate || 0) >= 0 ? '+' : ''}{h.profit_rate?.toFixed(1)}%
-                          </p>
-                        </div>
-                      </div>
-                    </button>
-                  ))}
+                      </button>
+                    );
+                  })}
                 </div>
               ) : (
                 <div className="text-center py-8 text-gray-400">보유 종목이 없습니다</div>
