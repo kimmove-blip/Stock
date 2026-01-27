@@ -24,25 +24,30 @@ STRATEGY_PRIORITY = {
     'v10_follower': 40,  # V10 대장주-종속주
 }
 
-# 기본 전략 설정
+# 기본 전략 설정 (v1.7 업데이트: 2026-01-27 백테스트 최종 결과)
+#
+# 최적 전략: V2>=65 + 거래대금 100억+
+# - 5개 종목, +7.68% 평균 (KOSPI 대비 +4.95%p)
+# - V2>=65가 V2>=55보다 성과 좋음 (+7.25% vs +1.63%)
+#
 DEFAULT_STRATEGY_CONFIG = {
     'v2_trend': {
         'enabled': True,
-        'score_threshold': 75,
-        'max_positions': 5,
+        'score_threshold': 65,   # V2>=65
+        'max_positions': 10,
         'exit_rules': {
-            'target_atr_mult': 1.5,
-            'stop_atr_mult': 0.8,
-            'time_stop_days': 3
+            'target_atr_mult': 1.0,  # 장중 청산용
+            'stop_atr_mult': 0.8,    # 장중 청산용
+            'time_stop_days': 1      # 당일 청산
         }
     },
     'v8_bounce': {
         'enabled': True,
-        'score_threshold': 70,
+        'score_threshold': 60,   # 하향 (70→60)
         'max_positions': 3,
         'exit_rules': {
-            'target_atr_mult': 1.2,
-            'stop_atr_mult': 0.6,
+            'target_atr_mult': 1.5,  # 상향 (1.2→1.5)
+            'stop_atr_mult': 1.2,    # 하향 (0.6→1.2)
             'time_stop_days': 2
         }
     },
@@ -53,6 +58,8 @@ DEFAULT_STRATEGY_CONFIG = {
         'exit_rules': {
             'target_catchup_pct': 70,
             'stop_pct': -3.0,
+            'target_atr_mult': 1.5,  # 추가
+            'stop_atr_mult': 1.0,    # 추가
             'time_stop_days': 3
         }
     }

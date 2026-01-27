@@ -362,10 +362,48 @@ def save_to_csv(records: list, recorded_at: datetime) -> str:
     return str(filepath)
 
 
+def run_auto_trader(user_id: int):
+    """스코어 기록 후 자동매매 트레이더 호출"""
+    import subprocess
+
+    script_path = PROJECT_ROOT / "intraday_auto_trader.py"
+    if not script_path.exists():
+        print(f"    [경고] 트레이더 스크립트 없음: {script_path}")
+        return
+
+    print(f"\n[4] 자동매매 트레이더 호출 (user_id={user_id})...")
+    try:
+        cmd = [sys.executable, str(script_path), '--user', str(user_id)]
+        result = subprocess.run(
+            cmd,
+            cwd=str(PROJECT_ROOT),
+            capture_output=True,
+            text=True,
+            timeout=180  # 3분 타임아웃
+        )
+
+        if result.returncode == 0:
+            print(f"    트레이더 실행 완료")
+            # 주요 결과만 출력
+            for line in result.stdout.split('\n'):
+                if any(kw in line for kw in ['매수', '매도', '청산', '시그널', '포지션']):
+                    print(f"    {line}")
+        else:
+            print(f"    트레이더 실행 실패 (code={result.returncode})")
+            if result.stderr:
+                print(f"    에러: {result.stderr[:200]}")
+    except subprocess.TimeoutExpired:
+        print(f"    트레이더 타임아웃 (3분)")
+    except Exception as e:
+        print(f"    트레이더 호출 오류: {e}")
+
+
 def main():
     parser = argparse.ArgumentParser(description='10분 단위 전 종목 스코어 기록')
     parser.add_argument('--filter', action='store_true', help='장 전 실행: 전일 기준 종목 필터링')
     parser.add_argument('--dry-run', action='store_true', help='테스트 모드 (저장 안함)')
+    parser.add_argument('--auto-trade', type=int, default=None, metavar='USER_ID',
+                        help='스코어 기록 후 자동매매 실행 (user_id 지정)')
     args = parser.parse_args()
 
     # 장 전 필터링 모드
@@ -437,6 +475,10 @@ def main():
             print(f"    저장 완료: {filepath}")
         else:
             print("    저장 실패")
+
+    # 자동매매 트레이더 호출
+    if args.auto_trade and not args.dry_run and filepath:
+        run_auto_trader(args.auto_trade)
 
     elapsed = (datetime.now() - recorded_at).total_seconds()
     print(f"\n" + "=" * 60)
