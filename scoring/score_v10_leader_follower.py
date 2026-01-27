@@ -105,9 +105,24 @@ THEME_STOCK_MAP = {
         ],
         "followers": [
             {"code": "052690", "name": "한전기술", "corr_target": "034020"},
+            {"code": "051600", "name": "한전KPS", "corr_target": "034020"},
             {"code": "083650", "name": "비에이치아이", "corr_target": "034020"},
+            {"code": "105840", "name": "우진", "corr_target": "034020"},
+            {"code": "013870", "name": "지투파워", "corr_target": "034020"},
             {"code": "092200", "name": "디아이씨", "corr_target": "034020"},
-            {"code": "267270", "name": "현대건설기계", "corr_target": "034020"},
+        ]
+    },
+    "전력설비/전선": {
+        "leaders": [
+            {"code": "267260", "name": "HD현대일렉트릭", "weight": 1.0},
+            {"code": "010120", "name": "LS ELECTRIC", "weight": 0.9},
+        ],
+        "followers": [
+            {"code": "298040", "name": "효성중공업", "corr_target": "267260"},
+            {"code": "001440", "name": "대한전선", "corr_target": "010120"},
+            {"code": "000500", "name": "가온전선", "corr_target": "010120"},
+            {"code": "000480", "name": "조선내화", "corr_target": "267260"},
+            {"code": "006260", "name": "LS", "corr_target": "010120"},
         ]
     },
     "전력/에너지": {
@@ -119,6 +134,7 @@ THEME_STOCK_MAP = {
             {"code": "017390", "name": "서울가스", "corr_target": "015760"},
             {"code": "034020", "name": "두산에너빌리티", "corr_target": "015760"},
             {"code": "267250", "name": "HD현대중공업", "corr_target": "015760"},
+            {"code": "267260", "name": "HD현대일렉트릭", "corr_target": "015760"},
         ]
     },
     # ==================== 바이오/헬스케어 ====================
@@ -159,6 +175,16 @@ THEME_STOCK_MAP = {
             {"code": "039840", "name": "디오", "corr_target": "096530"},
             {"code": "214370", "name": "케어젠", "corr_target": "096530"},
             {"code": "298380", "name": "에이비엘바이오", "corr_target": "096530"},
+        ]
+    },
+    "의료AI": {
+        "leaders": [
+            {"code": "328130", "name": "루닛", "weight": 1.0},
+        ],
+        "followers": [
+            {"code": "338220", "name": "뷰노", "corr_target": "328130"},
+            {"code": "322510", "name": "제이엘케이", "corr_target": "328130"},
+            {"code": "315640", "name": "딥노이드", "corr_target": "328130"},
         ]
     },
     # ==================== 플랫폼/IT서비스 ====================
@@ -277,9 +303,13 @@ THEME_STOCK_MAP = {
     "로봇": {
         "leaders": [
             {"code": "454910", "name": "두산로보틱스", "weight": 1.0},
+            {"code": "277810", "name": "레인보우로보틱스", "weight": 0.95},
         ],
         "followers": [
-            {"code": "277810", "name": "레인보우로보틱스", "corr_target": "454910"},
+            {"code": "340930", "name": "뉴로메카", "corr_target": "454910"},
+            {"code": "058610", "name": "에스피지", "corr_target": "277810"},
+            {"code": "446070", "name": "이랜시스", "corr_target": "277810"},
+            {"code": "313760", "name": "큐렉소", "corr_target": "454910"},
             {"code": "108490", "name": "로보티즈", "corr_target": "454910"},
             {"code": "090460", "name": "비에이치", "corr_target": "454910"},
             {"code": "264660", "name": "씨앤지하이테크", "corr_target": "454910"},
@@ -374,6 +404,19 @@ THEME_STOCK_MAP = {
             {"code": "005300", "name": "롯데칠성", "corr_target": "097950"},
         ]
     },
+    "K-푸드": {
+        "leaders": [
+            {"code": "003230", "name": "삼양식품", "weight": 1.0},
+            {"code": "004370", "name": "농심", "weight": 0.8},
+        ],
+        "followers": [
+            {"code": "005180", "name": "빙그레", "corr_target": "003230"},
+            {"code": "271560", "name": "오리온", "corr_target": "004370"},
+            {"code": "145990", "name": "삼양사", "corr_target": "003230"},
+            {"code": "097950", "name": "CJ제일제당", "corr_target": "004370"},
+            {"code": "005300", "name": "롯데칠성", "corr_target": "003230"},
+        ]
+    },
     "화장품": {
         "leaders": [
             {"code": "090430", "name": "아모레퍼시픽", "weight": 1.0},
@@ -384,6 +427,18 @@ THEME_STOCK_MAP = {
             {"code": "214150", "name": "클래시스", "corr_target": "090430"},
             {"code": "092730", "name": "네오팜", "corr_target": "090430"},
             {"code": "078520", "name": "에이블씨엔씨", "corr_target": "090430"},
+        ]
+    },
+    "화장품OEM": {
+        "leaders": [
+            {"code": "192820", "name": "코스맥스", "weight": 1.0},
+            {"code": "161890", "name": "한국콜마", "weight": 0.9},
+        ],
+        "followers": [
+            {"code": "352480", "name": "씨앤씨인터내셔널", "corr_target": "192820"},
+            {"code": "237690", "name": "에이블씨엔씨", "corr_target": "192820"},
+            {"code": "226320", "name": "잇츠한불", "corr_target": "161890"},
+            {"code": "241710", "name": "코스메카코리아", "corr_target": "192820"},
         ]
     },
     # ==================== 통신 ====================
