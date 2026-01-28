@@ -214,6 +214,8 @@ export const autoTradeAPI = {
   suggestions: (status) => api.get(`/auto-trade/suggestions${status ? `?status=${status}` : ''}`),
   // 성과 분석
   performance: (days = 30) => api.get(`/auto-trade/performance?days=${days}`),
+  // 일별 자산 히스토리 (그래프용)
+  dailyAsset: (days = 30) => api.get(`/auto-trade/performance/daily-asset?days=${days}`),
   // API 키 설정 조회
   getApiKey: () => api.get('/auto-trade/api-key'),
   // API 키 저장

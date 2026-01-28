@@ -780,6 +780,181 @@ async def get_performance(
         return empty_response
 
 
+@router.get("/performance/daily-asset")
+async def get_daily_asset_history(
+    days: int = 30,
+    current_user: dict = Depends(get_current_user_required)
+):
+    """
+    일별 총자산 히스토리 조회 (그래프용)
+    - 일별 총자산 (D+2예수금 + 평가금액)
+    - 초기투자금
+    - 코스피/코스닥 지수 (같은 스케일로 환산)
+    - 오늘 데이터는 실시간 조회
+    """
+    check_auto_trade_permission(current_user)
+
+    logger = get_trade_logger()
+    user_id = current_user.get('id')
+
+    # 초기투자금 조회
+    settings = logger.get_auto_trade_settings(user_id)
+    initial_investment = settings.get('initial_investment', 0) if settings else 0
+
+    # daily_performance 테이블에서 과거 일별 자산 조회
+    from_date = (datetime.now() - timedelta(days=days)).strftime('%Y-%m-%d')
+    today = datetime.now().strftime('%Y-%m-%d')
+
+    with logger._get_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT trade_date, total_assets, d2_cash, holdings_value
+            FROM daily_performance
+            WHERE user_id = ? AND trade_date >= ? AND trade_date < ?
+            ORDER BY trade_date ASC
+        """, (user_id, from_date, today))
+        rows = cursor.fetchall()
+
+    daily_data = []
+    for row in rows:
+        daily_data.append({
+            'date': row['trade_date'],
+            'total_asset': row['total_assets'] or 0,
+            'd2_cash': row['d2_cash'] or 0,
+            'holdings_value': row['holdings_value'] or 0
+        })
+
+    # 오늘 데이터는 실시간 조회
+    api_key_data = logger.get_api_key_settings(user_id)
+    if api_key_data:
+        try:
+            from api.services.kis_client import KISClient
+            import requests
+
+            is_mock = bool(api_key_data.get('is_mock', True))
+            client = KISClient(
+                app_key=api_key_data.get('app_key'),
+                app_secret=api_key_data.get('app_secret'),
+                account_number=api_key_data.get('account_number'),
+                account_product_code=api_key_data.get('account_product_code', '01'),
+                is_mock=is_mock
+            )
+
+            # 잔고 조회 API 직접 호출
+            token = client._get_access_token()
+            headers = {
+                "Content-Type": "application/json; charset=utf-8",
+                "authorization": f"Bearer {token}",
+                "appkey": client.app_key,
+                "appsecret": client.app_secret,
+                "tr_id": "VTTC8434R" if is_mock else "TTTC8434R",
+            }
+            params = {
+                "CANO": api_key_data.get('account_number'),
+                "ACNT_PRDT_CD": "01",
+                "AFHR_FLPR_YN": "N",
+                "OFL_YN": "",
+                "INQR_DVSN": "02",
+                "UNPR_DVSN": "01",
+                "FUND_STTL_ICLD_YN": "N",
+                "FNCG_AMT_AUTO_RDPT_YN": "N",
+                "PRCS_DVSN": "00",
+                "CTX_AREA_FK100": "",
+                "CTX_AREA_NK100": "",
+            }
+            resp = requests.get(
+                f"{client.BASE_URL}/uapi/domestic-stock/v1/trading/inquire-balance",
+                headers=headers,
+                params=params,
+                timeout=10
+            )
+            data = resp.json()
+
+            if data.get('output2'):
+                s = data['output2'][0] if isinstance(data['output2'], list) else data['output2']
+                d2_cash = int(s.get('nxdy_excc_amt', 0))
+                holdings_value = int(s.get('scts_evlu_amt', 0))
+                total_asset = int(s.get('tot_evlu_amt', 0))
+
+                daily_data.append({
+                    'date': today,
+                    'total_asset': total_asset,
+                    'd2_cash': d2_cash,
+                    'holdings_value': holdings_value
+                })
+        except Exception as e:
+            print(f"[일별자산] 실시간 조회 실패: {e}")
+
+    # 코스피/코스닥 지수 조회
+    kospi_data = []
+    kosdaq_data = []
+
+    try:
+        end_date = datetime.now()
+        start_date = end_date - timedelta(days=days + 10)
+
+        # 코스피 지수
+        kospi_df = fdr.DataReader('KS11', start_date.strftime('%Y-%m-%d'), end_date.strftime('%Y-%m-%d'))
+        if kospi_df is not None and len(kospi_df) > 0:
+            for idx, row in kospi_df.iterrows():
+                kospi_data.append({
+                    'date': idx.strftime('%Y-%m-%d'),
+                    'close': float(row['Close'])
+                })
+
+        # 코스닥 지수
+        kosdaq_df = fdr.DataReader('KQ11', start_date.strftime('%Y-%m-%d'), end_date.strftime('%Y-%m-%d'))
+        if kosdaq_df is not None and len(kosdaq_df) > 0:
+            for idx, row in kosdaq_df.iterrows():
+                kosdaq_data.append({
+                    'date': idx.strftime('%Y-%m-%d'),
+                    'close': float(row['Close'])
+                })
+    except Exception as e:
+        print(f"[일별자산] 지수 조회 실패: {e}")
+
+    # 같은 스케일로 환산 (초기투자금 기준 100%로 환산)
+    # 지수도 첫 날 기준 100%로 환산
+    scaled_kospi = []
+    scaled_kosdaq = []
+
+    if kospi_data and len(kospi_data) > 0:
+        base_kospi = kospi_data[0]['close']
+        for item in kospi_data:
+            scaled_kospi.append({
+                'date': item['date'],
+                'value': round(item['close'] / base_kospi * 100, 2) if base_kospi > 0 else 100
+            })
+
+    if kosdaq_data and len(kosdaq_data) > 0:
+        base_kosdaq = kosdaq_data[0]['close']
+        for item in kosdaq_data:
+            scaled_kosdaq.append({
+                'date': item['date'],
+                'value': round(item['close'] / base_kosdaq * 100, 2) if base_kosdaq > 0 else 100
+            })
+
+    # 총자산도 초기투자금 기준 100%로 환산
+    scaled_asset = []
+    base_asset = initial_investment if initial_investment > 0 else (daily_data[0]['total_asset'] if daily_data else 0)
+
+    for item in daily_data:
+        scaled_asset.append({
+            'date': item['date'],
+            'total_asset': item['total_asset'],
+            'value': round(item['total_asset'] / base_asset * 100, 2) if base_asset > 0 else 100
+        })
+
+    return {
+        'initial_investment': initial_investment,
+        'daily_asset': daily_data,
+        'scaled_asset': scaled_asset,
+        'scaled_kospi': scaled_kospi,
+        'scaled_kosdaq': scaled_kosdaq,
+        'base_asset': base_asset
+    }
+
+
 # ==================== API 키 관리 ====================
 
 class ApiKeyRequest(BaseModel):
