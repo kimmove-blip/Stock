@@ -70,20 +70,26 @@ async def get_top100(
         print(f"[TOP100 Error] {e}")
         raise HTTPException(status_code=500, detail="데이터 파일 읽기 중 오류가 발생했습니다")
 
-    # 캐시된 현재가 로드 (장중에만 사용, 오늘 데이터만)
+    # 캐시된 현재가 로드 (장중에만 사용)
     cached_prices = {}
     try:
         from database.db_manager import DatabaseManager
         db = DatabaseManager()
-        all_cached = db.get_cached_prices()
 
-        # 오늘 날짜의 캐시만 사용 (장 시작 전/후 혼선 방지)
-        today_str = datetime.now().strftime('%Y-%m-%d')
-        for p in all_cached:
-            updated = p.get('updated_at', '')
-            # updated_at이 오늘 날짜인 경우만 사용
-            if updated and updated.startswith(today_str):
-                cached_prices[p['stock_code']] = p
+        # 장중(09:00~15:30)에만 캐시 사용
+        now = datetime.now()
+        is_market_hours = 9 <= now.hour < 16  # 09:00 ~ 15:59
+
+        if is_market_hours:
+            all_cached = db.get_cached_prices()
+
+            # 오늘 09:00 이후의 캐시만 사용 (장 시작 전 캐시 제외)
+            today_market_start = now.replace(hour=9, minute=0, second=0).strftime('%Y-%m-%d %H:%M:%S')
+            for p in all_cached:
+                updated = p.get('updated_at', '')
+                # updated_at이 오늘 장 시작 이후인 경우만 사용
+                if updated and updated >= today_market_start:
+                    cached_prices[p['stock_code']] = p
     except Exception as e:
         print(f"[TOP100] 캐시 로드 실패: {e}")
 
