@@ -2094,9 +2094,36 @@ class AutoTrader:
                     continue
 
             quantity = actual_investment // current_price
+
+            # 가용현금 부족 시에도 semi 모드는 시그널 기록
             if quantity <= 0:
-                print(f"  {stock_name}: 매수 가능 수량 없음")
-                continue
+                if trade_mode == 'semi':
+                    # 종목당 투자금으로 수량 계산 (가용현금 무시)
+                    quantity = investment_per_stock // current_price
+                    if quantity <= 0:
+                        quantity = 1  # 최소 1주
+                    print(f"\n매수제안 (가용현금 부족): {stock_name} ({stock_code})")
+                    print(f"  현재가: {current_price:,}원, 점수: {score}점")
+                    print(f"  권장수량: {quantity}주 = {current_price * quantity:,}원")
+
+                    suggestion_id = self.logger.add_buy_suggestion(
+                        user_id=self.user_id,
+                        stock_code=stock_code,
+                        stock_name=stock_name,
+                        current_price=current_price,
+                        quantity=quantity,
+                        score=score,
+                        reason=f"장중스크리닝 {score}점 (가용현금 부족)",
+                        signals=candidate.get("signals", [])
+                    )
+                    if suggestion_id:
+                        buy_count += 1
+                        print(f"  ✅ 매수 제안 저장 (suggestion_id={suggestion_id})")
+                        self.notifier.notify_suggestion(stock_name, current_price, quantity, stock_code)
+                    continue
+                else:
+                    print(f"  {stock_name}: 매수 가능 수량 없음")
+                    continue
 
             print(f"\n매수{'제안' if trade_mode == 'semi' else ''}: {stock_name} ({stock_code})")
             print(f"  현재가: {current_price:,}원, 점수: {score}점")
@@ -2354,7 +2381,15 @@ def main():
         trader.print_report(days=args.days)
     elif args.intraday:
         # 장중 10분 스크리닝 모드
-        trader.run_intraday(min_score=args.min_score)
+        # user_id가 지정된 경우 trade_mode 조회
+        trade_mode = 'auto'
+        if args.user_id:
+            logger = TradeLogger()
+            settings = logger.get_auto_trade_settings(args.user_id)
+            if settings:
+                db_mode = settings.get('trade_mode', 'auto')
+                trade_mode = db_mode if db_mode in ('semi', 'auto') else 'auto'
+        trader.run_intraday(min_score=args.min_score, trade_mode=trade_mode)
     else:
         trader.run()
 
