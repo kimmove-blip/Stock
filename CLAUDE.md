@@ -260,30 +260,97 @@ result = calculate_score(df, version='v4')
 result = calculate_score_v4_with_investor(df, investor_data)
 ```
 
-### 장중 스코어 기록 (V1~V9)
+### 장중 스코어 기록 (V1~V10)
 
 > 10분마다 전 종목 스코어를 CSV로 기록
 
 | 항목 | 값 |
 |------|-----|
 | 대상 종목 | 거래대금 30억+, 시총 300억+ (~800개) |
-| 스코어 | V1~V8 + V9 갭상승확률 |
+| 스코어 | V1~V8 + V9 갭상승확률 + V10 Leader-Follower |
 | 실행 시간 | 09:03 ~ 15:43 (10분 간격, 39회/일) |
 | 저장 경로 | `output/intraday_scores/YYYYMMDD_HHMM.csv` |
 | 로그 | `/tmp/intraday_scores.log` |
 
 ```bash
-# 수동 실행
+# 기본 실행 (V1~V10)
 python record_intraday_scores.py
+
+# 한투 API 연동 (체결강도/수급 데이터 추가)
+python record_intraday_scores.py --kis
 
 # 테스트 (저장 안함)
 python record_intraday_scores.py --dry-run
+
+# 장 전 종목 필터링
+python record_intraday_scores.py --filter
 ```
 
 #### CSV 컬럼
 ```
 code, name, market, open, high, low, close, prev_close, change_pct,
-volume, amount, marcap, v1, v2, v3.5, v4, v5, v6, v7, v8, v9_prob, signals
+volume, prev_amount, prev_marcap,
+buy_strength, foreign_net, inst_net, rel_strength,  # --kis 옵션 시 유효
+v1, v2, v3.5, v4, v5, v6, v7, v8, v9_prob, v10, signals
+```
+
+| 컬럼 | 설명 | 조건 |
+|------|------|------|
+| `buy_strength` | 체결강도 (매수/매도 × 100) | `--kis` |
+| `foreign_net` | 외국인 당일 순매수 | `--kis` |
+| `inst_net` | 기관 당일 순매수 | `--kis` |
+| `rel_strength` | 시장 대비 상대강도 | `--kis` |
+| `v10` | Leader-Follower 스코어 | 기본 포함 |
+
+### 장중 스코어 기반 급등/급락 감지
+
+> 연속된 CSV 파일을 비교하여 스코어 변화량(delta) 분석
+
+#### Tier 조건 (급등 후보)
+
+| Tier | 조건 | 설명 |
+|------|------|------|
+| **Tier 1** | V2≥70, ΔV2≥8, V4≥50, 거래대금≥100억, VOLUME_EXPLOSION | 10~30분 내 급등 예상 |
+| **Tier 2** | V2≥65, ΔV2≥5, 거래량 2배+, V3.5≥40 또는 V5≥50 | 30~60분 내 급등 예상 |
+| **Tier 3** | V2≥60, 패턴시그널 또는 V9≥55% | 에너지 축적 중 |
+
+#### 급락 경고 조건
+
+| 수준 | 조건 |
+|------|------|
+| CRITICAL | V2=0 (역배열) 또는 ΔV2≤-15 |
+| HIGH | 고거래량+음봉 (분배패턴) 또는 RSI_FALLING_KNIFE |
+| MEDIUM | V2 3연속 하락 |
+
+#### 관련 스크립트
+
+| 파일 | 설명 |
+|------|------|
+| `analyze_score_changes.py` | 스코어 변화 분석기 (Tier 판정) |
+| `backtest_intraday_signals.py` | 백테스트 및 임계값 최적화 |
+| `monitor_realtime_scores.py` | 실시간 모니터링 데몬 |
+
+```bash
+# 스코어 변화 분석 (최신 2개 파일 비교)
+python analyze_score_changes.py
+
+# 특정 날짜 하루 전체 분석
+python analyze_score_changes.py --date 20260128 --all
+
+# 특정 종목 추적
+python analyze_score_changes.py --watch 005930,035420
+
+# 백테스트
+python backtest_intraday_signals.py --detail
+
+# 임계값 최적화
+python backtest_intraday_signals.py --optimize
+
+# 실시간 모니터링 (데몬)
+python monitor_realtime_scores.py --daemon
+
+# V2 Delta Top 20 빠른 조회
+python monitor_realtime_scores.py --top
 ```
 
 ---
@@ -350,6 +417,9 @@ volume, amount, marcap, v1, v2, v3.5, v4, v5, v6, v7, v8, v9_prob, signals
 | 잔고조회 | VTTC8434R | TTTC8434R |
 | 미체결조회 | VTTC8036R | TTTC8036R |
 | 현재가 | FHKST01010100 | FHKST01010100 |
+| 체결추이 | FHKST01010300 | FHKST01010300 |
+| 투자자동향 | FHKST01010900 | FHKST01010900 |
+| 지수시세 | FHPUP02100000 | FHPUP02100000 |
 
 ### 실전 vs 모의투자 API 차이 (중요!)
 | 구분 | 실전투자 | 모의투자 |
@@ -369,11 +439,11 @@ volume, amount, marcap, v1, v2, v3.5, v4, v5, v6, v7, v8, v9_prob, signals
 
 ## 사용자 계좌 정보
 
-| User ID | 계좌번호 | 유형 |
-|---------|----------|------|
-| 2 | XXXXXXXX | 실제투자 |
-| 7 | XXXXXXXX | 모의투자 |
-| 17 | XXXXXXXX | 실제투자 |
+| User ID | 계좌번호 | 유형 | 장중 자동매매 |
+|---------|----------|------|--------------|
+| 2 | XXXXXXXX | 실제투자 | O |
+| 7 | XXXXXXXX | 모의투자 | **X (제외)** |
+| 17 | XXXXXXXX | 실제투자 | O |
 
 ### 계좌 데이터 조회
 ```bash
