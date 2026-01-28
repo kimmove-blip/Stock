@@ -649,9 +649,7 @@ class IntradayAutoTrader:
 
         # 최소 현금 유지 체크
         available_cash = int(cash_balance * (1 - min_cash_ratio))
-        if available_cash < 500000:  # 50만원 미만이면 매수 안함
-            self.log(f"User {user_id}: 가용 현금 부족 ({available_cash:,}원)")
-            return []
+        insufficient_cash = available_cash < 500000  # 50만원 미만 플래그
 
         # 포지션 한도 체크
         max_total = risk_config.get('max_total_positions', 15)
@@ -711,6 +709,28 @@ class IntradayAutoTrader:
             return []
 
         self.log(f"User {user_id}: 매수 후보 {len(signals)}개")
+
+        # 시그널 상세 기록 (실제 매수 여부와 무관하게)
+        for sig in signals[:10]:  # 상위 10개만 로그
+            self.log(f"  - {sig['code']} {sig['name']}: V2={sig.get('score', 0)} "
+                     f"신뢰도={sig.get('confidence', 0):.2f} 가격={sig.get('price', 0):,}원")
+
+        # 가용현금 부족 시 시그널 기록만 하고 실제 매수 안 함
+        if insufficient_cash:
+            self.log(f"User {user_id}: 가용 현금 부족 ({available_cash:,}원) - 매수 스킵")
+            # 시그널 정보를 결과에 포함 (executed=False)
+            skipped_results = []
+            for sig in signals[:5]:
+                skipped_results.append({
+                    'stock_code': sig['code'],
+                    'stock_name': sig['name'],
+                    'strategy': sig.get('strategy_name', 'v2_trend'),
+                    'score': sig.get('score', 0),
+                    'price': sig.get('price', 0),
+                    'executed': False,
+                    'reason': '가용현금 부족'
+                })
+            return skipped_results
 
         results = []
         total_bought = 0
