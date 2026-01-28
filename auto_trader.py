@@ -730,19 +730,19 @@ class AutoTrader:
                 print(f"  {stock_name}: 가격 조회 실패")
                 continue
 
-            # === 당일 상한가 체크 (시장가 주문 불가) ===
+            # === 급등주 제외 (15% 이상 상승 종목) ===
             # 스크리닝 결과의 change_pct 사용 (전일 대비 등락률)
             screening_change_pct = item.get("change_pct", 0)
-            if screening_change_pct >= 25:
-                print(f"  {stock_name}: 상한가 근접 ({screening_change_pct:+.1f}%) - 시장가 주문 불가")
+            if screening_change_pct >= 15:
+                print(f"  {stock_name}: 급등주 제외 ({screening_change_pct:+.1f}%)")
                 continue
 
             # 실시간 가격으로도 재확인 (전일종가 기준)
             prev_close = item.get("current_price", 0)
             if prev_close > 0 and current_price > 0:
                 realtime_change_pct = (current_price - prev_close) / prev_close * 100
-                if realtime_change_pct >= 25:
-                    print(f"  {stock_name}: 실시간 상한가 근접 ({realtime_change_pct:+.1f}%) - 시장가 주문 불가")
+                if realtime_change_pct >= 15:
+                    print(f"  {stock_name}: 실시간 급등주 제외 ({realtime_change_pct:+.1f}%)")
                     continue
 
             # === 시초가 갭 전략 평가 ===
@@ -2078,19 +2078,19 @@ class AutoTrader:
             if live_price and live_price > 0:
                 current_price = live_price
 
-            # 당일 상한가 체크 (시장가 주문 불가)
+            # 급등주 제외 (15% 이상 상승 종목)
             # 스크리닝 결과의 change_pct 사용 (전일 대비 등락률)
             screening_change_pct = candidate.get("change_pct", 0)
-            if screening_change_pct >= 25:
-                print(f"  {stock_name}: 상한가 근접 ({screening_change_pct:+.1f}%) - 시장가 주문 불가")
+            if screening_change_pct >= 15:
+                print(f"  {stock_name}: 급등주 제외 ({screening_change_pct:+.1f}%)")
                 continue
 
             # 실시간 가격으로도 재확인 (전일종가 기준)
             prev_close = candidate.get("current_price", 0)
             if prev_close > 0 and current_price > 0:
                 realtime_change_pct = (current_price - prev_close) / prev_close * 100
-                if realtime_change_pct >= 25:
-                    print(f"  {stock_name}: 실시간 상한가 근접 ({realtime_change_pct:+.1f}%) - 시장가 주문 불가")
+                if realtime_change_pct >= 15:
+                    print(f"  {stock_name}: 실시간 급등주 제외 ({realtime_change_pct:+.1f}%)")
                     continue
 
             quantity = actual_investment // current_price
