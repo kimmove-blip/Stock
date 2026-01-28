@@ -2235,12 +2235,22 @@ def run_for_all_users(dry_run: bool = False, min_score: int = 75):
     """모든 활성화된 사용자에 대해 자동매매 실행"""
     from trading.trade_logger import TradeLogger
 
+    # 장중 자동매매 제외 사용자 (user 7: 모의투자)
+    EXCLUDED_USERS = [7]
+
     print("\n" + "=" * 70)
     print("  AUTO TRADER - 전체 사용자 실행 모드")
     print(f"  실행 시각: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     print("=" * 70)
 
     users = get_active_users()
+
+    # 제외 사용자 필터링
+    original_count = len(users)
+    users = [u for u in users if u['user_id'] not in EXCLUDED_USERS]
+    if original_count != len(users):
+        print(f"\n[!] 제외된 사용자: {EXCLUDED_USERS}")
+
     print(f"\n[1] 활성화된 사용자: {len(users)}명")
 
     if not users:

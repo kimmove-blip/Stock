@@ -464,6 +464,117 @@ class KISClient:
             print(f"투자자 동향 조회 실패 [{stock_code}]: {str(e)}")
             return None
 
+    def get_conclusion_trend(self, stock_code: str) -> Optional[Dict]:
+        """
+        주식 체결 추이 조회 (체결강도 포함)
+
+        Args:
+            stock_code: 종목코드 (6자리)
+
+        Returns:
+            {
+                'buy_strength': 체결강도 (매수체결량/매도체결량 × 100),
+                'buy_volume': 매수 체결량,
+                'sell_volume': 매도 체결량,
+                'total_volume': 총 체결량,
+            }
+        """
+        url = f"{self.BASE_URL}/uapi/domestic-stock/v1/quotations/inquire-ccnl"
+
+        # FHKST01010300: 주식현재가 체결
+        headers = self._get_headers("FHKST01010300")
+        params = {
+            "FID_COND_MRKT_DIV_CODE": "J",
+            "FID_INPUT_ISCD": stock_code
+        }
+
+        try:
+            res = requests.get(url, headers=headers, params=params, timeout=10)
+            res.raise_for_status()
+            data = res.json()
+
+            if data.get("rt_cd") != "0":
+                return None
+
+            output1 = data.get("output1", {})
+            output2 = data.get("output2", [])
+
+            if not output1:
+                return None
+
+            # 체결강도 계산 (output1에서 직접 가져오거나 output2에서 계산)
+            # 체결강도 = 매수체결량 / 매도체결량 × 100
+            seln_cntg_csnu = int(output1.get("seln_cntg_csnu", 0) or 0)  # 매도체결건수
+            shnu_cntg_csnu = int(output1.get("shnu_cntg_csnu", 0) or 0)  # 매수체결건수
+            seln_cntg_smtn = int(output1.get("seln_cntg_smtn", 0) or 0)  # 매도체결수량
+            shnu_cntg_smtn = int(output1.get("shnu_cntg_smtn", 0) or 0)  # 매수체결수량
+
+            # 체결강도 = 매수체결량 / 매도체결량 × 100
+            if seln_cntg_smtn > 0:
+                buy_strength = round(shnu_cntg_smtn / seln_cntg_smtn * 100, 1)
+            else:
+                buy_strength = 100.0 if shnu_cntg_smtn > 0 else 0.0
+
+            return {
+                "stock_code": stock_code,
+                "buy_strength": buy_strength,
+                "buy_volume": shnu_cntg_smtn,
+                "sell_volume": seln_cntg_smtn,
+                "buy_count": shnu_cntg_csnu,
+                "sell_count": seln_cntg_csnu,
+                "total_volume": shnu_cntg_smtn + seln_cntg_smtn,
+            }
+
+        except requests.exceptions.RequestException as e:
+            print(f"체결 추이 조회 실패 [{stock_code}]: {str(e)}")
+            return None
+
+    def get_index_price(self, index_code: str = "0001") -> Optional[Dict]:
+        """
+        지수 현재가 조회 (코스피/코스닥)
+
+        Args:
+            index_code: 지수코드 (0001: 코스피, 1001: 코스닥)
+
+        Returns:
+            {
+                'index_code': 지수코드,
+                'current': 현재지수,
+                'change': 전일대비,
+                'change_rate': 등락률,
+            }
+        """
+        url = f"{self.BASE_URL}/uapi/domestic-stock/v1/quotations/inquire-index-price"
+
+        # FHPUP02100000: 국내주식 업종기간별 시세
+        headers = self._get_headers("FHPUP02100000")
+        params = {
+            "FID_COND_MRKT_DIV_CODE": "U",
+            "FID_INPUT_ISCD": index_code
+        }
+
+        try:
+            res = requests.get(url, headers=headers, params=params, timeout=10)
+            res.raise_for_status()
+            data = res.json()
+
+            if data.get("rt_cd") != "0":
+                return None
+
+            output = data.get("output", {})
+
+            return {
+                "index_code": index_code,
+                "index_name": "KOSPI" if index_code == "0001" else "KOSDAQ",
+                "current": float(output.get("bstp_nmix_prpr", 0) or 0),
+                "change": float(output.get("bstp_nmix_prdy_vrss", 0) or 0),
+                "change_rate": float(output.get("bstp_nmix_prdy_ctrt", 0) or 0),
+            }
+
+        except requests.exceptions.RequestException as e:
+            print(f"지수 조회 실패 [{index_code}]: {str(e)}")
+            return None
+
     def get_daily_price(self, stock_code: str, period: str = "D", count: int = 30) -> Optional[List[Dict]]:
         """
         주식 일별 시세 조회
