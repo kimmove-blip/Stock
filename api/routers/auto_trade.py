@@ -782,7 +782,7 @@ async def get_performance(
 
 @router.get("/performance/daily-asset")
 async def get_daily_asset_history(
-    days: int = 30,
+    days: int = 365,
     current_user: dict = Depends(get_current_user_required)
 ):
     """
@@ -791,6 +791,7 @@ async def get_daily_asset_history(
     - 초기투자금
     - 코스피/코스닥 지수 (같은 스케일로 환산)
     - 오늘 데이터는 실시간 조회
+    - 첫 투자일부터 데이터 조회 (days 파라미터 무시)
     """
     check_auto_trade_permission(current_user)
 
@@ -801,8 +802,7 @@ async def get_daily_asset_history(
     settings = logger.get_auto_trade_settings(user_id)
     initial_investment = settings.get('initial_investment', 0) if settings else 0
 
-    # daily_performance 테이블에서 과거 일별 자산 조회
-    from_date = (datetime.now() - timedelta(days=days)).strftime('%Y-%m-%d')
+    # daily_performance 테이블에서 전체 일별 자산 조회 (첫 투자일부터)
     today = datetime.now().strftime('%Y-%m-%d')
 
     with logger._get_connection() as conn:
@@ -810,9 +810,9 @@ async def get_daily_asset_history(
         cursor.execute("""
             SELECT trade_date, total_assets, d2_cash, holdings_value
             FROM daily_performance
-            WHERE user_id = ? AND trade_date >= ? AND trade_date < ?
+            WHERE user_id = ? AND trade_date < ?
             ORDER BY trade_date ASC
-        """, (user_id, from_date, today))
+        """, (user_id, today))
         rows = cursor.fetchall()
 
     daily_data = []
@@ -885,13 +885,17 @@ async def get_daily_asset_history(
         except Exception as e:
             print(f"[일별자산] 실시간 조회 실패: {e}")
 
-    # 코스피/코스닥 지수 조회
+    # 코스피/코스닥 지수 조회 (첫 투자일부터)
     kospi_data = []
     kosdaq_data = []
 
     try:
         end_date = datetime.now()
-        start_date = end_date - timedelta(days=days + 10)
+        # 첫 투자일부터 조회 (daily_data가 있으면 그 날짜, 없으면 30일 전)
+        if daily_data:
+            start_date = datetime.strptime(daily_data[0]['date'], '%Y-%m-%d') - timedelta(days=3)
+        else:
+            start_date = end_date - timedelta(days=30)
 
         # 코스피 지수
         kospi_df = fdr.DataReader('KS11', start_date.strftime('%Y-%m-%d'), end_date.strftime('%Y-%m-%d'))
