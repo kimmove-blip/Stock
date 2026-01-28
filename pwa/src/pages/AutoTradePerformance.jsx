@@ -14,7 +14,19 @@ import {
   Target,
   PieChart,
   BarChart3,
+  LineChart,
 } from 'lucide-react';
+import {
+  ResponsiveContainer,
+  ComposedChart,
+  Line,
+  XAxis,
+  YAxis,
+  CartesianGrid,
+  Tooltip,
+  Legend,
+  ReferenceLine,
+} from 'recharts';
 
 export default function AutoTradePerformance() {
   const navigate = useNavigate();
@@ -40,6 +52,14 @@ export default function AutoTradePerformance() {
     queryFn: () => autoTradeAPI.performance(days).then((res) => res.data),
     staleTime: 1000 * 60,
     refetchOnWindowFocus: true,
+  });
+
+  // 일별 자산 히스토리 조회 (그래프용)
+  const { data: dailyAssetData } = useQuery({
+    queryKey: ['dailyAssetHistory', days],
+    queryFn: () => autoTradeAPI.dailyAsset(days).then((res) => res.data),
+    staleTime: 1000 * 60 * 5,
+    refetchOnWindowFocus: false,
   });
 
   if (isLoading) return <Loading text="성과 분석 불러오는 중..." />;
@@ -185,6 +205,116 @@ export default function AutoTradePerformance() {
                 {total_profit_from_initial >= 0 ? '+' : ''}{total_profit_from_initial?.toLocaleString()}원
               </p>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* 일별 총자산 그래프 */}
+      {dailyAssetData && dailyAssetData.daily_asset?.length > 0 && (
+        <div className="bg-white rounded-xl p-4 shadow-sm">
+          <h3 className="font-bold text-gray-800 mb-3 flex items-center gap-2">
+            <LineChart size={18} className="text-purple-600" />
+            일별 총자산 추이
+          </h3>
+          <div className="h-64">
+            <ResponsiveContainer width="100%" height="100%">
+              <ComposedChart
+                data={(() => {
+                  // 날짜별로 데이터 병합
+                  const mergedData = {};
+
+                  // 총자산 데이터
+                  dailyAssetData.scaled_asset?.forEach(item => {
+                    if (!mergedData[item.date]) mergedData[item.date] = { date: item.date };
+                    mergedData[item.date].asset = item.value;
+                    mergedData[item.date].totalAsset = item.total_asset;
+                  });
+
+                  // 코스피 데이터
+                  dailyAssetData.scaled_kospi?.forEach(item => {
+                    if (!mergedData[item.date]) mergedData[item.date] = { date: item.date };
+                    mergedData[item.date].kospi = item.value;
+                  });
+
+                  // 코스닥 데이터
+                  dailyAssetData.scaled_kosdaq?.forEach(item => {
+                    if (!mergedData[item.date]) mergedData[item.date] = { date: item.date };
+                    mergedData[item.date].kosdaq = item.value;
+                  });
+
+                  return Object.values(mergedData).sort((a, b) => a.date.localeCompare(b.date));
+                })()}
+                margin={{ top: 5, right: 5, left: -20, bottom: 5 }}
+              >
+                <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
+                <XAxis
+                  dataKey="date"
+                  tick={{ fontSize: 10 }}
+                  tickFormatter={(value) => value.slice(5)} // MM-DD 형식
+                />
+                <YAxis
+                  tick={{ fontSize: 10 }}
+                  domain={['auto', 'auto']}
+                  tickFormatter={(value) => `${value}%`}
+                />
+                <Tooltip
+                  formatter={(value, name) => {
+                    if (name === 'asset') return [`${value}%`, '내 자산'];
+                    if (name === 'kospi') return [`${value}%`, 'KOSPI'];
+                    if (name === 'kosdaq') return [`${value}%`, 'KOSDAQ'];
+                    return [value, name];
+                  }}
+                  labelFormatter={(label) => `날짜: ${label}`}
+                  contentStyle={{ fontSize: 12 }}
+                />
+                <Legend
+                  wrapperStyle={{ fontSize: 11 }}
+                  formatter={(value) => {
+                    if (value === 'asset') return '내 자산';
+                    if (value === 'kospi') return 'KOSPI';
+                    if (value === 'kosdaq') return 'KOSDAQ';
+                    return value;
+                  }}
+                />
+                {/* 100% 기준선 (초기투자금) */}
+                <ReferenceLine
+                  y={100}
+                  stroke="#9ca3af"
+                  strokeDasharray="5 5"
+                  label={{ value: '초기투자금', fontSize: 10, fill: '#9ca3af' }}
+                />
+                {/* 내 자산 */}
+                <Line
+                  type="monotone"
+                  dataKey="asset"
+                  stroke="#8b5cf6"
+                  strokeWidth={2.5}
+                  dot={{ r: 3 }}
+                  activeDot={{ r: 5 }}
+                />
+                {/* KOSPI */}
+                <Line
+                  type="monotone"
+                  dataKey="kospi"
+                  stroke="#ef4444"
+                  strokeWidth={1.5}
+                  dot={false}
+                  strokeDasharray="3 3"
+                />
+                {/* KOSDAQ */}
+                <Line
+                  type="monotone"
+                  dataKey="kosdaq"
+                  stroke="#3b82f6"
+                  strokeWidth={1.5}
+                  dot={false}
+                  strokeDasharray="3 3"
+                />
+              </ComposedChart>
+            </ResponsiveContainer>
+          </div>
+          <div className="mt-2 text-xs text-gray-500 text-center">
+            초기투자금 기준 100%로 환산 (KOSPI/KOSDAQ도 동일 기간 시작일 기준)
           </div>
         </div>
       )}
