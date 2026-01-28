@@ -6,9 +6,11 @@
 - 주가, 거래량, 거래대금 등 지표 기록
 - output/intraday_scores/ 폴더에 CSV 저장
 - V9: 갭상승 확률 예측 (ML 모델)
+- 한투 API 연동 시 체결강도, 외국인/기관 수급, 시장지수 추가
 
 사용법:
-    python record_intraday_scores.py              # 기본 실행
+    python record_intraday_scores.py              # 기본 실행 (FDR만 사용)
+    python record_intraday_scores.py --kis        # 한투 API 연동 (체결강도/수급 추가)
     python record_intraday_scores.py --dry-run    # 테스트 (저장 안함)
 """
 
@@ -17,6 +19,7 @@ import sys
 import argparse
 import warnings
 import pickle
+import time
 from datetime import datetime
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
@@ -32,6 +35,7 @@ PROJECT_ROOT = Path(__file__).parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
 from scoring import SCORING_FUNCTIONS
+from scoring.score_v10_leader_follower import calculate_score_v10, load_reference as load_v10_reference
 
 # 설정
 OUTPUT_DIR = PROJECT_ROOT / "output" / "intraday_scores"
@@ -41,13 +45,178 @@ MIN_TRADING_AMOUNT = 3_000_000_000   # 30억 (어제 기준)
 MAX_WORKERS = 40
 VERSIONS = ['v1', 'v2', 'v3.5', 'v4', 'v5', 'v6', 'v7', 'v8']
 
+# V10 모델 (전역 로드)
+V10_REFERENCE = None
+
 # V9 모델 (전역 로드)
 V9_MODEL = None
 V9_FEATURES = None
 
+# 한투 API 클라이언트 (전역)
+KIS_CLIENT = None
+USE_KIS_API = False
+MARKET_INDEX = {'kospi': 0.0, 'kosdaq': 0.0}  # 시장 지수 변화율
+
 # 출력 즉시 플러시
 import functools
 print = functools.partial(print, flush=True)
+
+
+def init_kis_client():
+    """한투 API 클라이언트 초기화"""
+    global KIS_CLIENT, USE_KIS_API, MARKET_INDEX
+
+    try:
+        from api.services.kis_client import KISClient
+
+        # 환경변수에서 API 키 확인
+        app_key = os.getenv("KIS_APP_KEY")
+        app_secret = os.getenv("KIS_APP_SECRET")
+
+        if not app_key or not app_secret:
+            print("    [경고] 한투 API 키 미설정 (KIS_APP_KEY, KIS_APP_SECRET)")
+            return False
+
+        KIS_CLIENT = KISClient(is_virtual=False)  # 실전 API로 시세 조회
+        USE_KIS_API = True
+
+        # 시장 지수 조회
+        try:
+            kospi = KIS_CLIENT.get_index_price("0001")
+            kosdaq = KIS_CLIENT.get_index_price("1001")
+            if kospi:
+                MARKET_INDEX['kospi'] = kospi.get('change_rate', 0.0)
+            if kosdaq:
+                MARKET_INDEX['kosdaq'] = kosdaq.get('change_rate', 0.0)
+            print(f"    시장지수: KOSPI {MARKET_INDEX['kospi']:+.2f}%, KOSDAQ {MARKET_INDEX['kosdaq']:+.2f}%")
+        except Exception as e:
+            print(f"    [경고] 시장지수 조회 실패: {e}")
+
+        return True
+
+    except Exception as e:
+        print(f"    [경고] 한투 API 초기화 실패: {e}")
+        return False
+
+
+def get_kis_extra_data(code: str) -> dict:
+    """한투 API로 체결강도, 외국인/기관 수급 조회"""
+    global KIS_CLIENT
+
+    result = {
+        'buy_strength': 0.0,    # 체결강도
+        'foreign_net': 0,       # 외국인 당일 순매수
+        'inst_net': 0,          # 기관 당일 순매수
+    }
+
+    if not KIS_CLIENT:
+        return result
+
+    try:
+        # 체결강도 조회
+        ccnl = KIS_CLIENT.get_conclusion_trend(code)
+        if ccnl:
+            result['buy_strength'] = ccnl.get('buy_strength', 0.0)
+
+        # 외국인/기관 수급 조회 (당일)
+        investor = KIS_CLIENT.get_investor_trend(code, days=1)
+        if investor and investor.get('daily'):
+            today = investor['daily'][0]
+            result['foreign_net'] = today.get('foreign_net', 0)
+            result['inst_net'] = today.get('institution_net', 0)
+
+    except Exception:
+        pass
+
+    return result
+
+
+def load_v10_model():
+    """V10 레퍼런스 로드"""
+    global V10_REFERENCE
+    try:
+        V10_REFERENCE = load_v10_reference()
+        return V10_REFERENCE is not None
+    except Exception as e:
+        print(f"[경고] V10 레퍼런스 로드 실패: {e}")
+        return False
+
+
+def calculate_v10_scores(records: list) -> list:
+    """모든 종목에 대해 V10 스코어 계산"""
+    global V10_REFERENCE
+
+    if not V10_REFERENCE:
+        for r in records:
+            r['v10'] = 0
+        return records
+
+    # today_changes 딕셔너리 생성 (종목코드 -> 등락률)
+    today_changes = {r['code']: r['change_pct'] for r in records}
+
+    # 종속주 목록 (V10 레퍼런스에서)
+    follower_to_leaders = V10_REFERENCE.get('follower_to_leaders', {})
+
+    for r in records:
+        code = r['code']
+
+        # 이 종목이 종속주인지 확인
+        leaders = follower_to_leaders.get(code, [])
+
+        if not leaders:
+            r['v10'] = 0
+            continue
+
+        # 최적의 대장주 찾기
+        best_score = 0
+
+        for leader_info in leaders:
+            leader_code = leader_info.get('leader_code')
+            correlation = leader_info.get('correlation', 0)
+
+            leader_change = today_changes.get(leader_code, 0)
+            follower_change = r['change_pct']
+            gap = leader_change - follower_change
+
+            # 대장주 상승 + 종속주 미추종 조건
+            if leader_change >= 2.0 and gap > 1.0:
+                # 점수 계산 (간소화 버전)
+                score = 50
+
+                # 대장주 움직임 점수 (35점)
+                if leader_change >= 5:
+                    score += 35
+                elif leader_change >= 3:
+                    score += 25
+                else:
+                    score += 15
+
+                # 상관관계 점수 (25점)
+                if correlation >= 0.85:
+                    score += 25
+                elif correlation >= 0.75:
+                    score += 20
+                elif correlation >= 0.65:
+                    score += 15
+                else:
+                    score += 10
+
+                # 캐치업 갭 점수 (25점)
+                if gap >= 4:
+                    score += 25
+                elif gap >= 3:
+                    score += 20
+                elif gap >= 2:
+                    score += 15
+                else:
+                    score += 10
+
+                if score > best_score:
+                    best_score = score
+
+        r['v10'] = min(best_score, 100)  # 최대 100점
+
+    return records
 
 
 def load_v9_model():
@@ -273,6 +442,8 @@ def calculate_scores(df: pd.DataFrame) -> dict:
 
 def process_stock(stock_info: dict) -> dict:
     """단일 종목 처리 - 데이터 1회 로드 후 V1~V9 모두 계산"""
+    global USE_KIS_API, MARKET_INDEX
+
     code = stock_info['Code']
     name = stock_info.get('Name', '')
     market = stock_info.get('Market', '')
@@ -306,7 +477,7 @@ def process_stock(stock_info: dict) -> dict:
         # V9 갭상승 확률 계산 (같은 df 사용)
         v9_prob = predict_v9_prob(df)
 
-        return {
+        result = {
             'code': code,
             'name': name,
             'market': market,
@@ -330,6 +501,23 @@ def process_stock(stock_info: dict) -> dict:
             'v9_prob': v9_prob,
             'signals': ','.join(signals.get('v2', [])),
         }
+
+        # 한투 API 데이터 추가 (체결강도, 외국인/기관 수급)
+        if USE_KIS_API:
+            kis_data = get_kis_extra_data(code)
+            result['buy_strength'] = kis_data['buy_strength']
+            result['foreign_net'] = kis_data['foreign_net']
+            result['inst_net'] = kis_data['inst_net']
+            # 시장 대비 상대강도
+            market_chg = MARKET_INDEX.get('kosdaq' if 'KOSDAQ' in market else 'kospi', 0.0)
+            result['rel_strength'] = round(change_rate - market_chg, 2)
+        else:
+            result['buy_strength'] = 0.0
+            result['foreign_net'] = 0
+            result['inst_net'] = 0
+            result['rel_strength'] = 0.0
+
+        return result
     except:
         return None
 
@@ -348,10 +536,14 @@ def save_to_csv(records: list, recorded_at: datetime) -> str:
 
     df = pd.DataFrame(records)
 
-    # 컬럼 순서 정리
+    # 컬럼 순서 정리 (체결강도, 수급, 상대강도, V10 추가)
     columns = ['code', 'name', 'market', 'open', 'high', 'low', 'close', 'prev_close',
                'change_pct', 'volume', 'prev_amount', 'prev_marcap',
-               'v1', 'v2', 'v3.5', 'v4', 'v5', 'v6', 'v7', 'v8', 'v9_prob', 'signals']
+               'buy_strength', 'foreign_net', 'inst_net', 'rel_strength',
+               'v1', 'v2', 'v3.5', 'v4', 'v5', 'v6', 'v7', 'v8', 'v9_prob', 'v10', 'signals']
+
+    # 존재하는 컬럼만 선택 (이전 버전 호환)
+    columns = [c for c in columns if c in df.columns]
     df = df[columns]
 
     # V2 스코어 기준 정렬
@@ -399,9 +591,12 @@ def run_auto_trader(user_id: int):
 
 
 def main():
+    global USE_KIS_API
+
     parser = argparse.ArgumentParser(description='10분 단위 전 종목 스코어 기록')
     parser.add_argument('--filter', action='store_true', help='장 전 실행: 전일 기준 종목 필터링')
     parser.add_argument('--dry-run', action='store_true', help='테스트 모드 (저장 안함)')
+    parser.add_argument('--kis', action='store_true', help='한투 API 연동 (체결강도/수급 추가)')
     parser.add_argument('--auto-trade', type=int, default=None, metavar='USER_ID',
                         help='스코어 기록 후 자동매매 실행 (user_id 지정)')
     args = parser.parse_args()
@@ -416,7 +611,9 @@ def main():
 
     recorded_at = datetime.now()
     print("=" * 60)
-    print(f"  전 종목 스코어 기록 (V1~V9) - {recorded_at.strftime('%Y-%m-%d %H:%M:%S')}")
+    print(f"  전 종목 스코어 기록 (V1~V10) - {recorded_at.strftime('%Y-%m-%d %H:%M:%S')}")
+    if args.kis:
+        print("  [한투 API 모드: 체결강도/수급 데이터 포함]")
     print("=" * 60)
 
     # V9 모델 로드
@@ -425,6 +622,23 @@ def main():
         print(f"    완료: {len(V9_FEATURES)}개 피처")
     else:
         print("    실패 - V9 확률 0으로 처리")
+
+    # V10 레퍼런스 로드
+    print("\n[0.1] V10 레퍼런스 로드...")
+    if load_v10_model():
+        follower_count = len(V10_REFERENCE.get('follower_to_leaders', {}))
+        print(f"    완료: {follower_count}개 종속주 매핑")
+    else:
+        print("    실패 - V10 점수 0으로 처리")
+
+    # 한투 API 초기화 (--kis 옵션)
+    if args.kis:
+        print("\n[0.5] 한투 API 초기화...")
+        if init_kis_client():
+            print("    완료")
+        else:
+            print("    실패 - 체결강도/수급 데이터 없이 진행")
+            USE_KIS_API = False
 
     # 종목 목록
     print("\n[1] 종목 목록 조회...")
@@ -454,6 +668,12 @@ def main():
 
     print(f"    완료: {len(records)}개 종목 처리")
 
+    # V10 스코어 계산 (모든 종목 등락률 필요)
+    print(f"\n[2.5] V10 스코어 계산 (Leader-Follower)...")
+    records = calculate_v10_scores(records)
+    v10_active = len([r for r in records if r.get('v10', 0) > 50])
+    print(f"    완료: {v10_active}개 종목 활성 시그널")
+
     # 저장
     if args.dry_run:
         print("\n[3] 드라이런 모드 - 저장 스킵")
@@ -468,6 +688,12 @@ def main():
         print("\n    V9 갭상승확률 상위 10:")
         for r in top10_v9:
             print(f"      {r['code']} {r['name']}: V9={r['v9_prob']}%, V2={r['v2']}")
+
+        # V10 상위 10개 출력
+        top10_v10 = sorted(records, key=lambda x: x.get('v10', 0), reverse=True)[:10]
+        print("\n    V10 Leader-Follower 상위 10:")
+        for r in top10_v10:
+            print(f"      {r['code']} {r['name']}: V10={r.get('v10', 0)}, 등락률={r['change_pct']:+.2f}%")
     else:
         print("\n[3] CSV 저장...")
         filepath = save_to_csv(records, recorded_at)
