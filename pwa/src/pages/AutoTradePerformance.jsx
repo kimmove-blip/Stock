@@ -54,10 +54,10 @@ export default function AutoTradePerformance() {
     refetchOnWindowFocus: true,
   });
 
-  // 일별 자산 히스토리 조회 (그래프용)
+  // 일별 자산 히스토리 조회 (그래프용) - 전체 기간
   const { data: dailyAssetData } = useQuery({
-    queryKey: ['dailyAssetHistory', days],
-    queryFn: () => autoTradeAPI.dailyAsset(days).then((res) => res.data),
+    queryKey: ['dailyAssetHistory'],
+    queryFn: () => autoTradeAPI.dailyAsset(365).then((res) => res.data),
     staleTime: 1000 * 60 * 5,
     refetchOnWindowFocus: false,
   });
@@ -170,42 +170,6 @@ export default function AutoTradePerformance() {
           <p className="text-xs opacity-70">
             자동매매 설정 &gt; 초기 투자금에서 설정하세요
           </p>
-        </div>
-      )}
-
-      {/* 손익 상세 (실현손익 + 미실현손익) */}
-      {initial_investment > 0 && (
-        <div className="bg-white rounded-xl p-4 shadow-sm">
-          <h3 className="font-bold text-gray-800 mb-3">손익 구성</h3>
-          <div className="space-y-3">
-            {/* 실현손익 */}
-            <div className="flex items-center justify-between p-3 bg-gray-50 rounded-lg">
-              <div>
-                <p className="text-sm text-gray-500">실현손익</p>
-                <p className="text-xs text-gray-400">매도 완료 종목</p>
-              </div>
-              <p className={`text-lg font-bold ${total_profit >= 0 ? 'text-red-600' : 'text-blue-600'}`}>
-                {total_profit >= 0 ? '+' : ''}{total_profit?.toLocaleString()}원
-              </p>
-            </div>
-            {/* 미실현손익 */}
-            <div className="flex items-center justify-between p-3 bg-gray-50 rounded-lg">
-              <div>
-                <p className="text-sm text-gray-500">미실현손익</p>
-                <p className="text-xs text-gray-400">보유 중인 종목</p>
-              </div>
-              <p className={`text-lg font-bold ${(total_profit_from_initial - total_profit) >= 0 ? 'text-red-600' : 'text-blue-600'}`}>
-                {(total_profit_from_initial - total_profit) >= 0 ? '+' : ''}{(total_profit_from_initial - total_profit)?.toLocaleString()}원
-              </p>
-            </div>
-            {/* 합계 = 총수익 */}
-            <div className="flex items-center justify-between p-3 border-t border-gray-200 pt-3">
-              <p className="text-sm font-medium text-gray-700">합계 (= 총수익)</p>
-              <p className={`text-lg font-bold ${total_profit_from_initial >= 0 ? 'text-red-600' : 'text-blue-600'}`}>
-                {total_profit_from_initial >= 0 ? '+' : ''}{total_profit_from_initial?.toLocaleString()}원
-              </p>
-            </div>
-          </div>
         </div>
       )}
 
