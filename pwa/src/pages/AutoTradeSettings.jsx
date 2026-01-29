@@ -13,11 +13,6 @@ import {
   Target,
   ToggleLeft,
   ToggleRight,
-  Sparkles,
-  Key,
-  AlertTriangle,
-  Check,
-  X,
 } from 'lucide-react';
 
 // 숫자를 콤마 포맷으로 변환
@@ -36,7 +31,7 @@ export default function AutoTradeSettings() {
   const { user } = useAuth();
   const queryClient = useQueryClient();
   const [formData, setFormData] = useState({
-    trade_mode: 'manual', // auto: 완전자동, semi: 반자동(승인필요), manual: 수동, greenlight: AI자율
+    trade_mode: 'manual', // auto: 완전자동, semi: 반자동(승인필요), manual: 수동
     max_per_stock: 200000, // 종목당 최대 금액
     stop_loss_rate: -7, // 손절률 (-20 ~ 0%)
     min_buy_score: 70, // 최소 매수 점수 (50~100)
@@ -46,33 +41,11 @@ export default function AutoTradeSettings() {
     score_version: 'v5', // 스코어 버전 (v1, v2, v5)
   });
 
-  // LLM 설정 (Green Light 모드용)
-  const [llmForm, setLLMForm] = useState({
-    llm_provider: 'claude',
-    llm_api_key: '',
-    llm_model: '',
-  });
-  const [showLLMKey, setShowLLMKey] = useState(false);
-
   // 설정 조회 (훅은 항상 최상위에서 호출)
   const { data, isLoading } = useQuery({
     queryKey: ['autoTradeSettings'],
     queryFn: () => autoTradeAPI.getSettings().then((res) => res.data),
     enabled: !!user?.auto_trade_enabled, // 권한 있을 때만 조회
-  });
-
-  // LLM 설정 조회
-  const { data: llmSettings } = useQuery({
-    queryKey: ['llmSettings'],
-    queryFn: () => autoTradeAPI.getLLMSettings().then((res) => res.data),
-    enabled: !!user?.auto_trade_enabled,
-  });
-
-  // API 키 조회 (모의투자 여부 확인용)
-  const { data: apiKeyData } = useQuery({
-    queryKey: ['autoTradeApiKey'],
-    queryFn: () => autoTradeAPI.getApiKey().then((res) => res.data),
-    enabled: !!user?.auto_trade_enabled,
   });
 
   // 설정 데이터가 로드되면 폼에 반영
@@ -81,17 +54,6 @@ export default function AutoTradeSettings() {
       setFormData((prev) => ({ ...prev, ...data }));
     }
   }, [data]);
-
-  // LLM 설정 데이터가 로드되면 폼에 반영
-  useEffect(() => {
-    if (llmSettings && llmSettings.is_configured) {
-      setLLMForm((prev) => ({
-        ...prev,
-        llm_provider: llmSettings.llm_provider || 'claude',
-        llm_model: llmSettings.llm_model || '',
-      }));
-    }
-  }, [llmSettings]);
 
   // 설정 저장
   const saveMutation = useMutation({
@@ -105,41 +67,9 @@ export default function AutoTradeSettings() {
     },
   });
 
-  // LLM 설정 저장
-  const saveLLMMutation = useMutation({
-    mutationFn: (data) => autoTradeAPI.saveLLMSettings(data),
-    onSuccess: () => {
-      queryClient.invalidateQueries(['llmSettings']);
-      setLLMForm((prev) => ({ ...prev, llm_api_key: '' }));
-      alert('LLM 설정이 저장되었습니다.');
-    },
-    onError: (error) => {
-      alert(error.response?.data?.detail || 'LLM 설정 저장에 실패했습니다.');
-    },
-  });
-
-  // LLM 설정 삭제
-  const deleteLLMMutation = useMutation({
-    mutationFn: () => autoTradeAPI.deleteLLMSettings(),
-    onSuccess: () => {
-      queryClient.invalidateQueries(['llmSettings']);
-      setLLMForm({ llm_provider: 'claude', llm_api_key: '', llm_model: '' });
-      alert('LLM 설정이 삭제되었습니다.');
-    },
-  });
-
   const handleSubmit = (e) => {
     e.preventDefault();
     saveMutation.mutate(formData);
-  };
-
-  const handleLLMSubmit = (e) => {
-    e.preventDefault();
-    if (!llmForm.llm_api_key) {
-      alert('API 키를 입력해주세요.');
-      return;
-    }
-    saveLLMMutation.mutate(llmForm);
   };
 
   // 자동매매 권한 체크 (훅 호출 이후에 조건부 반환)
@@ -177,24 +107,7 @@ export default function AutoTradeSettings() {
       description: '즉시 매수 실행',
       color: 'bg-green-500',
     },
-    {
-      value: 'greenlight',
-      label: '자율 (Green Light)',
-      icon: Sparkles,
-      description: 'AI가 모든 결정 (모의투자 전용)',
-      color: 'bg-emerald-500',
-      badge: 'BETA',
-    },
   ];
-
-  const llmProviders = [
-    { value: 'claude', label: 'Claude (Anthropic)', description: '추천' },
-    { value: 'openai', label: 'OpenAI (GPT)', description: '' },
-    { value: 'gemini', label: 'Gemini (Google)', description: '' },
-  ];
-
-  // 모의투자 여부 확인
-  const isMockAccount = apiKeyData?.is_mock !== false;
 
   if (isLoading) return <Loading text="설정 불러오는 중..." />;
 
@@ -235,226 +148,41 @@ export default function AutoTradeSettings() {
 
       <form onSubmit={handleSubmit} className="space-y-4">
         {/* 매매 모드 선택 (드롭다운) */}
-        <div className="bg-white rounded-xl p-4 shadow-sm">
-          <h3 className="font-bold text-gray-800 mb-3 flex items-center gap-2">
-            <Settings size={18} className="text-purple-600" />
-            매매 모드
-          </h3>
-          <select
-            value={formData.trade_mode}
-            onChange={(e) => setFormData({ ...formData, trade_mode: e.target.value })}
-            className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-transparent text-gray-800 font-medium"
-          >
-            {tradeModes.map((mode) => {
-              const isDisabled = mode.value === 'greenlight' && !isMockAccount;
-              return (
-                <option key={mode.value} value={mode.value} disabled={isDisabled}>
-                  {mode.label} - {mode.description}
-                </option>
-              );
-            })}
-          </select>
-          <p className="text-xs text-gray-500 mt-2">
-            {formData.trade_mode === 'manual' && '알림만 받고 직접 매매합니다'}
-            {formData.trade_mode === 'semi' && '매수 제안을 승인하면 실행됩니다'}
-            {formData.trade_mode === 'auto' && '조건 충족 시 즉시 매수합니다'}
-            {formData.trade_mode === 'greenlight' && 'AI가 모든 매매를 자율 결정합니다'}
+        <div className={`bg-white rounded-xl p-4 shadow-sm ${!formData.trading_enabled ? 'opacity-50' : ''}`}>
+          <div className="flex items-center justify-between">
+            <h3 className="font-bold text-gray-800 flex items-center gap-2">
+              <Settings size={16} className="text-purple-600" />
+              매매 모드
+            </h3>
+            <div className="relative">
+              <select
+                value={formData.trade_mode}
+                onChange={(e) => setFormData({ ...formData, trade_mode: e.target.value })}
+                disabled={!formData.trading_enabled}
+                className="appearance-none bg-gray-100 px-3 py-1.5 pr-8 border border-gray-300 rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-transparent text-gray-800 text-xs font-medium cursor-pointer disabled:cursor-not-allowed"
+              >
+                {tradeModes.map((mode) => (
+                  <option key={mode.value} value={mode.value}>
+                    {mode.label}
+                  </option>
+                ))}
+              </select>
+              <div className="pointer-events-none absolute inset-y-0 right-0 flex items-center pr-2">
+                <svg className="h-4 w-4 text-gray-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+                </svg>
+              </div>
+            </div>
+          </div>
+          <p className="text-[10px] text-gray-500 mt-2">
+            {formData.trade_mode === 'manual' && '알림만 받고 직접 매매'}
+            {formData.trade_mode === 'semi' && '매수 제안 승인 후 실행'}
+            {formData.trade_mode === 'auto' && '조건 충족 시 즉시 매수'}
           </p>
         </div>
 
-        {/* Green Light 모드 - LLM 설정 */}
-        {formData.trade_mode === 'greenlight' && (
-          <div className="bg-gradient-to-br from-emerald-50 to-teal-50 rounded-xl p-4 shadow-sm border border-emerald-200">
-            <h3 className="font-bold text-gray-800 mb-3 flex items-center gap-2">
-              <Sparkles size={18} className="text-emerald-600" />
-              AI 엔진 설정
-              {llmSettings?.is_configured && (
-                <span className="ml-auto flex items-center gap-1 text-xs text-emerald-600">
-                  <Check size={14} />
-                  연결됨
-                </span>
-              )}
-            </h3>
-
-            {/* 경고 배너 */}
-            <div className="bg-amber-50 border border-amber-200 rounded-lg p-3 mb-4">
-              <div className="flex items-start gap-2">
-                <AlertTriangle size={16} className="text-amber-600 mt-0.5 flex-shrink-0" />
-                <div className="text-xs text-amber-700">
-                  <p className="font-medium mb-1">Green Light 모드 안내</p>
-                  <ul className="space-y-0.5 text-amber-600">
-                    <li>- AI가 모든 매매 결정을 자율적으로 수행합니다</li>
-                    <li>- 손절/익절 규칙 없이 AI가 직접 판단합니다</li>
-                    <li>- 한 종목 집중투자(몰빵)가 가능합니다</li>
-                    <li>- 모의투자 계좌에서만 사용 가능합니다</li>
-                  </ul>
-                </div>
-              </div>
-            </div>
-
-            {/* LLM Provider 선택 */}
-            <div className="space-y-3">
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-2">
-                  AI 엔진 선택
-                </label>
-                <div className="grid grid-cols-3 gap-2">
-                  {llmProviders.map((provider) => (
-                    <button
-                      key={provider.value}
-                      type="button"
-                      onClick={() => setLLMForm({ ...llmForm, llm_provider: provider.value })}
-                      className={`p-2 rounded-lg border-2 transition-all text-center ${
-                        llmForm.llm_provider === provider.value
-                          ? 'border-emerald-500 bg-emerald-50'
-                          : 'border-gray-200 hover:border-gray-300'
-                      }`}
-                    >
-                      <p className="text-xs font-medium text-gray-800">{provider.label}</p>
-                      {provider.description && (
-                        <p className="text-[10px] text-emerald-600">{provider.description}</p>
-                      )}
-                    </button>
-                  ))}
-                </div>
-              </div>
-
-              {/* API Key 입력 */}
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">
-                  API Key
-                </label>
-                <div className="relative">
-                  <input
-                    type={showLLMKey ? 'text' : 'password'}
-                    value={llmForm.llm_api_key}
-                    onChange={(e) => setLLMForm({ ...llmForm, llm_api_key: e.target.value })}
-                    placeholder={llmSettings?.is_configured ? '(저장됨) 변경하려면 새 키 입력' : 'API 키를 입력하세요'}
-                    className="w-full px-3 py-2 pr-20 border border-gray-300 rounded-lg focus:ring-2 focus:ring-emerald-500 focus:border-transparent text-sm"
-                  />
-                  <div className="absolute right-2 top-1/2 -translate-y-1/2 flex items-center gap-1">
-                    <button
-                      type="button"
-                      onClick={() => setShowLLMKey(!showLLMKey)}
-                      className="p-1 text-gray-400 hover:text-gray-600"
-                    >
-                      <Key size={16} />
-                    </button>
-                  </div>
-                </div>
-                <p className="text-xs text-gray-500 mt-1">
-                  {llmForm.llm_provider === 'claude' && 'Anthropic Console에서 API 키를 발급받으세요'}
-                  {llmForm.llm_provider === 'openai' && 'OpenAI Platform에서 API 키를 발급받으세요'}
-                  {llmForm.llm_provider === 'gemini' && 'Google AI Studio에서 API 키를 발급받으세요'}
-                </p>
-              </div>
-
-              {/* 모델 선택 (선택사항) */}
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">
-                  모델 (선택사항)
-                </label>
-                <input
-                  type="text"
-                  value={llmForm.llm_model}
-                  onChange={(e) => setLLMForm({ ...llmForm, llm_model: e.target.value })}
-                  placeholder="기본 모델 사용"
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-emerald-500 focus:border-transparent text-sm"
-                />
-                <p className="text-xs text-gray-500 mt-1">
-                  비워두면 기본 모델 사용 (Claude: claude-sonnet-4-20250514, GPT: gpt-4o)
-                </p>
-              </div>
-
-              {/* LLM 저장/삭제 버튼 */}
-              <div className="flex gap-2 pt-2">
-                <button
-                  type="button"
-                  onClick={handleLLMSubmit}
-                  disabled={saveLLMMutation.isLoading}
-                  className="flex-1 flex items-center justify-center gap-2 bg-emerald-600 text-white py-2 rounded-lg font-medium hover:bg-emerald-700 disabled:opacity-50 transition-colors text-sm"
-                >
-                  <Key size={16} />
-                  {saveLLMMutation.isLoading ? '저장 중...' : 'LLM 설정 저장'}
-                </button>
-                {llmSettings?.is_configured && (
-                  <button
-                    type="button"
-                    onClick={() => {
-                      if (confirm('LLM 설정을 삭제하시겠습니까?')) {
-                        deleteLLMMutation.mutate();
-                      }
-                    }}
-                    disabled={deleteLLMMutation.isLoading}
-                    className="px-4 py-2 border border-red-300 text-red-600 rounded-lg hover:bg-red-50 transition-colors text-sm"
-                  >
-                    <X size={16} />
-                  </button>
-                )}
-              </div>
-            </div>
-          </div>
-        )}
-
-        {/* 투자 설정 (Green Light 모드가 아닐 때만 표시) */}
-        {formData.trade_mode !== 'greenlight' && (
-          <div className="bg-white rounded-xl p-4 shadow-sm">
-            <h3 className="font-bold text-gray-800 mb-3 flex items-center gap-2">
-              <DollarSign size={18} className="text-green-600" />
-              투자 설정
-            </h3>
-            <div className="space-y-4">
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">
-                  초기 투자금
-                </label>
-                <div className="relative">
-                  <input
-                    type="text"
-                    inputMode="numeric"
-                    value={formatNumber(formData.initial_investment)}
-                    onChange={(e) => {
-                      const value = parseNumber(e.target.value);
-                      setFormData({ ...formData, initial_investment: value });
-                    }}
-                    placeholder="0"
-                    className="w-full px-3 py-2 pr-10 border border-gray-300 rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-transparent text-right"
-                  />
-                  <span className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-500">원</span>
-                </div>
-                <p className="text-xs text-gray-500 mt-1">
-                  성과분석에서 총수익률 계산에 사용됩니다
-                </p>
-              </div>
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">
-                  종목당 최대 금액
-                </label>
-                <div className="relative">
-                  <input
-                    type="text"
-                    inputMode="numeric"
-                    value={formatNumber(formData.max_per_stock)}
-                    onChange={(e) => {
-                      const value = parseNumber(e.target.value);
-                      setFormData({ ...formData, max_per_stock: value });
-                    }}
-                    placeholder="200,000"
-                    className="w-full px-3 py-2 pr-10 border border-gray-300 rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-transparent text-right"
-                  />
-                  <span className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-500">원</span>
-                </div>
-                <p className="text-xs text-gray-500 mt-1">
-                  한 종목에 최대 {formatNumber(formData.max_per_stock)}원까지 매수
-                </p>
-              </div>
-            </div>
-          </div>
-        )}
-
-        {/* 매매 기준 설정 (Green Light 모드가 아닐 때만 표시) */}
-        {formData.trade_mode !== 'greenlight' && (
-          <div className="bg-white rounded-xl p-4 shadow-sm">
+        {/* 매매 기준 설정 */}
+        <div className={`bg-white rounded-xl p-4 shadow-sm ${!formData.trading_enabled ? 'opacity-50' : ''}`}>
             <h3 className="font-bold text-gray-800 mb-3 flex items-center gap-2">
               <Target size={18} className="text-blue-600" />
               매매 기준
@@ -467,7 +195,7 @@ export default function AutoTradeSettings() {
                 </label>
                 <div className="grid grid-cols-4 gap-2">
                   {[
-                    { value: 'v1', label: 'V1', desc: '종합 기술적' },
+                    { value: 'v1', label: 'V1', desc: '종합 기술' },
                     { value: 'v2', label: 'V2', desc: '추세 추종' },
                     { value: 'v4', label: 'V4', desc: '스나이퍼' },
                     { value: 'v5', label: 'V5', desc: '장대양봉' },
@@ -476,7 +204,8 @@ export default function AutoTradeSettings() {
                       key={version.value}
                       type="button"
                       onClick={() => setFormData({ ...formData, score_version: version.value })}
-                      className={`p-3 rounded-lg border-2 text-center transition-all ${
+                      disabled={!formData.trading_enabled}
+                      className={`p-3 rounded-lg border-2 text-center transition-all disabled:cursor-not-allowed ${
                         formData.score_version === version.value
                           ? 'border-purple-500 bg-purple-50'
                           : 'border-gray-200 hover:border-gray-300'
@@ -507,9 +236,10 @@ export default function AutoTradeSettings() {
                     onChange={(e) =>
                       setFormData({ ...formData, stop_loss_rate: parseInt(e.target.value) })
                     }
+                    disabled={!formData.trading_enabled}
                     min={-20}
                     max={0}
-                    className="w-full h-3 bg-blue-200 rounded-full appearance-none cursor-pointer
+                    className="w-full h-3 bg-blue-200 rounded-full appearance-none cursor-pointer disabled:cursor-not-allowed
                       [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:w-6 [&::-webkit-slider-thumb]:h-6
                       [&::-webkit-slider-thumb]:bg-blue-600 [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:shadow-lg
                       [&::-webkit-slider-thumb]:border-4 [&::-webkit-slider-thumb]:border-white"
@@ -533,9 +263,10 @@ export default function AutoTradeSettings() {
                     onChange={(e) =>
                       setFormData({ ...formData, min_buy_score: parseInt(e.target.value) })
                     }
+                    disabled={!formData.trading_enabled}
                     min={50}
                     max={100}
-                    className="w-full h-3 bg-green-200 rounded-full appearance-none cursor-pointer
+                    className="w-full h-3 bg-green-200 rounded-full appearance-none cursor-pointer disabled:cursor-not-allowed
                       [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:w-6 [&::-webkit-slider-thumb]:h-6
                       [&::-webkit-slider-thumb]:bg-green-600 [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:shadow-lg
                       [&::-webkit-slider-thumb]:border-4 [&::-webkit-slider-thumb]:border-white"
@@ -551,7 +282,7 @@ export default function AutoTradeSettings() {
                   <div className="flex items-center justify-between mb-2">
                     <span className="text-xs text-gray-500">0</span>
                     <span className="text-lg font-bold text-red-600">{formData.sell_score}점</span>
-                    <span className="text-xs text-gray-500">50</span>
+                    <span className="text-xs text-gray-500">60</span>
                   </div>
                   <input
                     type="range"
@@ -559,9 +290,10 @@ export default function AutoTradeSettings() {
                     onChange={(e) =>
                       setFormData({ ...formData, sell_score: parseInt(e.target.value) })
                     }
+                    disabled={!formData.trading_enabled}
                     min={0}
-                    max={50}
-                    className="w-full h-3 bg-red-200 rounded-full appearance-none cursor-pointer
+                    max={60}
+                    className="w-full h-3 bg-red-200 rounded-full appearance-none cursor-pointer disabled:cursor-not-allowed
                       [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:w-6 [&::-webkit-slider-thumb]:h-6
                       [&::-webkit-slider-thumb]:bg-red-600 [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:shadow-lg
                       [&::-webkit-slider-thumb]:border-4 [&::-webkit-slider-thumb]:border-white"
@@ -571,8 +303,56 @@ export default function AutoTradeSettings() {
               </div>
             </div>
           </div>
-        )}
 
+        {/* 투자 설정 */}
+        <div className={`bg-white rounded-xl p-4 shadow-sm ${!formData.trading_enabled ? 'opacity-50' : ''}`}>
+          <h3 className="font-bold text-gray-800 mb-3 flex items-center gap-2">
+            <DollarSign size={18} className="text-green-600" />
+            투자 설정
+          </h3>
+          <div className="space-y-4">
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-2">
+                종목당 최대 금액
+              </label>
+              <div className="relative">
+                <input
+                  type="text"
+                  value={formatNumber(formData.max_per_stock)}
+                  onChange={(e) => {
+                    const value = parseNumber(e.target.value);
+                    setFormData({ ...formData, max_per_stock: value });
+                  }}
+                  disabled={!formData.trading_enabled}
+                  className="w-full px-4 py-3 border border-gray-300 rounded-xl focus:ring-2 focus:ring-green-500 focus:border-transparent text-right text-lg disabled:bg-gray-100 disabled:cursor-not-allowed"
+                  placeholder="0"
+                />
+                <span className="absolute right-4 top-1/2 -translate-y-1/2 text-gray-500">원</span>
+              </div>
+              <p className="text-xs text-gray-500 mt-1">한 종목에 투자할 수 있는 최대 금액</p>
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-2">
+                초기 투자금
+              </label>
+              <div className="relative">
+                <input
+                  type="text"
+                  value={formatNumber(formData.initial_investment)}
+                  onChange={(e) => {
+                    const value = parseNumber(e.target.value);
+                    setFormData({ ...formData, initial_investment: value });
+                  }}
+                  disabled={!formData.trading_enabled}
+                  className="w-full px-4 py-3 border border-gray-300 rounded-xl focus:ring-2 focus:ring-green-500 focus:border-transparent text-right text-lg disabled:bg-gray-100 disabled:cursor-not-allowed"
+                  placeholder="0"
+                />
+                <span className="absolute right-4 top-1/2 -translate-y-1/2 text-gray-500">원</span>
+              </div>
+              <p className="text-xs text-gray-500 mt-1">수익률 계산 기준 금액</p>
+            </div>
+          </div>
+        </div>
 
         {/* 저장 버튼 */}
         <button
@@ -592,20 +372,9 @@ export default function AutoTradeSettings() {
           <div className="text-sm text-yellow-700">
             <p className="font-medium mb-1">주의사항</p>
             <ul className="space-y-1 text-yellow-600">
-              {formData.trade_mode === 'greenlight' ? (
-                <>
-                  <li>- Green Light 모드는 AI가 자율적으로 매매합니다</li>
-                  <li>- 손절/익절 규칙이 없어 큰 손실이 발생할 수 있습니다</li>
-                  <li>- 모의투자에서 충분히 테스트 후 사용하세요</li>
-                  <li>- LLM API 호출 비용이 발생합니다</li>
-                </>
-              ) : (
-                <>
-                  <li>- 자동 모드는 AI가 직접 매매를 실행합니다</li>
-                  <li>- 손절률은 리스크 관리에 중요합니다</li>
-                  <li>- 매수 점수가 높을수록 신호가 엄격해집니다</li>
-                </>
-              )}
+              <li>- 자동 모드는 AI가 직접 매매를 실행합니다</li>
+              <li>- 손절률은 리스크 관리에 중요합니다</li>
+              <li>- 매수 점수가 높을수록 신호가 엄격해집니다</li>
             </ul>
           </div>
         </div>
