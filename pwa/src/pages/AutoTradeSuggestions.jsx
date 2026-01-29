@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback } from 'react';
 import { flushSync } from 'react-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useNavigate } from 'react-router-dom';
-import { autoTradeAPI } from '../api/client';
+import { autoTradeAPI, realtimeAPI } from '../api/client';
 import { useAuth } from '../contexts/AuthContext';
 import Loading from '../components/Loading';
 import {
@@ -72,14 +72,15 @@ const roundToTick = (price, roundDown = true) => {
 };
 
 // 개별 제안 카드 컴포넌트 (컴팩트 버전)
-function SuggestionCard({ suggestion, activeTab, onApprove, onReject, isApproving, isRejecting, isRemoving }) {
+function SuggestionCard({ suggestion, livePrice, activeTab, onApprove, onReject, isApproving, isRejecting, isRemoving }) {
   const navigate = useNavigate();
   const isBuy = activeTab === 'buy';
   const isPending = suggestion.status === 'pending';
 
-  // 가격 관련 상태
+  // 가격 관련 상태 (livePrice 우선 사용)
   const suggestedPrice = suggestion.suggested_price || 0;
-  const currentPrice = suggestion.current_price || suggestedPrice;
+  const currentPrice = livePrice?.current_price || suggestion.current_price || suggestedPrice;
+  const changeRate = livePrice?.change_rate ?? suggestion.change_rate;
   const initialPrice = isBuy ? suggestedPrice : currentPrice;
   const initialQuantity = suggestion.quantity || 1;
 
@@ -193,12 +194,12 @@ function SuggestionCard({ suggestion, activeTab, onApprove, onReject, isApprovin
         {suggestion.original_price > 0 && <span className="ml-1">P{suggestion.original_price.toLocaleString()}</span>}
       </div>
 
-      {/* 현재가 (오른쪽 정렬) */}
-      <div className="flex items-center justify-end text-xs mb-2">
-        <span className={`font-medium ${suggestion.change_rate > 0 ? 'text-red-600' : suggestion.change_rate < 0 ? 'text-blue-600' : 'text-gray-700'}`}>
+      {/* 현재가 (오른쪽 정렬, 10초마다 갱신) */}
+      <div className="flex items-center justify-end text-sm mb-2">
+        <span className={`font-bold ${changeRate > 0 ? 'text-red-600' : changeRate < 0 ? 'text-blue-600' : 'text-gray-700'}`}>
           현재 {currentPrice.toLocaleString()}원
-          {suggestion.change_rate !== null && suggestion.change_rate !== undefined && (
-            <span className="ml-1">({suggestion.change_rate > 0 ? '+' : ''}{suggestion.change_rate.toFixed(1)}%)</span>
+          {changeRate !== null && changeRate !== undefined && (
+            <span className="ml-1 font-medium">({changeRate > 0 ? '+' : ''}{changeRate.toFixed(1)}%)</span>
           )}
         </span>
       </div>
@@ -206,32 +207,32 @@ function SuggestionCard({ suggestion, activeTab, onApprove, onReject, isApprovin
       {/* 수량 + 가격 설정 (대기중일 때만) */}
       {isPending && (
         <div className="bg-gray-50 rounded-lg p-2 mb-2">
-          {/* 수량 + 가격 한 줄로 (오른쪽 정렬) */}
-          <div className="flex items-center justify-end gap-3 mb-2">
-            {/* 수량 */}
+          {/* 수량 왼쪽, 가격 오른쪽 */}
+          <div className="flex items-center justify-between mb-2">
+            {/* 수량 (왼쪽) */}
             <div className="flex items-center gap-1">
-              <span className="text-xs text-gray-500">수량</span>
-              <button onClick={() => handleQuantityChange(-1)} className="w-6 h-6 flex items-center justify-center bg-gray-200 hover:bg-gray-300 rounded text-gray-700 font-bold text-sm">-</button>
+              <span className="text-sm text-gray-500">수량</span>
+              <button onClick={() => handleQuantityChange(-1)} className="w-7 h-7 flex items-center justify-center bg-gray-200 hover:bg-gray-300 rounded text-gray-700 font-bold">-</button>
               <input
                 type="number"
                 value={customQuantity}
                 onChange={(e) => setCustomQuantity(Math.max(1, parseInt(e.target.value) || 1))}
-                className="w-10 h-6 text-center font-bold text-gray-800 border border-gray-300 rounded text-sm"
+                className="w-12 h-7 text-center font-bold text-gray-800 border border-gray-300 rounded text-sm"
                 min="1"
               />
-              <button onClick={() => handleQuantityChange(1)} className="w-6 h-6 flex items-center justify-center bg-gray-200 hover:bg-gray-300 rounded text-gray-700 font-bold text-sm">+</button>
+              <button onClick={() => handleQuantityChange(1)} className="w-7 h-7 flex items-center justify-center bg-gray-200 hover:bg-gray-300 rounded text-gray-700 font-bold">+</button>
             </div>
-            {/* 가격 */}
+            {/* 가격 (오른쪽) */}
             <div className="flex items-center gap-1">
-              <span className="text-xs text-gray-500">가격</span>
+              <span className="text-sm text-gray-500">가격</span>
               {!isMarketOrder && (
                 <>
-                  <button onClick={() => handlePriceChange(-1)} className="w-6 h-6 flex items-center justify-center bg-blue-100 hover:bg-blue-200 rounded text-blue-700 font-bold text-sm">-</button>
-                  <span className="w-16 text-center font-bold text-gray-800 text-xs">{selectedPrice.toLocaleString()}</span>
-                  <button onClick={() => handlePriceChange(1)} className="w-6 h-6 flex items-center justify-center bg-red-100 hover:bg-red-200 rounded text-red-700 font-bold text-sm">+</button>
+                  <button onClick={() => handlePriceChange(-1)} className="w-7 h-7 flex items-center justify-center bg-blue-100 hover:bg-blue-200 rounded text-blue-700 font-bold">-</button>
+                  <span className="w-20 text-center font-bold text-gray-800 text-sm">{selectedPrice.toLocaleString()}</span>
+                  <button onClick={() => handlePriceChange(1)} className="w-7 h-7 flex items-center justify-center bg-red-100 hover:bg-red-200 rounded text-red-700 font-bold">+</button>
                 </>
               )}
-              {isMarketOrder && <span className="text-xs font-medium text-purple-700 flex items-center gap-1"><Zap size={12} className="text-yellow-500" />시장가</span>}
+              {isMarketOrder && <span className="text-sm font-medium text-purple-700 flex items-center gap-1"><Zap size={14} className="text-yellow-500" />시장가</span>}
             </div>
           </div>
 
@@ -352,6 +353,32 @@ export default function AutoTradeSuggestions() {
     staleTime: 0,
     gcTime: 0,
   });
+
+  // 실시간 현재가 (10초마다 갱신)
+  const [livePrices, setLivePrices] = useState({});
+
+  useEffect(() => {
+    const fetchLivePrices = async () => {
+      const allSuggestions = [...(buySuggestions || []), ...(sellSuggestions || [])];
+      const codes = allSuggestions.map(s => s.stock_code).filter(Boolean);
+      if (codes.length === 0) return;
+
+      try {
+        const res = await realtimeAPI.prices(codes);
+        const priceMap = {};
+        (res.data?.prices || []).forEach(p => {
+          priceMap[p.code] = { current_price: p.current_price, change_rate: p.change_rate };
+        });
+        setLivePrices(priceMap);
+      } catch (e) {
+        console.error('현재가 조회 실패:', e);
+      }
+    };
+
+    fetchLivePrices(); // 즉시 1회 실행
+    const interval = setInterval(fetchLivePrices, 10000); // 10초마다
+    return () => clearInterval(interval);
+  }, [buySuggestions, sellSuggestions]);
 
   // 수량 조정 확인 상태
   const [adjustmentInfo, setAdjustmentInfo] = useState(null);
@@ -682,8 +709,9 @@ export default function AutoTradeSuggestions() {
         <div className="space-y-3" key={JSON.stringify(suggestions.map(s => `${s.id}-${s.change_rate}`))}>
           {suggestions.map((suggestion) => (
             <SuggestionCard
-              key={`${suggestion.id}-${suggestion.change_rate}`}
+              key={`${suggestion.id}-${livePrices[suggestion.stock_code]?.current_price || suggestion.change_rate}`}
               suggestion={suggestion}
+              livePrice={livePrices[suggestion.stock_code]}
               activeTab={activeTab}
               onApprove={(id, data, stockName) => handleApprove(id, data, activeTab === 'sell', stockName)}
               onReject={(id, stockName) => handleReject(id, activeTab === 'sell', stockName)}
