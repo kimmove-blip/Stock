@@ -1651,7 +1651,7 @@ class TradeLogger:
                        current_price, 1 as quantity, signals as reason, score, status, created_at
                 FROM pending_buy_suggestions
                 WHERE status = 'pending' AND user_id = ?
-                ORDER BY score DESC, created_at DESC
+                ORDER BY created_at DESC
             """, (user_id,))
             rows = cursor.fetchall()
 
