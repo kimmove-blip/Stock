@@ -1571,8 +1571,8 @@ class TradeLogger:
                     stop_loss_rate, min_buy_score, sell_score,
                     trading_enabled, initial_investment,
                     llm_provider, llm_api_key, llm_model,
-                    updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    score_version, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, (
                 user_id,
                 settings.get('trade_mode', 'manual'),
@@ -1585,6 +1585,7 @@ class TradeLogger:
                 llm_provider,
                 llm_api_key,
                 llm_model,
+                settings.get('score_version', 'v5'),
                 now.isoformat()
             ))
             return cursor.rowcount > 0

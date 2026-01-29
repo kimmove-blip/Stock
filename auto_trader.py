@@ -41,6 +41,7 @@ INTRADAY_SCORES_DIR = Path(__file__).parent / "output" / "intraday_scores"
 def load_scores_from_csv(max_age_minutes: int = 15) -> Optional[Tuple[List[Dict], Dict]]:
     """
     가장 최근 CSV 스코어 파일을 로드하여 MarketScreener 결과 형식으로 변환
+    모든 스코어 버전(v1, v2, v5)을 로드하여 각 종목에 저장
 
     Args:
         max_age_minutes: CSV 파일 최대 허용 경과 시간 (분)
@@ -86,19 +87,28 @@ def load_scores_from_csv(max_age_minutes: int = 15) -> Optional[Tuple[List[Dict]
         return None
 
     # 필수 컬럼 확인
-    required_cols = ['code', 'name', 'close', 'v5']
+    required_cols = ['code', 'name', 'close']
     if not all(col in df.columns for col in required_cols):
         print(f"  [CSV] 필수 컬럼 부족: {required_cols}")
         return None
 
+    # 지원하는 스코어 버전
+    score_versions = ['v1', 'v2', 'v4', 'v5']
+
     # MarketScreener 형식으로 변환
     top_stocks = []
-    all_scores = {}
+    all_scores = {}  # {code: {'v1': x, 'v2': y, 'v5': z}}
 
     for _, row in df.iterrows():
         code = str(row['code']).zfill(6)
-        score = int(row.get('v5', 0))
-        all_scores[code] = score
+
+        # 모든 스코어 버전 로드
+        scores = {}
+        for sv in score_versions:
+            scores[sv] = int(row.get(sv, 0)) if sv in df.columns else 0
+
+        score = scores.get('v5', 0)  # 기본 정렬용 (v5)
+        all_scores[code] = scores  # 모든 버전 저장
 
         # 시그널 파싱
         signals_str = row.get('signals', '')
@@ -111,7 +121,8 @@ def load_scores_from_csv(max_age_minutes: int = 15) -> Optional[Tuple[List[Dict]
             "code": code,
             "name": row.get('name', ''),
             "market": row.get('market', 'KOSDAQ'),
-            "score": score,
+            "score": score,  # 기본값 v5
+            "scores": scores,  # 모든 버전: {'v1': x, 'v2': y, 'v5': z}
             "signals": signals,
             "patterns": [],
             "close": int(row.get('close', 0)),
@@ -122,7 +133,7 @@ def load_scores_from_csv(max_age_minutes: int = 15) -> Optional[Tuple[List[Dict]
         }
         top_stocks.append(stock)
 
-    # V5 점수 내림차순 정렬
+    # 점수 내림차순 정렬
     top_stocks.sort(key=lambda x: x['score'], reverse=True)
 
     stats = {
@@ -1850,21 +1861,24 @@ class AutoTrader:
         report = self.logger.export_report(days=days)
         print(report)
 
-    def run_intraday(self, min_score: int = 75, screening_result: tuple = None, trade_mode: str = 'auto') -> Dict:
+    def run_intraday(self, min_score: int = 75, screening_result: tuple = None, trade_mode: str = 'auto', score_version: str = 'v5') -> Dict:
         """
         장중 10분 스크리닝 모드
 
         cron으로 10분마다 실행하여 신규 매수 후보를 찾고 자동 매수합니다.
         - 전종목 실시간 스크리닝 (strict 모드)
-        - 75점 이상 종목 자동 매수
+        - min_score점 이상 종목 자동 매수
         - 당일 블랙리스트 적용 (왕복매매 방지)
 
         Args:
-            min_score: 최소 매수 점수 (기본: 75)
+            min_score: 최소 매수 점수
             screening_result: (top_stocks, stats) 튜플. 전달 시 스크리닝 건너뜀
+            trade_mode: auto 또는 semi
+            score_version: 스코어 버전 (v1, v2, v5)
 
         cron 예시: */10 9-14 * * 1-5 /path/to/python auto_trader.py --intraday
         """
+        self.score_version = score_version  # 인스턴스 변수로 저장
         print("\n" + "=" * 60)
         print(f"  장중 스크리닝 시작: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
         print("=" * 60)
@@ -2086,7 +2100,7 @@ class AutoTrader:
             print(f"  JSON 저장 실패: {e}")
 
         # 4. 매수 후보 필터링 (점수 + 거래량 조건)
-        print(f"\n[4] 매수 후보 필터링 중 (점수 >= {min_score}, 거래량 조건 적용)...")
+        print(f"\n[4] 매수 후보 필터링 중 ({score_version.upper()} >= {min_score}, 거래량 조건 적용)...")
 
         # 시간대별 거래량 보정 계수
         now = datetime.now()
@@ -2103,7 +2117,9 @@ class AutoTrader:
 
         candidates = []
         for stock in top_stocks:
-            score = stock.get("score", 0)
+            # 사용자의 score_version에 따른 점수 사용
+            scores = stock.get("scores", {})
+            score = scores.get(score_version, stock.get("score", 0))
             code = stock.get("code")
             name = stock.get("name")
             volume_ratio = stock.get("indicators", {}).get("volume_ratio", 1.0)
@@ -2435,7 +2451,8 @@ def run_for_all_users(dry_run: bool = False, min_score: int = 75, use_csv: bool 
             user_settings = logger.get_auto_trade_settings(user_id) or {}
             user_min_score = user_settings.get('min_buy_score', min_score)
             user_sell_score = user_settings.get('sell_score', 40)
-            print(f"  설정: min_buy={user_min_score}점, sell={user_sell_score}점")
+            user_score_version = user_settings.get('score_version', 'v5')
+            print(f"  설정: {user_score_version.upper()} min_buy={user_min_score}점, sell={user_sell_score}점")
 
             trader = AutoTrader(
                 dry_run=dry_run,
@@ -2447,7 +2464,12 @@ def run_for_all_users(dry_run: bool = False, min_score: int = 75, use_csv: bool 
             if trade_mode == 'greenlight':
                 result = trader.run_greenlight()
             elif trade_mode in ('auto', 'semi'):
-                result = trader.run_intraday(min_score=user_min_score, screening_result=screening_result, trade_mode=trade_mode)
+                result = trader.run_intraday(
+                    min_score=user_min_score,
+                    screening_result=screening_result,
+                    trade_mode=trade_mode,
+                    score_version=user_score_version
+                )
             else:
                 print(f"  지원하지 않는 모드: {trade_mode}")
                 continue

@@ -1231,6 +1231,7 @@ class AutoTradeSettingsRequest(BaseModel):
     sell_score: int = 40  # 매도 점수 (이 점수 이하면 매도)
     trading_enabled: bool = True
     initial_investment: int = 0  # 초기 투자금
+    score_version: str = "v5"  # 스코어 버전 (v1, v2, v5)
 
 
 @router.get("/settings")
@@ -1251,7 +1252,8 @@ async def get_settings(
         "min_buy_score": 70,
         "sell_score": 40,
         "trading_enabled": True,
-        "initial_investment": 0
+        "initial_investment": 0,
+        "score_version": "v5"
     }
 
     if not settings:
@@ -1262,6 +1264,8 @@ async def get_settings(
         settings['initial_investment'] = 0
     if 'max_per_stock' not in settings:
         settings['max_per_stock'] = 200000
+    if 'score_version' not in settings:
+        settings['score_version'] = 'v5'
 
     print(f"[설정조회] user_id={current_user.get('id')}, initial_investment={settings.get('initial_investment')}")
     return settings
