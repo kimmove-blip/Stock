@@ -1168,29 +1168,22 @@ async def get_account(
         # 총 자산 = 평가금액 + d2 예수금 (실제 자산 기준)
         total_asset = total_evaluation + d2_cash_balance
 
-        # holdings에 AI 점수 추가 (top100 JSON에서 - 전종목 점수 포함)
+        # holdings에 AI 점수 추가 (장중 스코어 CSV에서 V5 점수 사용)
         scores_map = {}
         try:
+            import glob
+            import pandas as pd
             from config import OUTPUT_DIR
-            import json
-            today = datetime.now()
-            for days_back in range(7):
-                check_date = today - timedelta(days=days_back)
-                json_path = OUTPUT_DIR / f"top100_{check_date.strftime('%Y%m%d')}.json"
-                if json_path.exists():
-                    with open(json_path, 'r', encoding='utf-8') as f:
-                        data = json.load(f)
-                        # 1. 전종목 점수 (all_scores)가 있으면 사용
-                        all_scores = data.get('screening_stats', {}).get('all_scores', {})
-                        if all_scores:
-                            scores_map = all_scores
-                        else:
-                            # 2. 없으면 상위 종목에서만 점수 가져오기
-                            for stock in data.get('stocks', []):
-                                scores_map[stock.get('code')] = stock.get('score', 0)
-                    break
+            score_files = sorted(glob.glob(str(OUTPUT_DIR / "intraday_scores" / "*.csv")))
+            if score_files:
+                latest_csv = score_files[-1]
+                df = pd.read_csv(latest_csv)
+                df['code'] = df['code'].astype(str).str.zfill(6)
+                if 'v5' in df.columns:
+                    for _, row in df.iterrows():
+                        scores_map[row['code']] = int(row.get('v5', 0))
         except Exception as e:
-            print(f"점수 조회 실패: {e}")
+            print(f"V5 점수 조회 실패: {e}")
 
         # holdings에 점수 추가
         for h in holdings:
@@ -1720,29 +1713,22 @@ async def get_diagnosis(
     # 종목 코드 목록
     stock_codes = [h.get('stock_code', '') for h in holdings]
 
-    # JSON에서 점수 가져오기 (계좌현황과 동일한 방식)
+    # 장중 스코어 CSV에서 V5 점수 가져오기 (계좌현황과 동일한 방식)
     scores_map = {}
     try:
+        import glob
+        import pandas as pd
         from config import OUTPUT_DIR
-        import json
-        today = datetime.now()
-        for days_back in range(7):
-            check_date = today - timedelta(days=days_back)
-            json_path = OUTPUT_DIR / f"top100_{check_date.strftime('%Y%m%d')}.json"
-            if json_path.exists():
-                with open(json_path, 'r', encoding='utf-8') as f:
-                    data = json.load(f)
-                    # 1. 전종목 점수 (all_scores)가 있으면 사용
-                    all_scores = data.get('screening_stats', {}).get('all_scores', {})
-                    if all_scores:
-                        scores_map = all_scores
-                    else:
-                        # 2. 없으면 상위 종목에서만 점수 가져오기
-                        for stock in data.get('stocks', []):
-                            scores_map[stock.get('code')] = stock.get('score', 0)
-                break
+        score_files = sorted(glob.glob(str(OUTPUT_DIR / "intraday_scores" / "*.csv")))
+        if score_files:
+            latest_csv = score_files[-1]
+            df = pd.read_csv(latest_csv)
+            df['code'] = df['code'].astype(str).str.zfill(6)
+            if 'v5' in df.columns:
+                for _, row in df.iterrows():
+                    scores_map[row['code']] = int(row.get('v5', 0))
     except Exception as e:
-        print(f"진단 점수 조회 실패: {e}")
+        print(f"V5 점수 조회 실패: {e}")
 
     # 가격 정보를 병렬로 조회
     price_infos = await asyncio.gather(*[get_stock_price_info(code) for code in stock_codes])
@@ -1775,7 +1761,7 @@ async def get_diagnosis(
         below_sma20 = sma20_data.get('below_sma20', False)
         sma20_distance = sma20_data.get('distance_pct', 0)
 
-        # 시그널 결정: 래치 전략 (20일선 이탈 + 40점 미만)
+        # 시그널 결정: V5 전략 (20일선 이탈 + 50점 미만)
         signal = 'hold'
 
         # [래치 전략] 20일선 이탈 = 추세 종료 → 강력 매도
@@ -1783,8 +1769,8 @@ async def get_diagnosis(
             signal = 'strong_sell'
             warning_count += 1
             ai_comment = f"⚠️ 20일선 이탈 ({sma20_distance:+.1f}%) - 추세 종료, 매도 권장"
-        # [래치 전략] 40점 미만 = 모멘텀 완전 붕괴 → 강력 매도
-        elif health_score < 40:
+        # [V5 전략] 50점 미만 = 모멘텀 약화 → 강력 매도
+        elif health_score < 50:
             signal = 'strong_sell'
             warning_count += 1
             if not ai_comment:
@@ -1805,7 +1791,7 @@ async def get_diagnosis(
                 ai_comment = "주의가 필요합니다. 손절 라인을 확인하세요."
         elif health_score >= 70:
             signal = 'buy'
-        elif health_score <= 40:
+        elif health_score < 50:
             signal = 'sell'
             if profit_rate < 0:
                 warning_count += 1
