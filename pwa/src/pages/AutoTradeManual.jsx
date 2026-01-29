@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { autoTradeAPI, stockAPI, realtimeAPI, top100API } from '../api/client';
 import { useAuth } from '../contexts/AuthContext';
@@ -42,6 +43,7 @@ const adjustToValidPrice = (price, isBuy = true) => {
 export default function AutoTradeManual() {
   const { user } = useAuth();
   const queryClient = useQueryClient();
+  const [searchParams, setSearchParams] = useSearchParams();
   const [activeTab, setActiveTab] = useState('buy');
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedStock, setSelectedStock] = useState(null);
@@ -52,6 +54,17 @@ export default function AutoTradeManual() {
     price: '',
     order_type: 'limit',
   });
+
+  // URL 파라미터로 전달된 종목 자동 선택
+  useEffect(() => {
+    const code = searchParams.get('code');
+    const name = searchParams.get('name');
+    if (code && name) {
+      setSelectedStock({ stock_code: code, stock_name: name });
+      // URL 파라미터 제거 (히스토리 정리)
+      setSearchParams({}, { replace: true });
+    }
+  }, []);
 
   // 자동매매 권한 체크
   if (!user?.auto_trade_enabled) {

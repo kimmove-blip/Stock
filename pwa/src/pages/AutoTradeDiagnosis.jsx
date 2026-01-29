@@ -14,6 +14,7 @@ import {
   RefreshCw,
   AlertCircle,
   ArrowUpDown,
+  Banknote,
 } from 'lucide-react';
 
 const SORT_OPTIONS = [
@@ -191,11 +192,11 @@ export default function AutoTradeDiagnosis() {
               className="bg-white rounded-xl p-4 shadow-sm"
             >
               {/* 헤더 */}
-              <div
-                className="flex items-start justify-between mb-3 cursor-pointer"
-                onClick={() => navigate(`/stock/${holding.stock_code}`)}
-              >
-                <div>
+              <div className="flex items-start justify-between mb-3">
+                <div
+                  className="cursor-pointer flex-1"
+                  onClick={() => navigate(`/stock/${holding.stock_code}`)}
+                >
                   <div className="flex items-center gap-2">
                     {getHealthIcon(holding.health_score || 50)}
                     <p className="font-bold text-gray-800">{holding.stock_name}</p>
@@ -209,9 +210,18 @@ export default function AutoTradeDiagnosis() {
                   </div>
                   <p className="text-xs text-gray-500">{holding.stock_code}</p>
                 </div>
-                <span className={`text-xs px-2 py-1 rounded-full font-medium ${getSignalColor(holding.signal)}`}>
-                  {getSignalText(holding.signal)}
-                </span>
+                <div className="flex items-center gap-2">
+                  <span className={`text-xs px-2 py-1 rounded-full font-medium ${getSignalColor(holding.signal)}`}>
+                    {getSignalText(holding.signal)}
+                  </span>
+                  <button
+                    onClick={() => navigate(`/auto-trade/manual?code=${holding.stock_code}&name=${encodeURIComponent(holding.stock_name)}`)}
+                    className="flex items-center gap-1 text-xs px-2 py-1 bg-purple-100 text-purple-700 rounded-full hover:bg-purple-200 transition-colors"
+                  >
+                    <Banknote size={12} />
+                    매매
+                  </button>
+                </div>
               </div>
 
               {/* 가격 정보 */}
