@@ -15,7 +15,7 @@ class TradingLimits:
     stop_loss_pct: float = -0.07         # 손절 비율 (-7%)
     take_profit_pct: float = None        # 익절 비율 (None=비활성화, 신호 기반 매도)
     max_daily_trades: int = 10           # 일일 최대 거래 횟수
-    max_holdings: int = 10               # 최대 보유 종목 수
+    max_holdings: int = 20               # 최대 보유 종목 수
     max_hold_days: int = 10              # 최대 보유 기간 (일)
     min_buy_score: int = 80              # 최소 매수 점수
     min_hold_score: int = 40             # 최소 보유 점수 (이하 시 매도)
@@ -208,7 +208,7 @@ class RiskManager:
         Returns:
             (매도 필요 여부, 현재 점수)
         """
-        if current_score < self.limits.min_hold_score:  # 40점 미만
+        if current_score <= self.limits.min_hold_score:  # 40점 이하
             return True, current_score
         return False, current_score
 

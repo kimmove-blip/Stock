@@ -30,6 +30,7 @@ from api.services.kis_client import KISClient
 from trading.order_executor import OrderExecutor
 from trading.risk_manager import RiskManager, TradingLimits
 from trading.trade_logger import TradeLogger, BuySuggestionManager
+from trading.nasdaq_monitor import get_adjusted_investment_amount
 from technical_analyst import TechnicalAnalyst
 from market_screener import MarketScreener
 from config import AutoTraderConfig, TelegramConfig, OUTPUT_DIR, SIGNAL_NAMES_KR
@@ -1809,10 +1810,17 @@ class AutoTrader:
 
         # 5. 매수 실행
         if filtered_candidates:
-            investment_per_stock = self.risk_manager.calculate_investment_amount()
+            base_investment = self.risk_manager.calculate_investment_amount()
+
+            # 나스닥 연동 투자금액 조정
+            adjusted_investment, nasdaq_multiplier, nasdaq_change = get_adjusted_investment_amount(base_investment)
+            investment_per_stock = adjusted_investment
+
             # 실제 주문금액은 min(종목당 투자금, 주문가능금액)
             actual_investment = min(investment_per_stock, max_buy_amt)
             print(f"\n[5] 매수 주문 실행 중...")
+            if nasdaq_multiplier < 1.0:
+                print(f"  [NASDAQ 조정] 기본: {base_investment:,}원 × {nasdaq_multiplier} = {investment_per_stock:,}원")
             print(f"  종목당 투자금: {investment_per_stock:,}원, 주문가능: {max_buy_amt:,}원 → 실제: {actual_investment:,}원")
 
             self.execute_buy_orders(filtered_candidates, actual_investment)
@@ -2184,8 +2192,15 @@ class AutoTrader:
 
         # 6. 매수 실행
         print("\n[6] 매수 주문 실행 중...")
-        investment_per_stock = self.risk_manager.calculate_investment_amount()
+        base_investment = self.risk_manager.calculate_investment_amount()
+
+        # 나스닥 연동 투자금액 조정
+        adjusted_investment, nasdaq_multiplier, nasdaq_change = get_adjusted_investment_amount(base_investment)
+        investment_per_stock = adjusted_investment
+
         actual_investment = min(investment_per_stock, max_buy_amt // len(filtered_candidates))
+        if nasdaq_multiplier < 1.0:
+            print(f"  [NASDAQ 조정] 기본: {base_investment:,}원 × {nasdaq_multiplier} = {investment_per_stock:,}원")
         print(f"  종목당 투자금: {actual_investment:,}원")
 
         buy_count = 0
