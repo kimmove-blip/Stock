@@ -43,6 +43,7 @@ export default function AutoTradeSettings() {
     sell_score: 40, // 매도 점수 (이 점수 이하면 매도)
     trading_enabled: true, // 자동매매 활성화
     initial_investment: 0, // 초기 투자금
+    score_version: 'v5', // 스코어 버전 (v1, v2, v5)
   });
 
   // LLM 설정 (Green Light 모드용)
@@ -498,6 +499,37 @@ export default function AutoTradeSettings() {
               매매 기준
             </h3>
             <div className="space-y-4">
+              {/* 스코어 버전 선택 */}
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-2">
+                  스코어 엔진
+                </label>
+                <div className="grid grid-cols-4 gap-2">
+                  {[
+                    { value: 'v1', label: 'V1', desc: '종합 기술적' },
+                    { value: 'v2', label: 'V2', desc: '추세 추종' },
+                    { value: 'v4', label: 'V4', desc: '스나이퍼' },
+                    { value: 'v5', label: 'V5', desc: '장대양봉' },
+                  ].map((version) => (
+                    <button
+                      key={version.value}
+                      type="button"
+                      onClick={() => setFormData({ ...formData, score_version: version.value })}
+                      className={`p-3 rounded-lg border-2 text-center transition-all ${
+                        formData.score_version === version.value
+                          ? 'border-purple-500 bg-purple-50'
+                          : 'border-gray-200 hover:border-gray-300'
+                      }`}
+                    >
+                      <p className={`font-bold ${formData.score_version === version.value ? 'text-purple-600' : 'text-gray-800'}`}>
+                        {version.label}
+                      </p>
+                      <p className="text-xs text-gray-500">{version.desc}</p>
+                    </button>
+                  ))}
+                </div>
+                <p className="text-xs text-gray-500 mt-1">V5 장대양봉 전략 권장 (승률 67%)</p>
+              </div>
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-2">
                   손절률
