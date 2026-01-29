@@ -6,11 +6,11 @@
     python auto_trader.py              # 1회 실행
     python auto_trader.py --dry-run    # 테스트 실행 (주문 X)
     python auto_trader.py --report     # 성과 리포트만 출력
-    python auto_trader.py --all --use-csv  # CSV 스코어 사용 (스크리닝 건너뜀)
+    python auto_trader.py --all        # 전체 사용자 실행 (CSV 스코어 사용)
 
 cron 설정 예시:
-    # 매일 08:50 (장 시작 전)
-    50 8 * * 1-5 /home/kimhc/Stock/venv/bin/python /home/kimhc/Stock/auto_trader.py
+    # 장중 5분 간격 (record_intraday_scores.py가 CSV 생성 후 실행)
+    3,8,13,18,23,28,33,38,43,48,53,58 9-15 * * 1-5 python auto_trader.py --all
 """
 
 import argparse
@@ -2353,13 +2353,12 @@ def get_active_users() -> List[Dict]:
     return [dict(row) for row in rows]
 
 
-def run_for_all_users(dry_run: bool = False, min_score: int = 75, use_csv: bool = False):
-    """모든 활성화된 사용자에 대해 자동매매 실행
+def run_for_all_users(dry_run: bool = False, min_score: int = 75):
+    """모든 활성화된 사용자에 대해 자동매매 실행 (CSV 스코어 사용)
 
     Args:
         dry_run: 테스트 모드 (주문 X)
         min_score: 최소 매수 점수
-        use_csv: True면 CSV 스코어 파일 사용 (스크리닝 건너뜀)
     """
     from trading.trade_logger import TradeLogger
 
@@ -2367,9 +2366,7 @@ def run_for_all_users(dry_run: bool = False, min_score: int = 75, use_csv: bool 
     EXCLUDED_USERS = [7]
 
     print("\n" + "=" * 70)
-    print("  AUTO TRADER - 전체 사용자 실행 모드")
-    if use_csv:
-        print("  [CSV 모드: 스크리닝 건너뜀]")
+    print("  AUTO TRADER - 전체 사용자 실행 모드 (CSV)")
     print(f"  실행 시각: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     print("=" * 70)
 
@@ -2390,35 +2387,19 @@ def run_for_all_users(dry_run: bool = False, min_score: int = 75, use_csv: bool 
     for user in users:
         print(f"  - user_id={user['user_id']}, mode={user['trade_mode']}, mock={user['is_mock']}")
 
-    # [최적화] 전종목 스크리닝 1회만 실행 (semi/auto 모드 사용자가 있을 때)
+    # CSV 스코어 로드 (스크리닝 없이 CSV만 사용)
     screening_result = None
     semi_auto_users = [u for u in users if u['trade_mode'] in ('semi', 'auto')]
     if semi_auto_users:
-        # CSV 모드: CSV 파일에서 스코어 로드 (스크리닝 건너뜀)
-        if use_csv:
-            print(f"\n[2] CSV 스코어 로드 중...")
-            screening_result = load_scores_from_csv(max_age_minutes=15)
-            if screening_result:
-                top_stocks, stats = screening_result
-                print(f"  CSV 로드 완료: {len(top_stocks)}개 종목")
-            else:
-                print(f"  CSV 로드 실패 - 스크리닝으로 폴백")
-                use_csv = False  # 폴백
-
-        # 스크리닝 실행 (CSV 없거나 폴백 시)
-        if not use_csv:
-            print(f"\n[2] 전종목 스크리닝 (1회 실행, {len(semi_auto_users)}명 공유)")
-            from config import ScreeningConfig
-            screener = MarketScreener(max_workers=ScreeningConfig.MAX_WORKERS)
-            top_stocks, stats = screener.run_full_screening(
-                top_n=ScreeningConfig.TOP_N,
-                mode="strict",
-                min_marcap=ScreeningConfig.MIN_MARKET_CAP,
-                max_marcap=ScreeningConfig.MAX_MARKET_CAP,
-                min_amount=ScreeningConfig.MIN_TRADING_AMOUNT,
-            )
-            screening_result = (top_stocks, stats)
-            print(f"  스크리닝 완료: {len(top_stocks) if top_stocks else 0}개 종목")
+        print(f"\n[2] CSV 스코어 로드 중...")
+        screening_result = load_scores_from_csv(max_age_minutes=15)
+        if screening_result:
+            top_stocks, stats = screening_result
+            print(f"  CSV 로드 완료: {len(top_stocks)}개 종목")
+        else:
+            print(f"  [ERROR] CSV 로드 실패 - 최근 15분 내 CSV 파일 없음")
+            print(f"  record_intraday_scores.py가 실행 중인지 확인하세요.")
+            return
 
     results = []
 
@@ -2512,13 +2493,12 @@ def main():
     parser.add_argument("--intraday", action="store_true", help="장중 10분 스크리닝 모드")
     parser.add_argument("--min-score", type=int, default=75, help="장중 스크리닝 최소 점수 (기본: 75)")
     parser.add_argument("--user-id", type=int, help="사용자 ID (장중 스크리닝용)")
-    parser.add_argument("--all", action="store_true", help="모든 활성화된 사용자 실행")
-    parser.add_argument("--use-csv", action="store_true", help="CSV 스코어 사용 (스크리닝 건너뜀)")
+    parser.add_argument("--all", action="store_true", help="모든 활성화된 사용자 실행 (CSV 스코어 사용)")
     args = parser.parse_args()
 
-    # --all 옵션: 모든 활성화된 사용자 실행
+    # --all 옵션: 모든 활성화된 사용자 실행 (CSV 스코어만 사용)
     if args.all:
-        run_for_all_users(dry_run=args.dry_run, min_score=args.min_score, use_csv=args.use_csv)
+        run_for_all_users(dry_run=args.dry_run, min_score=args.min_score)
         return
 
     # user_id가 지정되면 해당 사용자 설정 사용
