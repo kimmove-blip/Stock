@@ -581,7 +581,7 @@ class AutoTrader:
         is_premarket = (now.hour == 8 and now.minute >= 30) or (now.hour == 9 and now.minute == 0)
 
         # 현재가 조회 (동시호가 중에는 예상 체결가가 반환됨)
-        price_data = self.executor.kis_client.get_current_price(stock_code)
+        price_data = self.executor.client.get_current_price(stock_code)
 
         if not price_data:
             return {'prev_close': 0, 'expected_open': 0, 'gap_pct': 0, 'is_premarket': is_premarket}
@@ -1316,13 +1316,18 @@ class AutoTrader:
         # 7. 일일 성과 저장
         print("\n[7] 성과 저장 중...")
         final_balance = self.executor.get_account_balance()
-        if final_balance:
+        if final_balance and self.user_id:
             final_holdings = final_balance.get("holdings", [])
             total_invested = sum(h.get("avg_price", 0) * h.get("quantity", 0) for h in final_holdings)
             total_profit = final_balance.get("summary", {}).get("total_profit_loss", 0)
+            d2_cash = final_balance.get("summary", {}).get("d2_deposit", 0)
+            holdings_value = final_balance.get("summary", {}).get("total_eval_amount", 0) - d2_cash
 
             self.logger.save_daily_performance(
+                user_id=self.user_id,
                 total_assets=final_balance.get("summary", {}).get("total_eval_amount", 0),
+                d2_cash=d2_cash,
+                holdings_value=holdings_value,
                 total_invested=total_invested,
                 total_profit=total_profit,
                 holdings_count=len(final_holdings)
@@ -1830,14 +1835,19 @@ class AutoTrader:
         # 6. 일일 성과 저장
         print("\n[6] 성과 저장 중...")
         final_balance = self.executor.get_account_balance()
-        if final_balance:
+        if final_balance and self.user_id:
             final_holdings = final_balance.get("holdings", [])
             total_invested = sum(h.get("avg_price", 0) * h.get("quantity", 0) for h in final_holdings)
             total_eval = sum(h.get("eval_amount", 0) for h in final_holdings)
             total_profit = final_balance.get("summary", {}).get("total_profit_loss", 0)
+            d2_cash = final_balance.get("summary", {}).get("d2_deposit", 0)
+            holdings_value = final_balance.get("summary", {}).get("total_eval_amount", 0) - d2_cash
 
             self.logger.save_daily_performance(
+                user_id=self.user_id,
                 total_assets=final_balance.get("summary", {}).get("total_eval_amount", 0),
+                d2_cash=d2_cash,
+                holdings_value=holdings_value,
                 total_invested=total_invested,
                 total_profit=total_profit,
                 holdings_count=len(final_holdings)
