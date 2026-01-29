@@ -234,71 +234,32 @@ export default function AutoTradeSettings() {
       </div>
 
       <form onSubmit={handleSubmit} className="space-y-4">
-        {/* 매매 모드 선택 */}
+        {/* 매매 모드 선택 (드롭다운) */}
         <div className="bg-white rounded-xl p-4 shadow-sm">
           <h3 className="font-bold text-gray-800 mb-3 flex items-center gap-2">
             <Settings size={18} className="text-purple-600" />
             매매 모드
           </h3>
-          <div className="space-y-2">
+          <select
+            value={formData.trade_mode}
+            onChange={(e) => setFormData({ ...formData, trade_mode: e.target.value })}
+            className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-purple-500 focus:border-transparent text-gray-800 font-medium"
+          >
             {tradeModes.map((mode) => {
-              // Green Light 모드는 모의투자에서만 선택 가능
               const isDisabled = mode.value === 'greenlight' && !isMockAccount;
-
               return (
-                <label
-                  key={mode.value}
-                  className={`flex items-center gap-3 p-3 rounded-lg border-2 transition-all ${
-                    isDisabled
-                      ? 'cursor-not-allowed border-gray-200 bg-gray-50'
-                      : 'cursor-pointer'
-                  } ${
-                    formData.trade_mode === mode.value && !isDisabled
-                      ? 'border-purple-500 bg-purple-50'
-                      : !isDisabled ? 'border-gray-200 hover:border-gray-300' : ''
-                  }`}
-                >
-                  <input
-                    type="radio"
-                    name="trade_mode"
-                    value={mode.value}
-                    checked={formData.trade_mode === mode.value}
-                    onChange={(e) => !isDisabled && setFormData({ ...formData, trade_mode: e.target.value })}
-                    disabled={isDisabled}
-                    className="hidden"
-                  />
-                  <div className={`w-10 h-10 ${mode.color} ${isDisabled ? 'opacity-50' : ''} rounded-full flex items-center justify-center`}>
-                    <mode.icon size={20} className="text-white" />
-                  </div>
-                  <div className="flex-1">
-                    <div className="flex items-center gap-2">
-                      <p className={`font-medium ${isDisabled ? 'text-gray-400' : 'text-gray-800'}`}>{mode.label}</p>
-                      {mode.badge && (
-                        <span className={`px-1.5 py-0.5 text-[10px] rounded font-medium ${isDisabled ? 'bg-gray-100 text-gray-400' : 'bg-emerald-100 text-emerald-700'}`}>
-                          {mode.badge}
-                        </span>
-                      )}
-                    </div>
-                    <p className={`text-xs ${isDisabled ? 'text-gray-400' : 'text-gray-500'}`}>{mode.description}</p>
-                    {isDisabled && (
-                      <p className="text-xs text-orange-500 mt-1">모의투자 계좌에서만 사용 가능</p>
-                    )}
-                  </div>
-                  <div
-                    className={`w-5 h-5 rounded-full border-2 flex items-center justify-center ${
-                      formData.trade_mode === mode.value && !isDisabled
-                        ? 'border-purple-500 bg-purple-500'
-                        : 'border-gray-300'
-                    }`}
-                  >
-                    {formData.trade_mode === mode.value && !isDisabled && (
-                      <div className="w-2 h-2 bg-white rounded-full" />
-                    )}
-                  </div>
-                </label>
+                <option key={mode.value} value={mode.value} disabled={isDisabled}>
+                  {mode.label} - {mode.description}
+                </option>
               );
             })}
-          </div>
+          </select>
+          <p className="text-xs text-gray-500 mt-2">
+            {formData.trade_mode === 'manual' && '알림만 받고 직접 매매합니다'}
+            {formData.trade_mode === 'semi' && '매수 제안을 승인하면 실행됩니다'}
+            {formData.trade_mode === 'auto' && '조건 충족 시 즉시 매수합니다'}
+            {formData.trade_mode === 'greenlight' && 'AI가 모든 매매를 자율 결정합니다'}
+          </p>
         </div>
 
         {/* Green Light 모드 - LLM 설정 */}
