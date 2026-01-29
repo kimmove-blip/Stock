@@ -17,7 +17,7 @@ import {
 export default function AutoTradeHistory() {
   const navigate = useNavigate();
   const { user } = useAuth();
-  const [days, setDays] = useState(30);
+  const [days, setDays] = useState(1);
   const [sideFilter, setSideFilter] = useState('all');
 
   // 자동매매 권한 체크
