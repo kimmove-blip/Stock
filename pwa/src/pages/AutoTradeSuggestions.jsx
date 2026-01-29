@@ -80,12 +80,12 @@ function SuggestionCard({ suggestion, activeTab, onApprove, onReject, isApprovin
   // 가격 관련 상태
   const suggestedPrice = suggestion.suggested_price || 0;
   const currentPrice = suggestion.current_price || suggestedPrice;
+  const initialPrice = isBuy ? suggestedPrice : currentPrice;
+  const initialQuantity = suggestion.quantity || 1;
 
-  const [selectedPrice, setSelectedPrice] = useState(
-    isBuy ? suggestedPrice : currentPrice
-  );
+  const [selectedPrice, setSelectedPrice] = useState(initialPrice);
   const [isMarketOrder, setIsMarketOrder] = useState(false);
-  const [customQuantity, setCustomQuantity] = useState(suggestion.quantity || 1);
+  const [customQuantity, setCustomQuantity] = useState(initialQuantity);
 
   // 수량 변경 핸들러
   const handleQuantityChange = (delta) => {
@@ -99,6 +99,13 @@ function SuggestionCard({ suggestion, activeTab, onApprove, onReject, isApprovin
     if (newPrice > 0) {
       setSelectedPrice(newPrice);
     }
+  };
+
+  // 초기화 핸들러
+  const handleReset = () => {
+    setSelectedPrice(initialPrice);
+    setCustomQuantity(initialQuantity);
+    setIsMarketOrder(false);
   };
 
   // 시장가 토글
@@ -153,10 +160,18 @@ function SuggestionCard({ suggestion, activeTab, onApprove, onReject, isApprovin
     return <span className={`text-xs px-1.5 py-0.5 rounded ${color}`}>{score}점</span>;
   };
 
+  // 제안 시각 포맷 (01-29 T12:12)
+  const formatSuggestionTime = () => {
+    if (!suggestion.created_at) return '';
+    const date = suggestion.created_at.slice(5, 10); // MM-DD
+    const time = suggestion.created_at.slice(11, 16); // HH:MM
+    return `${date} T${time}`;
+  };
+
   return (
     <div className={`bg-white rounded-xl p-3 shadow-sm transition-opacity duration-200 ${isRemoving ? 'opacity-0' : 'opacity-100'}`}>
       {/* 헤더: 매수/매도 + 종목명 + AI점수 + 상태 */}
-      <div className="flex items-center justify-between mb-2">
+      <div className="flex items-center justify-between mb-1">
         <div className="flex items-center gap-2 flex-1 cursor-pointer" onClick={() => navigate(`/stock/${suggestion.stock_code}`)}>
           <span className={`text-xs px-1.5 py-0.5 rounded font-medium ${isBuy ? 'bg-red-100 text-red-600' : 'bg-blue-100 text-blue-600'}`}>
             {isBuy ? '매수' : '매도'}
@@ -172,11 +187,16 @@ function SuggestionCard({ suggestion, activeTab, onApprove, onReject, isApprovin
         {getStatusBadge(suggestion.status)}
       </div>
 
-      {/* 현재가 정보 */}
-      <div className="flex items-center gap-2 text-xs text-gray-500 mb-2">
-        <span>현재가</span>
+      {/* 제안 시각 + 제안당시 가격 */}
+      <div className="text-xs text-gray-400 mb-1">
+        {formatSuggestionTime()}
+        {suggestion.original_price > 0 && <span className="ml-1">P{suggestion.original_price.toLocaleString()}</span>}
+      </div>
+
+      {/* 현재가 (오른쪽 정렬) */}
+      <div className="flex items-center justify-end text-xs mb-2">
         <span className={`font-medium ${suggestion.change_rate > 0 ? 'text-red-600' : suggestion.change_rate < 0 ? 'text-blue-600' : 'text-gray-700'}`}>
-          {currentPrice.toLocaleString()}원
+          현재 {currentPrice.toLocaleString()}원
           {suggestion.change_rate !== null && suggestion.change_rate !== undefined && (
             <span className="ml-1">({suggestion.change_rate > 0 ? '+' : ''}{suggestion.change_rate.toFixed(1)}%)</span>
           )}
@@ -186,36 +206,44 @@ function SuggestionCard({ suggestion, activeTab, onApprove, onReject, isApprovin
       {/* 수량 + 가격 설정 (대기중일 때만) */}
       {isPending && (
         <div className="bg-gray-50 rounded-lg p-2 mb-2">
-          {/* 수량 */}
-          <div className="flex items-center justify-between mb-2">
-            <span className="text-xs text-gray-500">수량</span>
+          {/* 수량 + 가격 한 줄로 (오른쪽 정렬) */}
+          <div className="flex items-center justify-end gap-3 mb-2">
+            {/* 수량 */}
             <div className="flex items-center gap-1">
+              <span className="text-xs text-gray-500">수량</span>
               <button onClick={() => handleQuantityChange(-1)} className="w-6 h-6 flex items-center justify-center bg-gray-200 hover:bg-gray-300 rounded text-gray-700 font-bold text-sm">-</button>
               <input
                 type="number"
                 value={customQuantity}
                 onChange={(e) => setCustomQuantity(Math.max(1, parseInt(e.target.value) || 1))}
-                className="w-12 h-6 text-center font-bold text-gray-800 border border-gray-300 rounded text-sm"
+                className="w-10 h-6 text-center font-bold text-gray-800 border border-gray-300 rounded text-sm"
                 min="1"
               />
               <button onClick={() => handleQuantityChange(1)} className="w-6 h-6 flex items-center justify-center bg-gray-200 hover:bg-gray-300 rounded text-gray-700 font-bold text-sm">+</button>
-              <span className="text-xs text-gray-600 ml-1">주</span>
             </div>
-          </div>
-
-          {/* 가격 + 시장가 토글 */}
-          <div className="flex items-center justify-between">
+            {/* 가격 */}
             <div className="flex items-center gap-1">
               <span className="text-xs text-gray-500">가격</span>
               {!isMarketOrder && (
                 <>
                   <button onClick={() => handlePriceChange(-1)} className="w-6 h-6 flex items-center justify-center bg-blue-100 hover:bg-blue-200 rounded text-blue-700 font-bold text-sm">-</button>
-                  <span className="w-20 text-center font-bold text-gray-800 text-sm">{selectedPrice.toLocaleString()}</span>
+                  <span className="w-16 text-center font-bold text-gray-800 text-xs">{selectedPrice.toLocaleString()}</span>
                   <button onClick={() => handlePriceChange(1)} className="w-6 h-6 flex items-center justify-center bg-red-100 hover:bg-red-200 rounded text-red-700 font-bold text-sm">+</button>
                 </>
               )}
-              {isMarketOrder && <span className="text-sm font-medium text-purple-700 flex items-center gap-1"><Zap size={14} className="text-yellow-500" />시장가</span>}
+              {isMarketOrder && <span className="text-xs font-medium text-purple-700 flex items-center gap-1"><Zap size={12} className="text-yellow-500" />시장가</span>}
             </div>
+          </div>
+
+          {/* 초기화 + 시장가 토글 */}
+          <div className="flex items-center justify-between">
+            <button
+              onClick={handleReset}
+              className="text-xs text-gray-500 hover:text-gray-700 flex items-center gap-1"
+            >
+              <RefreshCw size={12} />
+              초기화
+            </button>
             <label className="flex items-center gap-1 cursor-pointer">
               <span className="text-xs text-gray-500">시장가</span>
               <div onClick={handleMarketOrderToggle} className={`relative w-8 h-4 rounded-full transition-colors ${isMarketOrder ? 'bg-purple-600' : 'bg-gray-300'}`}>
