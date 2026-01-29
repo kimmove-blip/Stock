@@ -177,7 +177,7 @@ function SuggestionCard({ suggestion, livePrice, activeTab, onApprove, onReject,
           <span className={`text-xs px-1.5 py-0.5 rounded font-medium ${isBuy ? 'bg-red-100 text-red-600' : 'bg-blue-100 text-blue-600'}`}>
             {isBuy ? '매수' : '매도'}
           </span>
-          <span className="font-bold text-gray-800 text-sm">{suggestion.stock_name}</span>
+          <span className="font-bold text-gray-800 text-base">{suggestion.stock_name}</span>
           {getScoreBadge()}
           {!isBuy && suggestion.profit_rate !== undefined && (
             <span className={`text-xs font-medium ${suggestion.profit_rate >= 0 ? 'text-red-600' : 'text-blue-600'}`}>
@@ -188,15 +188,13 @@ function SuggestionCard({ suggestion, livePrice, activeTab, onApprove, onReject,
         {getStatusBadge(suggestion.status)}
       </div>
 
-      {/* 제안 시각 + 제안당시 가격 */}
-      <div className="text-xs text-gray-400 mb-1">
-        {formatSuggestionTime()}
-        {suggestion.original_price > 0 && <span className="ml-1">P{suggestion.original_price.toLocaleString()}</span>}
-      </div>
-
-      {/* 현재가 (오른쪽 정렬, 10초마다 갱신) */}
-      <div className="flex items-center justify-end text-sm mb-2">
-        <span className={`font-bold ${changeRate > 0 ? 'text-red-600' : changeRate < 0 ? 'text-blue-600' : 'text-gray-700'}`}>
+      {/* 제안 시각/가격 (왼쪽) + 현재가 (오른쪽) */}
+      <div className="flex items-center justify-between mb-2">
+        <div className="text-xs text-gray-400">
+          {formatSuggestionTime()}
+          {suggestion.original_price > 0 && <span className="ml-1">P{suggestion.original_price.toLocaleString()}</span>}
+        </div>
+        <span className={`text-sm font-bold ${changeRate > 0 ? 'text-red-600' : changeRate < 0 ? 'text-blue-600' : 'text-gray-700'}`}>
           현재 {currentPrice.toLocaleString()}원
           {changeRate !== null && changeRate !== undefined && (
             <span className="ml-1 font-medium">({changeRate > 0 ? '+' : ''}{changeRate.toFixed(1)}%)</span>
