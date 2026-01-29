@@ -365,7 +365,8 @@ export default function AutoTradeSuggestions() {
         const res = await realtimeAPI.prices(codes);
         const priceMap = {};
         (res.data?.prices || []).forEach(p => {
-          priceMap[p.code] = { current_price: p.current_price, change_rate: p.change_rate };
+          const code = p.stock_code || p.code;
+          priceMap[code] = { current_price: p.current_price, change_rate: p.change_rate };
         });
         setLivePrices(priceMap);
       } catch (e) {
