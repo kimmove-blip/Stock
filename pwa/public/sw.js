@@ -1,4 +1,4 @@
-const CACHE_NAME = 'ai-stock-v12';
+const CACHE_NAME = 'ai-stock-v14';
 const STATIC_ASSETS = [
   '/manifest.json',
 ];

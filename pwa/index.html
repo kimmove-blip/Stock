@@ -27,9 +27,21 @@
       // 전역 에러 핸들링 (디버깅용)
       window.onerror = function(msg, url, line, col, error) {
         var root = document.getElementById('root');
-        root.innerHTML = '<div style="padding:20px;text-align:center;"><h2 style="color:red;">앱 로드 오류</h2><p>앱을 종료 후 다시 실행해주세요.</p><details style="margin-top:20px;text-align:left;"><summary>오류 상세</summary><pre style="font-size:12px;overflow:auto;">' + msg + '\n' + url + ':' + line + '</pre></details></div>';
+        root.innerHTML = '<div style="padding:20px;text-align:center;background:#fff;"><h2 style="color:red;">앱 로드 오류</h2><p>앱을 종료 후 다시 실행해주세요.</p><details style="margin-top:20px;text-align:left;"><summary>오류 상세</summary><pre style="font-size:12px;overflow:auto;background:#f5f5f5;padding:10px;">' + msg + '\n' + url + ':' + line + '</pre></details></div>';
         return false;
       };
+      // 모듈 로드 에러 핸들링
+      window.addEventListener('unhandledrejection', function(event) {
+        var root = document.getElementById('root');
+        root.innerHTML = '<div style="padding:20px;text-align:center;background:#fff;"><h2 style="color:red;">모듈 로드 오류</h2><p>인터넷 연결을 확인하고 다시 시도해주세요.</p><details style="margin-top:20px;text-align:left;"><summary>오류 상세</summary><pre style="font-size:12px;overflow:auto;background:#f5f5f5;padding:10px;">' + (event.reason ? event.reason.message || event.reason : 'Unknown error') + '</pre></details><button onclick="location.reload()" style="margin-top:20px;padding:10px 20px;background:#570df8;color:#fff;border:none;border-radius:8px;">새로고침</button></div>';
+      });
+      // 10초 후에도 로딩 중이면 에러 표시
+      setTimeout(function() {
+        var loading = document.getElementById('initial-loading');
+        if (loading) {
+          loading.innerHTML = '<div style="text-align:center;color:#fff;"><p style="font-size:16px;">로딩 시간이 초과되었습니다</p><p style="font-size:12px;margin-top:10px;">인터넷 연결을 확인해주세요</p><button onclick="location.reload()" style="margin-top:20px;padding:10px 20px;background:#fff;color:#570df8;border:none;border-radius:8px;font-weight:bold;">새로고침</button></div>';
+        }
+      }, 10000);
     </script>
     <script type="module" src="/src/main.jsx"></script>
   </body>
