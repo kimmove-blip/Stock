@@ -561,7 +561,7 @@ def save_to_csv(records: list, recorded_at: datetime) -> str:
 
 
 def run_auto_trader_all():
-    """CSV 저장 후 auto_trader.py --use-csv --all 호출 (전체 사용자)"""
+    """CSV 저장 후 auto_trader.py --all 호출 (전체 사용자)"""
     import subprocess
 
     script_path = PROJECT_ROOT / "auto_trader.py"
@@ -569,9 +569,9 @@ def run_auto_trader_all():
         print(f"    [경고] auto_trader.py 없음: {script_path}")
         return False
 
-    print(f"\n[4] auto_trader.py 호출 (--use-csv --all --intraday)...")
+    print(f"\n[4] auto_trader.py 호출 (--all --intraday)...")
     try:
-        cmd = [sys.executable, str(script_path), '--use-csv', '--all', '--intraday']
+        cmd = [sys.executable, str(script_path), '--all', '--intraday']
         result = subprocess.run(
             cmd,
             cwd=str(PROJECT_ROOT),
@@ -616,7 +616,7 @@ def main():
     parser.add_argument('--dry-run', action='store_true', help='테스트 모드 (저장 안함)')
     parser.add_argument('--kis', action='store_true', help='한투 API 연동 (체결강도/수급 추가)')
     parser.add_argument('--call-auto-trader', action='store_true',
-                        help='CSV 저장 후 auto_trader.py --use-csv --all 호출')
+                        help='CSV 저장 후 auto_trader.py --all 호출')
     args = parser.parse_args()
 
     # 장 전 필터링 모드
