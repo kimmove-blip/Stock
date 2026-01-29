@@ -125,7 +125,7 @@ class AutoTraderConfig:
     BUY_BAND_PCT = 0.03             # 매수 밴드 (±3%)
 
     # 매매 규칙
-    MIN_BUY_SCORE = 80# 최소 매수 점수
+    MIN_BUY_SCORE = 65  # 최소 매수 점수 (V5 전략: 65점)
     MIN_VOLUME_RATIO = 1.0          # 최소 거래량 비율 (20일 평균 대비)
 
     # 포지션 관리
@@ -136,7 +136,7 @@ class AutoTraderConfig:
     # 손절/매도
     STOP_LOSS_PCT = -0.1# 손절 비율 (-7%)
     TAKE_PROFIT_PCT = None          # 익절 비활성화 (신호 기반 매도)
-    MIN_HOLD_SCORE = 40  # 래치 전략: 40점 미만 시 극단적 모멘텀 붕괴로 매도
+    MIN_HOLD_SCORE = 50  # V5 전략: 50점 미만 시 매도
     MAX_HOLD_DAYS = 10# 최대 보유 기간 (일)
 
     # 수수료/세금 (비율)
