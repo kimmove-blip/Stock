@@ -59,8 +59,19 @@ export default function AutoTradeManual() {
   useEffect(() => {
     const code = searchParams.get('code');
     const name = searchParams.get('name');
+    const side = searchParams.get('side');
+    const qty = searchParams.get('qty');
     if (code && name) {
-      setSelectedStock({ stock_code: code, stock_name: name });
+      const stockData = { stock_code: code, stock_name: name };
+      // 매도 시 보유수량 전달
+      if (side === 'sell' && qty) {
+        stockData.quantity = parseInt(qty);
+        setOrderData(prev => ({ ...prev, quantity: qty }));
+      }
+      setSelectedStock(stockData);
+      if (side === 'buy' || side === 'sell') {
+        setActiveTab(side);
+      }
       // URL 파라미터 제거 (히스토리 정리)
       setSearchParams({}, { replace: true });
     }
@@ -548,7 +559,12 @@ export default function AutoTradeManual() {
 
           {/* 수량 입력 */}
           <div>
-            <label className="text-sm font-medium text-gray-700 mb-1 block">수량</label>
+            <div className="flex justify-between items-center mb-1">
+              <label className="text-sm font-medium text-gray-700">수량</label>
+              {activeTab === 'sell' && selectedStock?.quantity && (
+                <span className="text-xs text-gray-500">보유: {selectedStock.quantity.toLocaleString()}주</span>
+              )}
+            </div>
             <input
               type="number"
               value={orderData.quantity}

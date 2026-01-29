@@ -9,12 +9,9 @@ import {
   TrendingUp,
   TrendingDown,
   AlertTriangle,
-  CheckCircle,
-  XCircle,
   RefreshCw,
   AlertCircle,
   ArrowUpDown,
-  Banknote,
 } from 'lucide-react';
 
 const SORT_OPTIONS = [
@@ -112,12 +109,6 @@ export default function AutoTradeDiagnosis() {
     }
   };
 
-  const getHealthIcon = (health) => {
-    if (health >= 80) return <CheckCircle size={20} className="text-green-500" />;
-    if (health >= 60) return <AlertTriangle size={20} className="text-yellow-500" />;
-    return <XCircle size={20} className="text-red-500" />;
-  };
-
   return (
     <div className="max-w-md mx-auto space-y-4">
       {/* 정렬 및 새로고침 */}
@@ -198,7 +189,9 @@ export default function AutoTradeDiagnosis() {
                   onClick={() => navigate(`/stock/${holding.stock_code}`)}
                 >
                   <div className="flex items-center gap-2">
-                    {getHealthIcon(holding.health_score || 50)}
+                    <span className={`text-xs px-2 py-1 rounded-full font-medium ${getSignalColor(holding.signal)}`}>
+                      {getSignalText(holding.signal)}
+                    </span>
                     <p className="font-bold text-gray-800">{holding.stock_name}</p>
                     <span className={`text-xs font-bold px-1.5 py-0.5 rounded ${
                       (holding.health_score || 50) >= 80 ? 'bg-green-100 text-green-600' :
@@ -208,18 +201,20 @@ export default function AutoTradeDiagnosis() {
                       {holding.health_score || 50}점
                     </span>
                   </div>
-                  <p className="text-xs text-gray-500">{holding.stock_code}</p>
+                  <p className="text-xs text-gray-500 ml-12">{holding.stock_code}</p>
                 </div>
                 <div className="flex items-center gap-2">
-                  <span className={`text-xs px-2 py-1 rounded-full font-medium ${getSignalColor(holding.signal)}`}>
-                    {getSignalText(holding.signal)}
-                  </span>
                   <button
-                    onClick={() => navigate(`/auto-trade/manual?code=${holding.stock_code}&name=${encodeURIComponent(holding.stock_name)}`)}
-                    className="flex items-center gap-1 text-xs px-2 py-1 bg-purple-100 text-purple-700 rounded-full hover:bg-purple-200 transition-colors"
+                    onClick={(e) => { e.stopPropagation(); navigate(`/auto-trade/manual?code=${holding.stock_code}&name=${encodeURIComponent(holding.stock_name)}&side=buy`); }}
+                    className="text-xs px-2.5 py-1 bg-red-500 text-white rounded-full hover:bg-red-600 transition-colors font-medium"
                   >
-                    <Banknote size={12} />
-                    매매
+                    매수
+                  </button>
+                  <button
+                    onClick={(e) => { e.stopPropagation(); navigate(`/auto-trade/manual?code=${holding.stock_code}&name=${encodeURIComponent(holding.stock_name)}&side=sell&qty=${holding.quantity}`); }}
+                    className="text-xs px-2.5 py-1 bg-blue-500 text-white rounded-full hover:bg-blue-600 transition-colors font-medium"
+                  >
+                    매도
                   </button>
                 </div>
               </div>
