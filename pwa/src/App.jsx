@@ -40,6 +40,7 @@ import Loading from './components/Loading';
 import Disclaimer from './components/Disclaimer';
 import PushPermissionPrompt from './components/PushPermissionPrompt';
 import AnnouncementPopup from './components/AnnouncementPopup';
+import ScrollToTop from './components/ScrollToTop';
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -130,6 +131,7 @@ export default function App() {
   return (
     <QueryClientProvider client={queryClient}>
       <BrowserRouter>
+        <ScrollToTop />
         <AuthProvider>
           <StockCacheProvider>
             <Disclaimer />
