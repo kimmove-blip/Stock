@@ -324,10 +324,10 @@ export default function AutoTradeSettings() {
                     setFormData({ ...formData, max_per_stock: value });
                   }}
                   disabled={!formData.trading_enabled}
-                  className="w-full px-4 py-3 border border-gray-300 rounded-xl focus:ring-2 focus:ring-green-500 focus:border-transparent text-right text-lg disabled:bg-gray-100 disabled:cursor-not-allowed"
+                  className="w-full pl-4 pr-12 py-3 border border-gray-300 rounded-xl focus:ring-2 focus:ring-green-500 focus:border-transparent text-right text-lg disabled:bg-gray-100 disabled:cursor-not-allowed"
                   placeholder="0"
                 />
-                <span className="absolute right-4 top-1/2 -translate-y-1/2 text-gray-500">원</span>
+                <span className="absolute right-4 top-1/2 -translate-y-1/2 text-gray-400 text-sm">원</span>
               </div>
               <p className="text-xs text-gray-500 mt-1">한 종목에 투자할 수 있는 최대 금액</p>
             </div>
@@ -344,10 +344,10 @@ export default function AutoTradeSettings() {
                     setFormData({ ...formData, initial_investment: value });
                   }}
                   disabled={!formData.trading_enabled}
-                  className="w-full px-4 py-3 border border-gray-300 rounded-xl focus:ring-2 focus:ring-green-500 focus:border-transparent text-right text-lg disabled:bg-gray-100 disabled:cursor-not-allowed"
+                  className="w-full pl-4 pr-12 py-3 border border-gray-300 rounded-xl focus:ring-2 focus:ring-green-500 focus:border-transparent text-right text-lg disabled:bg-gray-100 disabled:cursor-not-allowed"
                   placeholder="0"
                 />
-                <span className="absolute right-4 top-1/2 -translate-y-1/2 text-gray-500">원</span>
+                <span className="absolute right-4 top-1/2 -translate-y-1/2 text-gray-400 text-sm">원</span>
               </div>
               <p className="text-xs text-gray-500 mt-1">수익률 계산 기준 금액</p>
             </div>
