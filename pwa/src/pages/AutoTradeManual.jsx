@@ -202,13 +202,37 @@ export default function AutoTradeManual() {
     }
   };
 
-  // 금액 기준 수량 계산
-  const setQuantityByAmount = (amount) => {
+  // 금액 기준 수량 추가 (누적)
+  const addQuantityByAmount = (amount) => {
     const price = parseInt(orderData.price) || stockPrice?.current_price;
     if (price && price > 0) {
-      const qty = Math.floor(amount / price);
-      if (qty > 0) {
-        setOrderData({ ...orderData, quantity: qty.toString() });
+      const currentQty = parseInt(orderData.quantity) || 0;
+      const addQty = Math.floor(amount / price);
+      if (addQty > 0) {
+        setOrderData({ ...orderData, quantity: (currentQty + addQty).toString() });
+      }
+    }
+  };
+
+  // 최대 수량 설정
+  const setMaxQuantity = () => {
+    const price = parseInt(orderData.price) || stockPrice?.current_price;
+    if (price && price > 0 && cashBalance > 0) {
+      const maxQty = Math.floor(cashBalance / price);
+      if (maxQty > 0) {
+        setOrderData({ ...orderData, quantity: maxQty.toString() });
+      }
+    }
+  };
+
+  // 호가 단위로 가격 조정
+  const adjustPriceByTick = (ticks) => {
+    const currentPrice = parseInt(orderData.price) || stockPrice?.current_price;
+    if (currentPrice && currentPrice > 0) {
+      const unit = getPriceUnit(currentPrice);
+      const newPrice = currentPrice + (unit * ticks);
+      if (newPrice > 0) {
+        setOrderData({ ...orderData, price: newPrice.toString() });
       }
     }
   };
@@ -468,36 +492,43 @@ export default function AutoTradeManual() {
                   호가단위: {getPriceUnit(parseInt(orderData.price)).toLocaleString()}원
                 </p>
               )}
-              {/* 가격 조절 버튼 */}
+              {/* 가격 조절 버튼 (호가 단위) */}
               <div className="flex gap-1 mt-2">
-                {[
-                  { label: '-5%', value: -5 },
-                  { label: '-3%', value: -3 },
-                  { label: '현재가', value: 0 },
-                  { label: '+3%', value: 3 },
-                  { label: '+5%', value: 5 },
-                ].map((btn) => (
-                  <button
-                    key={btn.label}
-                    onClick={() => {
-                      if (btn.value === 0 && stockPrice?.current_price) {
-                        const validPrice = adjustToValidPrice(stockPrice.current_price, activeTab === 'buy');
-                        setOrderData({ ...orderData, price: validPrice.toString() });
-                      } else {
-                        adjustPrice(btn.value);
-                      }
-                    }}
-                    className={`flex-1 py-1.5 text-xs rounded font-medium transition-colors ${
-                      btn.value === 0
-                        ? 'bg-purple-100 text-purple-700 hover:bg-purple-200'
-                        : btn.value < 0
-                        ? 'bg-blue-50 text-blue-600 hover:bg-blue-100'
-                        : 'bg-red-50 text-red-600 hover:bg-red-100'
-                    }`}
-                  >
-                    {btn.label}
-                  </button>
-                ))}
+                <button
+                  onClick={() => adjustPriceByTick(-5)}
+                  className="flex-1 py-1.5 text-xs bg-blue-50 text-blue-600 hover:bg-blue-100 rounded font-medium"
+                >
+                  -5호가
+                </button>
+                <button
+                  onClick={() => adjustPriceByTick(-1)}
+                  className="flex-1 py-1.5 text-xs bg-blue-50 text-blue-600 hover:bg-blue-100 rounded font-medium"
+                >
+                  -1호가
+                </button>
+                <button
+                  onClick={() => {
+                    if (stockPrice?.current_price) {
+                      const validPrice = adjustToValidPrice(stockPrice.current_price, activeTab === 'buy');
+                      setOrderData({ ...orderData, price: validPrice.toString() });
+                    }
+                  }}
+                  className="flex-1 py-1.5 text-xs bg-purple-100 text-purple-700 hover:bg-purple-200 rounded font-medium"
+                >
+                  현재가
+                </button>
+                <button
+                  onClick={() => adjustPriceByTick(1)}
+                  className="flex-1 py-1.5 text-xs bg-red-50 text-red-600 hover:bg-red-100 rounded font-medium"
+                >
+                  +1호가
+                </button>
+                <button
+                  onClick={() => adjustPriceByTick(5)}
+                  className="flex-1 py-1.5 text-xs bg-red-50 text-red-600 hover:bg-red-100 rounded font-medium"
+                >
+                  +5호가
+                </button>
               </div>
             </div>
           )}
@@ -536,22 +567,38 @@ export default function AutoTradeManual() {
                   ))}
                 </>
               ) : (
-                /* 매수: 금액 버튼 */
+                /* 매수: 금액 버튼 (누적 추가) */
                 <>
-                  {[
-                    { label: '10만', value: 100000 },
-                    { label: '50만', value: 500000 },
-                    { label: '100만', value: 1000000 },
-                    { label: '최대', value: cashBalance },
-                  ].map((btn) => (
-                    <button
-                      key={btn.label}
-                      onClick={() => setQuantityByAmount(btn.value)}
-                      className="flex-1 py-1.5 text-xs bg-red-50 text-red-600 hover:bg-red-100 rounded font-medium"
-                    >
-                      {btn.label}
-                    </button>
-                  ))}
+                  <button
+                    onClick={() => setOrderData({ ...orderData, quantity: '' })}
+                    className="py-1.5 px-2 text-xs bg-gray-100 text-gray-600 hover:bg-gray-200 rounded font-medium"
+                  >
+                    초기화
+                  </button>
+                  <button
+                    onClick={() => addQuantityByAmount(10000)}
+                    className="flex-1 py-1.5 text-xs bg-red-50 text-red-600 hover:bg-red-100 rounded font-medium"
+                  >
+                    +1만
+                  </button>
+                  <button
+                    onClick={() => addQuantityByAmount(100000)}
+                    className="flex-1 py-1.5 text-xs bg-red-50 text-red-600 hover:bg-red-100 rounded font-medium"
+                  >
+                    +10만
+                  </button>
+                  <button
+                    onClick={() => addQuantityByAmount(500000)}
+                    className="flex-1 py-1.5 text-xs bg-red-50 text-red-600 hover:bg-red-100 rounded font-medium"
+                  >
+                    +50만
+                  </button>
+                  <button
+                    onClick={setMaxQuantity}
+                    className="flex-1 py-1.5 text-xs bg-red-100 text-red-700 hover:bg-red-200 rounded font-bold"
+                  >
+                    최대
+                  </button>
                 </>
               )}
             </div>
