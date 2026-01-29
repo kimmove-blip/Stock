@@ -89,6 +89,7 @@ function SuggestionCard({ suggestion, activeTab, onApprove, onReject, isApprovin
     isBuy ? suggestedPrice : currentPrice
   );
   const [isMarketOrder, setIsMarketOrder] = useState(false);
+  const [customQuantity, setCustomQuantity] = useState(suggestion.quantity || 1);
 
   // 가격 범위가 동일한 경우 (슬라이더 비활성화)
   const priceRangeEqual = minPrice === maxPrice || minPrice <= 0 || maxPrice <= 0;
@@ -97,6 +98,11 @@ function SuggestionCard({ suggestion, activeTab, onApprove, onReject, isApprovin
   const handleSliderChange = (e) => {
     const value = parseInt(e.target.value);
     setSelectedPrice(roundToTick(value, isBuy)); // 매수는 내림, 매도는 올림
+  };
+
+  // 수량 변경 핸들러
+  const handleQuantityChange = (delta) => {
+    setCustomQuantity(prev => Math.max(1, prev + delta));
   };
 
   // 시장가 토글
@@ -110,7 +116,7 @@ function SuggestionCard({ suggestion, activeTab, onApprove, onReject, isApprovin
     const priceText = isMarketOrder
       ? '시장가'
       : `${selectedPrice.toLocaleString()}원`;
-    const quantity = suggestion.quantity;
+    const quantity = customQuantity;
     const totalAmount = isMarketOrder
       ? currentPrice * quantity
       : selectedPrice * quantity;
@@ -125,6 +131,7 @@ function SuggestionCard({ suggestion, activeTab, onApprove, onReject, isApprovin
     ) {
       onApprove(suggestion.id, {
         custom_price: isMarketOrder ? null : selectedPrice,
+        custom_quantity: customQuantity,
         is_market_order: isMarketOrder,
       }, suggestion.stock_name);
     }
@@ -245,7 +252,32 @@ function SuggestionCard({ suggestion, activeTab, onApprove, onReject, isApprovin
       <div className="grid grid-cols-2 gap-2 mb-3 bg-gray-50 rounded-lg p-3">
         <div>
           <p className="text-xs text-gray-500">수량</p>
-          <p className="font-bold text-gray-800">{suggestion.quantity}주</p>
+          {isPending ? (
+            <div className="flex items-center gap-1">
+              <button
+                onClick={() => handleQuantityChange(-1)}
+                className="w-7 h-7 flex items-center justify-center bg-gray-200 hover:bg-gray-300 rounded text-gray-700 font-bold"
+              >
+                -
+              </button>
+              <input
+                type="number"
+                value={customQuantity}
+                onChange={(e) => setCustomQuantity(Math.max(1, parseInt(e.target.value) || 1))}
+                className="w-14 h-7 text-center font-bold text-gray-800 border border-gray-300 rounded"
+                min="1"
+              />
+              <button
+                onClick={() => handleQuantityChange(1)}
+                className="w-7 h-7 flex items-center justify-center bg-gray-200 hover:bg-gray-300 rounded text-gray-700 font-bold"
+              >
+                +
+              </button>
+              <span className="text-sm text-gray-600">주</span>
+            </div>
+          ) : (
+            <p className="font-bold text-gray-800">{suggestion.quantity}주</p>
+          )}
         </div>
         <div>
           <p className="text-xs text-gray-500">
@@ -353,7 +385,7 @@ function SuggestionCard({ suggestion, activeTab, onApprove, onReject, isApprovin
             <span className="text-xs text-purple-600">예상 체결금액:</span>
             <span className="text-sm font-medium text-purple-800">
               {(
-                (isMarketOrder ? currentPrice : selectedPrice) * suggestion.quantity
+                (isMarketOrder ? currentPrice : selectedPrice) * customQuantity
               ).toLocaleString()}
               원
             </span>

@@ -166,6 +166,7 @@ class SuggestionResponse(BaseModel):
     current_price: Optional[int] = None  # 현재가
     change_rate: Optional[float] = None  # 전일대비 등락률
     quantity: int
+    custom_quantity: Optional[int] = None  # 사용자 지정 수량
     reason: Optional[str]
     score: Optional[float]
     status: str
@@ -260,38 +261,22 @@ async def get_auto_trade_status(
     # 대기 중인 매수 제안 (user_id로 필터링) - 수량 동적 계산
     suggestions_raw = logger.get_pending_suggestions(user_id=user_id)
 
-    # 사용자 설정에서 stock_ratio 가져오기 (기본값 10%)
+    # 사용자 설정에서 max_per_stock 가져오기 (종목당 최대 투자금액)
     user_settings = logger.get_auto_trade_settings(user_id)
-    stock_ratio = user_settings.get('stock_ratio', 10) if user_settings else 10
+    max_per_stock = user_settings.get('max_per_stock', 200000) if user_settings else 200000
 
-    # 계좌 잔고 조회하여 종목당 투자금액 계산
-    investment_per_stock = 100000  # 기본값 10만원
-    try:
-        from api.services.kis_client import KISClient
-        client = KISClient(
-            app_key=api_key_data.get('app_key'),
-            app_secret=api_key_data.get('app_secret'),
-            account_number=api_key_data.get('account_number'),
-            account_product_code=api_key_data.get('account_product_code', '01'),
-            is_mock=bool(api_key_data.get('is_mock', True))
-        )
-        balance = client.get_account_balance()
-        if balance:
-            summary = balance.get('summary', {})
-            total_eval = summary.get('total_eval_amount', 0)
-            max_buy_amt = summary.get('max_buy_amt', 0)
-            total_assets = total_eval + max_buy_amt
-            if total_assets > 0:
-                investment_per_stock = int(total_assets * stock_ratio / 100)
-    except Exception as e:
-        print(f"[status] 계좌 조회 실패, 기본값 사용: {e}")
-
-    # 각 제안에 대해 동적으로 수량 계산
+    # 각 제안에 대해 수량 계산 (max_per_stock 기준)
     pending_suggestions = []
     for s in suggestions_raw:
         suggested_price = s.get('suggested_price', 0)
-        quantity = investment_per_stock // suggested_price if suggested_price > 0 else 1
-        quantity = max(1, quantity)  # 최소 1주
+        custom_quantity = s.get('custom_quantity')
+
+        # custom_quantity가 있으면 사용, 없으면 max_per_stock 기준으로 계산
+        if custom_quantity and custom_quantity > 0:
+            quantity = custom_quantity
+        else:
+            quantity = max_per_stock // suggested_price if suggested_price > 0 else 1
+            quantity = max(1, quantity)  # 최소 1주
 
         pending_suggestions.append(SuggestionResponse(
             id=s['id'],
@@ -302,7 +287,8 @@ async def get_auto_trade_status(
             reason=s.get('reason'),
             score=s.get('score'),
             status=s['status'],
-            created_at=s['created_at']
+            created_at=s['created_at'],
+            custom_quantity=custom_quantity
         ))
 
     # 가상 잔고 (user_id로 필터링)
@@ -506,32 +492,9 @@ async def get_suggestions(
     if not api_key_data:
         return []
 
-    # 사용자 설정에서 stock_ratio 가져오기 (기본값 10%)
+    # 사용자 설정에서 max_per_stock 가져오기
     user_settings = logger.get_auto_trade_settings(user_id)
-    stock_ratio = user_settings.get('stock_ratio', 10) if user_settings else 10
-
-    # 계좌 잔고 조회하여 총 자산 계산
-    investment_per_stock = 100000  # 기본값 10만원
-    try:
-        from api.services.kis_client import KISClient
-        client = KISClient(
-            app_key=api_key_data.get('app_key'),
-            app_secret=api_key_data.get('app_secret'),
-            account_number=api_key_data.get('account_number'),
-            account_product_code=api_key_data.get('account_product_code', '01'),
-            is_mock=bool(api_key_data.get('is_mock', True))
-        )
-        balance = client.get_account_balance()
-        if balance:
-            summary = balance.get('summary', {})
-            total_eval = summary.get('total_eval_amount', 0)
-            max_buy_amt = summary.get('max_buy_amt', 0)
-            total_assets = total_eval + max_buy_amt
-            if total_assets > 0:
-                investment_per_stock = int(total_assets * stock_ratio / 100)
-                print(f"[제안조회] 총자산: {total_assets:,}원, stock_ratio: {stock_ratio}%, 종목당투자금: {investment_per_stock:,}원")
-    except Exception as e:
-        print(f"[제안조회] 계좌 조회 실패, 기본값 사용: {e}")
+    max_per_stock = user_settings.get('max_per_stock', 200000) if user_settings else 200000
 
     # user_id로 필터링하여 해당 사용자의 제안만 조회
     if status == 'pending':
@@ -556,12 +519,17 @@ async def get_suggestions(
     result = []
     for i, s in enumerate(suggestions_raw):
         suggested_price = s.get('suggested_price', 0)
+        custom_quantity = s.get('custom_quantity')
         price_info = price_infos[i] if i < len(price_infos) else {}
         current_price = price_info.get('current_price', 0)
         change_rate = price_info.get('change_rate', 0)
-        # 수량 계산: 종목당 투자금 / 추천 매수가
-        quantity = investment_per_stock // suggested_price if suggested_price > 0 else 1
-        quantity = max(1, quantity)  # 최소 1주
+
+        # custom_quantity가 있으면 사용, 없으면 max_per_stock 기준으로 계산
+        if custom_quantity and custom_quantity > 0:
+            quantity = custom_quantity
+        else:
+            quantity = max_per_stock // suggested_price if suggested_price > 0 else 1
+            quantity = max(1, quantity)  # 최소 1주
 
         result.append(SuggestionResponse(
             id=s['id'],
@@ -571,6 +539,7 @@ async def get_suggestions(
             current_price=current_price,
             change_rate=change_rate,
             quantity=quantity,
+            custom_quantity=custom_quantity,
             reason=s.get('reason'),
             score=s.get('score'),
             status=s['status'],
@@ -1331,6 +1300,7 @@ async def save_settings(
 class ApproveRequest(BaseModel):
     """승인 요청 (선택적 매개변수)"""
     custom_price: Optional[int] = None  # 사용자 지정 가격 (지정가 주문 시)
+    custom_quantity: Optional[int] = None  # 사용자 지정 수량
     is_market_order: bool = False  # True: 시장가, False: 지정가
     force_adjusted: bool = False  # True: 조정된 수량으로 강제 주문
 
@@ -1365,6 +1335,7 @@ async def approve_suggestion(
 
     # 추가 매개변수 추출
     custom_price = request.custom_price if request else None
+    custom_quantity = request.custom_quantity if request else None
     is_market_order = request.is_market_order if request else False
 
     # 주문 가격 결정
@@ -1375,9 +1346,9 @@ async def approve_suggestion(
         order_price = custom_price or suggestion.get('buy_band_high') or suggestion.get('recommended_price') or suggestion.get('current_price')
         order_type = "00"  # 지정가
 
-    # 수량 계산 (사용자 설정 기반)
+    # 사용자 설정에서 max_per_stock 가져오기
     user_settings = logger.get_auto_trade_settings(user_id)
-    stock_ratio = user_settings.get('stock_ratio', 10) if user_settings else 10
+    max_per_stock = user_settings.get('max_per_stock', 200000) if user_settings else 200000
 
     try:
         from api.services.kis_client import KISClient
@@ -1389,24 +1360,24 @@ async def approve_suggestion(
             is_mock=bool(api_key_data.get('is_mock', True))
         )
 
-        # 계좌 잔고 조회하여 수량 계산
+        # 계좌 잔고 조회
         balance = client.get_account_balance()
         if balance:
             summary = balance.get('summary', {})
-            total_eval = summary.get('total_eval_amount', 0)
-            d2_cash = summary.get('d2_cash_balance', 0) or summary.get('cash_balance', 0)
-            max_buy_amt = summary.get('max_buy_amt', 0) or d2_cash
-            total_assets = total_eval + d2_cash
-            investment_per_stock = int(total_assets * stock_ratio / 100)
-            # 실제 주문 가능 금액으로 제한
-            investment_per_stock = min(investment_per_stock, max_buy_amt)
+            max_buy_amt = summary.get('max_buy_amt', 0) or summary.get('d2_cash_balance', 0) or summary.get('cash_balance', 0)
         else:
-            investment_per_stock = 100000
+            max_buy_amt = max_per_stock
 
-        # 수량 계산
+        # 수량 계산: custom_quantity > suggestion.custom_quantity > max_per_stock 기준
         price_for_calc = order_price if order_price > 0 else suggestion.get('current_price', 0)
-        quantity = investment_per_stock // price_for_calc if price_for_calc > 0 else 1
-        quantity = max(1, quantity)
+
+        if custom_quantity and custom_quantity > 0:
+            quantity = custom_quantity
+        elif suggestion.get('custom_quantity') and suggestion.get('custom_quantity') > 0:
+            quantity = suggestion.get('custom_quantity')
+        else:
+            quantity = max_per_stock // price_for_calc if price_for_calc > 0 else 1
+            quantity = max(1, quantity)
 
         # 주문 금액이 주문가능금액 초과 시 조정된 수량 제안
         order_amount = quantity * price_for_calc
