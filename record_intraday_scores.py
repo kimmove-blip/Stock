@@ -471,6 +471,11 @@ def process_stock(stock_info: dict) -> dict:
         prev_close = int(prev['Close'])
         change_rate = ((current_price - prev_close) / prev_close * 100) if prev_close > 0 else 0
 
+        # 거래량 비율 계산 (5일 평균 대비)
+        avg_volume_5d = df['Volume'].tail(6).head(5).mean()  # 오늘 제외 최근 5일
+        current_volume = int(latest.get('Volume', 0))
+        volume_ratio = round(current_volume / avg_volume_5d, 2) if avg_volume_5d > 0 else 1.0
+
         # V1~V8 스코어 계산 (같은 df 사용)
         scores, signals = calculate_scores(df)
 
@@ -487,7 +492,8 @@ def process_stock(stock_info: dict) -> dict:
             'close': current_price,
             'prev_close': prev_close,
             'change_pct': round(change_rate, 2),
-            'volume': int(latest.get('Volume', 0)),
+            'volume': current_volume,
+            'volume_ratio': volume_ratio,  # 5일 평균 대비 거래량 비율
             'prev_amount': prev_amount,  # 전일 거래대금
             'prev_marcap': prev_marcap,  # 전일 시총
             'v1': scores.get('v1', 0),
@@ -536,9 +542,9 @@ def save_to_csv(records: list, recorded_at: datetime) -> str:
 
     df = pd.DataFrame(records)
 
-    # 컬럼 순서 정리 (체결강도, 수급, 상대강도, V10 추가)
+    # 컬럼 순서 정리 (체결강도, 수급, 상대강도, V10, volume_ratio 추가)
     columns = ['code', 'name', 'market', 'open', 'high', 'low', 'close', 'prev_close',
-               'change_pct', 'volume', 'prev_amount', 'prev_marcap',
+               'change_pct', 'volume', 'volume_ratio', 'prev_amount', 'prev_marcap',
                'buy_strength', 'foreign_net', 'inst_net', 'rel_strength',
                'v1', 'v2', 'v3.5', 'v4', 'v5', 'v6', 'v7', 'v8', 'v9_prob', 'v10', 'signals']
 
@@ -554,40 +560,52 @@ def save_to_csv(records: list, recorded_at: datetime) -> str:
     return str(filepath)
 
 
-def run_auto_trader(user_id: int):
-    """스코어 기록 후 자동매매 트레이더 호출"""
+def run_auto_trader_all():
+    """CSV 저장 후 auto_trader.py --use-csv --all 호출 (전체 사용자)"""
     import subprocess
 
-    script_path = PROJECT_ROOT / "intraday_auto_trader.py"
+    script_path = PROJECT_ROOT / "auto_trader.py"
     if not script_path.exists():
-        print(f"    [경고] 트레이더 스크립트 없음: {script_path}")
-        return
+        print(f"    [경고] auto_trader.py 없음: {script_path}")
+        return False
 
-    print(f"\n[4] 자동매매 트레이더 호출 (user_id={user_id})...")
+    print(f"\n[4] auto_trader.py 호출 (--use-csv --all --intraday)...")
     try:
-        cmd = [sys.executable, str(script_path), '--user', str(user_id)]
+        cmd = [sys.executable, str(script_path), '--use-csv', '--all', '--intraday']
         result = subprocess.run(
             cmd,
             cwd=str(PROJECT_ROOT),
             capture_output=True,
             text=True,
-            timeout=180  # 3분 타임아웃
+            timeout=300  # 5분 타임아웃
         )
 
         if result.returncode == 0:
-            print(f"    트레이더 실행 완료")
+            print(f"    auto_trader 완료")
             # 주요 결과만 출력
             for line in result.stdout.split('\n'):
-                if any(kw in line for kw in ['매수', '매도', '청산', '시그널', '포지션']):
+                if any(kw in line for kw in ['매수', '매도', '청산', 'USER', '완료', '결과']):
                     print(f"    {line}")
+            return True
         else:
-            print(f"    트레이더 실행 실패 (code={result.returncode})")
+            print(f"    auto_trader 실패 (code={result.returncode})")
             if result.stderr:
-                print(f"    에러: {result.stderr[:200]}")
+                print(f"    에러: {result.stderr[:300]}")
+            return False
     except subprocess.TimeoutExpired:
-        print(f"    트레이더 타임아웃 (3분)")
+        print(f"    auto_trader 타임아웃 (5분)")
+        return False
     except Exception as e:
-        print(f"    트레이더 호출 오류: {e}")
+        print(f"    auto_trader 호출 오류: {e}")
+        return False
+
+
+def is_market_hours() -> bool:
+    """장 시간(09:00~15:20) 여부 확인"""
+    now = datetime.now()
+    market_open = now.replace(hour=9, minute=0, second=0, microsecond=0)
+    market_close = now.replace(hour=15, minute=20, second=0, microsecond=0)
+    return market_open <= now <= market_close
 
 
 def main():
@@ -597,8 +615,8 @@ def main():
     parser.add_argument('--filter', action='store_true', help='장 전 실행: 전일 기준 종목 필터링')
     parser.add_argument('--dry-run', action='store_true', help='테스트 모드 (저장 안함)')
     parser.add_argument('--kis', action='store_true', help='한투 API 연동 (체결강도/수급 추가)')
-    parser.add_argument('--auto-trade', type=int, default=None, metavar='USER_ID',
-                        help='스코어 기록 후 자동매매 실행 (user_id 지정)')
+    parser.add_argument('--call-auto-trader', action='store_true',
+                        help='CSV 저장 후 auto_trader.py --use-csv --all 호출')
     args = parser.parse_args()
 
     # 장 전 필터링 모드
@@ -702,9 +720,12 @@ def main():
         else:
             print("    저장 실패")
 
-    # 자동매매 트레이더 호출
-    if args.auto_trade and not args.dry_run and filepath:
-        run_auto_trader(args.auto_trade)
+    # auto_trader 호출 (--call-auto-trader 옵션)
+    if args.call_auto_trader and not args.dry_run and filepath:
+        if is_market_hours():
+            run_auto_trader_all()
+        else:
+            print(f"\n[4] 장 운영 시간 아님 - auto_trader 호출 건너뜀")
 
     elapsed = (datetime.now() - recorded_at).total_seconds()
     print(f"\n" + "=" * 60)

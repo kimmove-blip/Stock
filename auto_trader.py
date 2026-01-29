@@ -6,6 +6,7 @@
     python auto_trader.py              # 1회 실행
     python auto_trader.py --dry-run    # 테스트 실행 (주문 X)
     python auto_trader.py --report     # 성과 리포트만 출력
+    python auto_trader.py --all --use-csv  # CSV 스코어 사용 (스크리닝 건너뜀)
 
 cron 설정 예시:
     # 매일 08:50 (장 시작 전)
@@ -20,6 +21,8 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
+import pandas as pd
+
 # 프로젝트 루트 추가
 sys.path.insert(0, str(Path(__file__).parent))
 
@@ -30,6 +33,104 @@ from trading.trade_logger import TradeLogger, BuySuggestionManager
 from technical_analyst import TechnicalAnalyst
 from market_screener import MarketScreener
 from config import AutoTraderConfig, TelegramConfig, OUTPUT_DIR, SIGNAL_NAMES_KR
+
+# CSV 스코어 디렉토리
+INTRADAY_SCORES_DIR = Path(__file__).parent / "output" / "intraday_scores"
+
+
+def load_scores_from_csv(max_age_minutes: int = 15) -> Optional[Tuple[List[Dict], Dict]]:
+    """
+    가장 최근 CSV 스코어 파일을 로드하여 MarketScreener 결과 형식으로 변환
+
+    Args:
+        max_age_minutes: CSV 파일 최대 허용 경과 시간 (분)
+
+    Returns:
+        (top_stocks, stats) 튜플 또는 None
+    """
+    if not INTRADAY_SCORES_DIR.exists():
+        print(f"  [CSV] 스코어 디렉토리 없음: {INTRADAY_SCORES_DIR}")
+        return None
+
+    # 오늘 날짜의 CSV 파일 찾기 (최신순 정렬)
+    today_str = datetime.now().strftime('%Y%m%d')
+    csv_files = sorted(
+        INTRADAY_SCORES_DIR.glob(f"{today_str}_*.csv"),
+        reverse=True
+    )
+
+    if not csv_files:
+        print(f"  [CSV] 오늘 날짜 CSV 파일 없음")
+        return None
+
+    latest_csv = csv_files[0]
+
+    # 파일 경과 시간 체크
+    filename = latest_csv.stem  # 20260129_0903
+    try:
+        file_time = datetime.strptime(filename, '%Y%m%d_%H%M')
+        elapsed_minutes = (datetime.now() - file_time).total_seconds() / 60
+
+        if elapsed_minutes > max_age_minutes:
+            print(f"  [CSV] 파일이 오래됨: {filename} ({elapsed_minutes:.0f}분 전)")
+            return None
+    except ValueError:
+        pass  # 파싱 실패 시 경과 시간 무시
+
+    # CSV 로드
+    try:
+        df = pd.read_csv(latest_csv)
+        print(f"  [CSV] 로드: {latest_csv.name} ({len(df)}개 종목)")
+    except Exception as e:
+        print(f"  [CSV] 로드 실패: {e}")
+        return None
+
+    # 필수 컬럼 확인
+    required_cols = ['code', 'name', 'close', 'v2']
+    if not all(col in df.columns for col in required_cols):
+        print(f"  [CSV] 필수 컬럼 부족: {required_cols}")
+        return None
+
+    # MarketScreener 형식으로 변환
+    top_stocks = []
+    all_scores = {}
+
+    for _, row in df.iterrows():
+        code = str(row['code']).zfill(6)
+        score = int(row.get('v2', 0))
+        all_scores[code] = score
+
+        # 시그널 파싱
+        signals_str = row.get('signals', '')
+        signals = signals_str.split(',') if signals_str and pd.notna(signals_str) else []
+
+        # volume_ratio 계산 (CSV에 없으면 기본값 1.0)
+        volume_ratio = float(row.get('volume_ratio', 1.0)) if 'volume_ratio' in df.columns else 1.0
+
+        stock = {
+            "code": code,
+            "name": row.get('name', ''),
+            "market": row.get('market', 'KOSDAQ'),
+            "score": score,
+            "signals": signals,
+            "patterns": [],
+            "close": int(row.get('close', 0)),
+            "change_pct": float(row.get('change_pct', 0)),
+            "indicators": {
+                "volume_ratio": volume_ratio,
+            },
+        }
+        top_stocks.append(stock)
+
+    # V2 점수 내림차순 정렬
+    top_stocks.sort(key=lambda x: x['score'], reverse=True)
+
+    stats = {
+        "all_scores": all_scores,
+        "csv_source": str(latest_csv),
+    }
+
+    return (top_stocks, stats)
 
 
 def get_tick_size(price: int) -> int:
@@ -2231,8 +2332,14 @@ def get_active_users() -> List[Dict]:
     return [dict(row) for row in rows]
 
 
-def run_for_all_users(dry_run: bool = False, min_score: int = 75):
-    """모든 활성화된 사용자에 대해 자동매매 실행"""
+def run_for_all_users(dry_run: bool = False, min_score: int = 75, use_csv: bool = False):
+    """모든 활성화된 사용자에 대해 자동매매 실행
+
+    Args:
+        dry_run: 테스트 모드 (주문 X)
+        min_score: 최소 매수 점수
+        use_csv: True면 CSV 스코어 파일 사용 (스크리닝 건너뜀)
+    """
     from trading.trade_logger import TradeLogger
 
     # 장중 자동매매 제외 사용자 (user 7: 모의투자)
@@ -2240,6 +2347,8 @@ def run_for_all_users(dry_run: bool = False, min_score: int = 75):
 
     print("\n" + "=" * 70)
     print("  AUTO TRADER - 전체 사용자 실행 모드")
+    if use_csv:
+        print("  [CSV 모드: 스크리닝 건너뜀]")
     print(f"  실행 시각: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     print("=" * 70)
 
@@ -2264,18 +2373,31 @@ def run_for_all_users(dry_run: bool = False, min_score: int = 75):
     screening_result = None
     semi_auto_users = [u for u in users if u['trade_mode'] in ('semi', 'auto')]
     if semi_auto_users:
-        print(f"\n[2] 전종목 스크리닝 (1회 실행, {len(semi_auto_users)}명 공유)")
-        from config import ScreeningConfig
-        screener = MarketScreener(max_workers=ScreeningConfig.MAX_WORKERS)
-        top_stocks, stats = screener.run_full_screening(
-            top_n=ScreeningConfig.TOP_N,
-            mode="strict",
-            min_marcap=ScreeningConfig.MIN_MARKET_CAP,
-            max_marcap=ScreeningConfig.MAX_MARKET_CAP,
-            min_amount=ScreeningConfig.MIN_TRADING_AMOUNT,
-        )
-        screening_result = (top_stocks, stats)
-        print(f"  스크리닝 완료: {len(top_stocks) if top_stocks else 0}개 종목")
+        # CSV 모드: CSV 파일에서 스코어 로드 (스크리닝 건너뜀)
+        if use_csv:
+            print(f"\n[2] CSV 스코어 로드 중...")
+            screening_result = load_scores_from_csv(max_age_minutes=15)
+            if screening_result:
+                top_stocks, stats = screening_result
+                print(f"  CSV 로드 완료: {len(top_stocks)}개 종목")
+            else:
+                print(f"  CSV 로드 실패 - 스크리닝으로 폴백")
+                use_csv = False  # 폴백
+
+        # 스크리닝 실행 (CSV 없거나 폴백 시)
+        if not use_csv:
+            print(f"\n[2] 전종목 스크리닝 (1회 실행, {len(semi_auto_users)}명 공유)")
+            from config import ScreeningConfig
+            screener = MarketScreener(max_workers=ScreeningConfig.MAX_WORKERS)
+            top_stocks, stats = screener.run_full_screening(
+                top_n=ScreeningConfig.TOP_N,
+                mode="strict",
+                min_marcap=ScreeningConfig.MIN_MARKET_CAP,
+                max_marcap=ScreeningConfig.MAX_MARKET_CAP,
+                min_amount=ScreeningConfig.MIN_TRADING_AMOUNT,
+            )
+            screening_result = (top_stocks, stats)
+            print(f"  스크리닝 완료: {len(top_stocks) if top_stocks else 0}개 종목")
 
     results = []
 
@@ -2364,11 +2486,12 @@ def main():
     parser.add_argument("--min-score", type=int, default=75, help="장중 스크리닝 최소 점수 (기본: 75)")
     parser.add_argument("--user-id", type=int, help="사용자 ID (장중 스크리닝용)")
     parser.add_argument("--all", action="store_true", help="모든 활성화된 사용자 실행")
+    parser.add_argument("--use-csv", action="store_true", help="CSV 스코어 사용 (스크리닝 건너뜀)")
     args = parser.parse_args()
 
     # --all 옵션: 모든 활성화된 사용자 실행
     if args.all:
-        run_for_all_users(dry_run=args.dry_run, min_score=args.min_score)
+        run_for_all_users(dry_run=args.dry_run, min_score=args.min_score, use_csv=args.use_csv)
         return
 
     # user_id가 지정되면 해당 사용자 설정 사용
