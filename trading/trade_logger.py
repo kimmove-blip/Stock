@@ -1648,7 +1648,7 @@ class TradeLogger:
             cursor = conn.cursor()
             cursor.execute("""
                 SELECT id, stock_code, stock_name, recommended_price as suggested_price,
-                       1 as quantity, signals as reason, score, status, created_at
+                       current_price, 1 as quantity, signals as reason, score, status, created_at
                 FROM pending_buy_suggestions
                 WHERE status = 'pending' AND user_id = ?
                 ORDER BY score DESC, created_at DESC
@@ -1680,7 +1680,7 @@ class TradeLogger:
             cursor = conn.cursor()
             cursor.execute("""
                 SELECT id, stock_code, stock_name, recommended_price as suggested_price,
-                       1 as quantity, signals as reason, score, status, created_at
+                       current_price, 1 as quantity, signals as reason, score, status, created_at
                 FROM pending_buy_suggestions
                 WHERE status = 'approved' AND user_id = ?
                 ORDER BY approved_at DESC
@@ -1711,7 +1711,7 @@ class TradeLogger:
             cursor = conn.cursor()
             cursor.execute("""
                 SELECT id, stock_code, stock_name, recommended_price as suggested_price,
-                       1 as quantity, signals as reason, score, status, created_at
+                       current_price, 1 as quantity, signals as reason, score, status, created_at
                 FROM pending_buy_suggestions
                 WHERE status = 'executed' AND user_id = ?
                 ORDER BY executed_at DESC

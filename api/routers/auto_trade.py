@@ -163,7 +163,8 @@ class SuggestionResponse(BaseModel):
     stock_code: str
     stock_name: Optional[str]
     suggested_price: int
-    current_price: Optional[int] = None  # 현재가
+    current_price: Optional[int] = None  # 현재가 (실시간)
+    original_price: Optional[int] = None  # 제안 시점 가격
     change_rate: Optional[float] = None  # 전일대비 등락률
     quantity: int
     custom_quantity: Optional[int] = None  # 사용자 지정 수량
@@ -537,6 +538,7 @@ async def get_suggestions(
             stock_name=s.get('stock_name'),
             suggested_price=suggested_price,
             current_price=current_price,
+            original_price=s.get('current_price'),  # 제안 시점 가격 (DB 저장값)
             change_rate=change_rate,
             quantity=quantity,
             custom_quantity=custom_quantity,
@@ -1551,6 +1553,7 @@ async def get_sell_suggestions(
             stock_name=s.get('stock_name'),
             suggested_price=s['suggested_price'],
             current_price=current_price,
+            original_price=s.get('current_price'),  # 제안 시점 가격 (DB 저장값)
             change_rate=change_rate,
             quantity=s['quantity'],
             reason=s.get('reason'),
