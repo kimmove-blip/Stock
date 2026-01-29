@@ -2391,15 +2391,21 @@ def main():
         trader.print_report(days=args.days)
     elif args.intraday:
         # 장중 10분 스크리닝 모드
-        # user_id가 지정된 경우 trade_mode 조회
+        # user_id가 지정된 경우 trade_mode, min_buy_score 조회
         trade_mode = 'auto'
+        min_score = args.min_score
         if args.user_id:
             logger = TradeLogger()
             settings = logger.get_auto_trade_settings(args.user_id)
             if settings:
                 db_mode = settings.get('trade_mode', 'auto')
                 trade_mode = db_mode if db_mode in ('semi', 'auto') else 'auto'
-        trader.run_intraday(min_score=args.min_score, trade_mode=trade_mode)
+                # 사용자 설정의 min_buy_score 적용
+                user_min_score = settings.get('min_buy_score')
+                if user_min_score is not None:
+                    min_score = user_min_score
+                    print(f"[AutoTrader] 사용자 {args.user_id} min_buy_score: {min_score}점")
+        trader.run_intraday(min_score=min_score, trade_mode=trade_mode)
     else:
         trader.run()
 

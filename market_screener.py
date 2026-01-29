@@ -54,14 +54,58 @@ class MarketScreener:
         - max_marcap: 최대 시가총액 (대형 우량주 제외용, 기본 1조)
         - min_amount: 최소 거래대금 (기본 3억)
         - max_price: 최대 주가 (기본 None, 제한 없음)
+
+        장 초반(09:00~10:00)에는 전일 거래대금 기준으로 필터링
         """
+        now = datetime.now()
+        is_early_market = 9 <= now.hour < 10
+
         filter_desc = f"시총>{min_marcap / 1e8:.0f}억"
         if max_marcap:
             filter_desc += f", 시총<{max_marcap / 1e12:.0f}조"
         filter_desc += f", 거래대금>{min_amount / 1e8:.0f}억"
+        if is_early_market:
+            filter_desc += " (전일 기준)"
         if max_price:
             filter_desc += f", 주가<{max_price / 10000:.0f}만원"
         print(f"[2/5] 유동성 필터링 ({filter_desc})...")
+
+        # 장 초반에는 전일 거래대금 기준 필터 파일 사용
+        if is_early_market:
+            try:
+                from pathlib import Path
+                today_str = now.strftime("%Y%m%d")
+                filtered_path = Path(__file__).parent / "output" / f"filtered_stocks_{today_str}.csv"
+                if filtered_path.exists():
+                    prev_filtered = pd.read_csv(filtered_path, dtype={"Code": str})
+                    prev_filtered["Code"] = prev_filtered["Code"].str.zfill(6)
+                    prev_codes = set(prev_filtered["Code"].tolist())
+                    print(f"    → 전일 필터 종목 {len(prev_codes)}개 로드")
+
+                    if self.all_stocks is None:
+                        self.load_all_stocks()
+                    df = self.all_stocks.copy()
+
+                    # 시가총액 필터
+                    if "Marcap" in df.columns:
+                        df = df[df["Marcap"] >= min_marcap]
+                        if max_marcap:
+                            df = df[df["Marcap"] <= max_marcap]
+
+                    # 전일 거래대금 기준으로 필터 (prev_codes에 있는 종목만)
+                    df = df[df["Code"].isin(prev_codes)]
+
+                    # 주가 필터
+                    if max_price and "Close" in df.columns:
+                        df["Close"] = pd.to_numeric(df["Close"], errors='coerce')
+                        df = df[df["Close"] <= max_price]
+
+                    self.filtered_stocks = df
+                    print(f"    → {len(df):,}개 종목 통과")
+                    return df
+            except Exception as e:
+                print(f"    → 전일 필터 파일 로드 실패: {e}, 당일 기준 사용")
+
         if self.all_stocks is None:
             self.load_all_stocks()
         df = self.all_stocks.copy()
