@@ -118,6 +118,9 @@ def load_scores_from_csv(max_age_minutes: int = 15) -> Optional[Tuple[List[Dict]
         # volume_ratio 계산 (CSV에 없으면 기본값 1.0)
         volume_ratio = float(row.get('volume_ratio', 1.0)) if 'volume_ratio' in df.columns else 1.0
 
+        # 거래대금 (prev_amount 또는 amount)
+        amount = int(row.get('prev_amount', 0) or row.get('amount', 0) or 0)
+
         stock = {
             "code": code,
             "name": row.get('name', ''),
@@ -128,14 +131,15 @@ def load_scores_from_csv(max_age_minutes: int = 15) -> Optional[Tuple[List[Dict]
             "patterns": [],
             "close": int(row.get('close', 0)),
             "change_pct": float(row.get('change_pct', 0)),
+            "amount": amount,  # 거래대금
             "indicators": {
                 "volume_ratio": volume_ratio,
             },
         }
         top_stocks.append(stock)
 
-    # 점수 내림차순 정렬
-    top_stocks.sort(key=lambda x: x['score'], reverse=True)
+    # 점수 내림차순 정렬 (동점 시 거래대금 많은 순)
+    top_stocks.sort(key=lambda x: (x['score'], x.get('amount', 0)), reverse=True)
 
     stats = {
         "all_scores": all_scores,
@@ -502,10 +506,11 @@ class AutoTrader:
                 "target_price": target_price,
                 "stop_loss_price": stop_loss_price,
                 "expected_return": stock.get("expected_return"),
+                "amount": stock.get("amount", 0),  # 거래대금
             })
 
-        # 점수순 정렬
-        candidates.sort(key=lambda x: x["score"], reverse=True)
+        # 점수순 정렬 (동점 시 거래대금 많은 순)
+        candidates.sort(key=lambda x: (x["score"], x.get("amount", 0)), reverse=True)
 
         return candidates
 
@@ -2161,8 +2166,11 @@ class AutoTrader:
                 "current_price": int(stock.get("close", 0)),
                 "volume_ratio": volume_ratio,
                 "change_pct": stock.get("change_pct", 0),
+                "amount": stock.get("amount", 0),  # 거래대금
             })
 
+        # 점수순 정렬 (동점 시 거래대금 많은 순)
+        candidates.sort(key=lambda x: (x["score"], x.get("amount", 0)), reverse=True)
         print(f"  최종 {min_score}점 이상 후보: {len(candidates)}개")
 
         if not candidates:
