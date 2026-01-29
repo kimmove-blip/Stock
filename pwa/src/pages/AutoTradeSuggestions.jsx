@@ -71,7 +71,7 @@ const roundToTick = (price, roundDown = true) => {
   return Math.ceil(price / tick) * tick;
 };
 
-// 개별 제안 카드 컴포넌트
+// 개별 제안 카드 컴포넌트 (컴팩트 버전)
 function SuggestionCard({ suggestion, activeTab, onApprove, onReject, isApproving, isRejecting, isRemoving }) {
   const navigate = useNavigate();
   const isBuy = activeTab === 'buy';
@@ -81,28 +81,24 @@ function SuggestionCard({ suggestion, activeTab, onApprove, onReject, isApprovin
   const suggestedPrice = suggestion.suggested_price || 0;
   const currentPrice = suggestion.current_price || suggestedPrice;
 
-  // 매수: 제안가 ~ 현재가, 매도: 현재가 ~ 현재가+10%
-  const minPrice = isBuy ? suggestedPrice : currentPrice;
-  const maxPrice = isBuy ? currentPrice : Math.round(currentPrice * 1.1);
-
   const [selectedPrice, setSelectedPrice] = useState(
     isBuy ? suggestedPrice : currentPrice
   );
   const [isMarketOrder, setIsMarketOrder] = useState(false);
   const [customQuantity, setCustomQuantity] = useState(suggestion.quantity || 1);
 
-  // 가격 범위가 동일한 경우 (슬라이더 비활성화)
-  const priceRangeEqual = minPrice === maxPrice || minPrice <= 0 || maxPrice <= 0;
-
-  // 슬라이더 값 변경 핸들러
-  const handleSliderChange = (e) => {
-    const value = parseInt(e.target.value);
-    setSelectedPrice(roundToTick(value, isBuy)); // 매수는 내림, 매도는 올림
-  };
-
   // 수량 변경 핸들러
   const handleQuantityChange = (delta) => {
     setCustomQuantity(prev => Math.max(1, prev + delta));
+  };
+
+  // 가격 변경 핸들러 (호가 단위)
+  const handlePriceChange = (ticks) => {
+    const tick = getTickSize(selectedPrice);
+    const newPrice = selectedPrice + (tick * ticks);
+    if (newPrice > 0) {
+      setSelectedPrice(newPrice);
+    }
   };
 
   // 시장가 토글
@@ -113,22 +109,10 @@ function SuggestionCard({ suggestion, activeTab, onApprove, onReject, isApprovin
   // 승인 핸들러
   const handleApproveClick = () => {
     const action = isBuy ? '매수' : '매도';
-    const priceText = isMarketOrder
-      ? '시장가'
-      : `${selectedPrice.toLocaleString()}원`;
-    const quantity = customQuantity;
-    const totalAmount = isMarketOrder
-      ? currentPrice * quantity
-      : selectedPrice * quantity;
+    const priceText = isMarketOrder ? '시장가' : `${selectedPrice.toLocaleString()}원`;
+    const totalAmount = isMarketOrder ? currentPrice * customQuantity : selectedPrice * customQuantity;
 
-    if (
-      confirm(
-        `${suggestion.stock_name} ${action}를 승인하시겠습니까?\n\n` +
-          `주문 유형: ${priceText}\n` +
-          `수량: ${quantity}주\n` +
-          `예상 금액: ${totalAmount.toLocaleString()}원`
-      )
-    ) {
+    if (confirm(`${suggestion.stock_name} ${action}\n${priceText} × ${customQuantity}주 = ${totalAmount.toLocaleString()}원`)) {
       onApprove(suggestion.id, {
         custom_price: isMarketOrder ? null : selectedPrice,
         custom_quantity: customQuantity,
@@ -139,8 +123,7 @@ function SuggestionCard({ suggestion, activeTab, onApprove, onReject, isApprovin
 
   // 거부 핸들러
   const handleRejectClick = () => {
-    const action = isBuy ? '매수' : '매도';
-    if (confirm(`${suggestion.stock_name} ${action}를 거부하시겠습니까?`)) {
+    if (confirm(`${suggestion.stock_name} 거부?`)) {
       onReject(suggestion.id, suggestion.stock_name);
     }
   };
@@ -148,255 +131,115 @@ function SuggestionCard({ suggestion, activeTab, onApprove, onReject, isApprovin
   const getStatusBadge = (status) => {
     switch (status) {
       case 'pending':
-        return (
-          <span className="flex items-center gap-1 text-xs bg-orange-100 text-orange-600 px-2 py-0.5 rounded-full">
-            <Clock size={12} />
-            대기중
-          </span>
-        );
+        return <span className="text-xs bg-orange-100 text-orange-600 px-2 py-0.5 rounded-full">대기</span>;
       case 'approved':
-        return (
-          <span className="flex items-center gap-1 text-xs bg-green-100 text-green-600 px-2 py-0.5 rounded-full">
-            <CheckCircle2 size={12} />
-            승인됨
-          </span>
-        );
+        return <span className="text-xs bg-green-100 text-green-600 px-2 py-0.5 rounded-full">승인</span>;
       case 'rejected':
-        return (
-          <span className="flex items-center gap-1 text-xs bg-red-100 text-red-600 px-2 py-0.5 rounded-full">
-            <XCircle size={12} />
-            거부됨
-          </span>
-        );
+        return <span className="text-xs bg-red-100 text-red-600 px-2 py-0.5 rounded-full">거부</span>;
       case 'executed':
-        return (
-          <span className="flex items-center gap-1 text-xs bg-blue-100 text-blue-600 px-2 py-0.5 rounded-full">
-            <Check size={12} />
-            체결됨
-          </span>
-        );
+        return <span className="text-xs bg-blue-100 text-blue-600 px-2 py-0.5 rounded-full">체결</span>;
       case 'expired':
-        return (
-          <span className="flex items-center gap-1 text-xs bg-gray-100 text-gray-600 px-2 py-0.5 rounded-full">
-            <Clock size={12} />
-            만료됨
-          </span>
-        );
+        return <span className="text-xs bg-gray-100 text-gray-600 px-2 py-0.5 rounded-full">만료</span>;
       default:
         return null;
     }
   };
 
-  // 가격 차이 퍼센트
-  const priceDiff = currentPrice > 0 ? ((currentPrice - suggestedPrice) / suggestedPrice * 100).toFixed(1) : 0;
-  const priceDiffPositive = parseFloat(priceDiff) >= 0;
+  // AI 점수 뱃지
+  const getScoreBadge = () => {
+    if (!isBuy) return null;
+    const score = suggestion.score || 0;
+    const color = score >= 80 ? 'bg-green-100 text-green-700' : score >= 60 ? 'bg-yellow-100 text-yellow-700' : 'bg-gray-100 text-gray-600';
+    return <span className={`text-xs px-1.5 py-0.5 rounded ${color}`}>{score}점</span>;
+  };
 
   return (
-    <div
-      className={`bg-white rounded-xl p-4 shadow-sm transition-opacity duration-200 ${
-        isRemoving ? 'opacity-0' : 'opacity-100'
-      }`}
-    >
-      {/* 헤더 */}
-      <div className="flex items-start justify-between mb-3">
-        <div
-          className="flex-1 cursor-pointer"
-          onClick={() => navigate(`/stock/${suggestion.stock_code}`)}
-        >
-          <div className="flex items-center gap-2">
-            <span
-              className={`text-xs px-2 py-0.5 rounded font-medium ${
-                isBuy ? 'bg-red-100 text-red-600' : 'bg-blue-100 text-blue-600'
-              }`}
-            >
-              {isBuy ? '매수' : '매도'}
+    <div className={`bg-white rounded-xl p-3 shadow-sm transition-opacity duration-200 ${isRemoving ? 'opacity-0' : 'opacity-100'}`}>
+      {/* 헤더: 매수/매도 + 종목명 + AI점수 + 상태 */}
+      <div className="flex items-center justify-between mb-2">
+        <div className="flex items-center gap-2 flex-1 cursor-pointer" onClick={() => navigate(`/stock/${suggestion.stock_code}`)}>
+          <span className={`text-xs px-1.5 py-0.5 rounded font-medium ${isBuy ? 'bg-red-100 text-red-600' : 'bg-blue-100 text-blue-600'}`}>
+            {isBuy ? '매수' : '매도'}
+          </span>
+          <span className="font-bold text-gray-800 text-sm">{suggestion.stock_name}</span>
+          {getScoreBadge()}
+          {!isBuy && suggestion.profit_rate !== undefined && (
+            <span className={`text-xs font-medium ${suggestion.profit_rate >= 0 ? 'text-red-600' : 'text-blue-600'}`}>
+              {suggestion.profit_rate >= 0 ? '+' : ''}{suggestion.profit_rate?.toFixed(1)}%
             </span>
-            <p className="font-bold text-gray-800">
-              {suggestion.stock_name || suggestion.stock_code}
-            </p>
-            {suggestion.score && suggestion.score >= 80 && (
-              <Star size={14} className="text-yellow-500 fill-yellow-500" />
-            )}
-          </div>
-          <p className="text-xs text-gray-500">{suggestion.stock_code}</p>
+          )}
         </div>
         {getStatusBadge(suggestion.status)}
       </div>
 
-      {/* 가격 정보 (제안가 / 현재가) */}
-      <div className="grid grid-cols-2 gap-2 mb-3 bg-gray-50 rounded-lg p-3">
-        <div>
-          <p className="text-xs text-gray-500">제안 가격</p>
-          <p className="font-bold text-gray-800">
-            {suggestedPrice.toLocaleString()}원
-          </p>
-        </div>
-        <div>
-          <p className="text-xs text-gray-500">현재가</p>
-          <p className={`font-bold ${
-            suggestion.change_rate > 0 ? 'text-red-600' : suggestion.change_rate < 0 ? 'text-blue-600' : 'text-gray-800'
-          }`}>
-            {currentPrice.toLocaleString()}원
-          </p>
+      {/* 현재가 정보 */}
+      <div className="flex items-center gap-2 text-xs text-gray-500 mb-2">
+        <span>현재가</span>
+        <span className={`font-medium ${suggestion.change_rate > 0 ? 'text-red-600' : suggestion.change_rate < 0 ? 'text-blue-600' : 'text-gray-700'}`}>
+          {currentPrice.toLocaleString()}원
           {suggestion.change_rate !== null && suggestion.change_rate !== undefined && (
-            <p className={`text-xs ${
-              suggestion.change_rate > 0 ? 'text-red-500' : suggestion.change_rate < 0 ? 'text-blue-500' : 'text-gray-400'
-            }`}>
-              {suggestion.change_rate > 0 ? '+' : ''}{suggestion.change_rate.toFixed(1)}%
-            </p>
+            <span className="ml-1">({suggestion.change_rate > 0 ? '+' : ''}{suggestion.change_rate.toFixed(1)}%)</span>
           )}
-        </div>
+        </span>
       </div>
 
-      {/* 수량 / AI점수(매수) 또는 수익률(매도) */}
-      <div className="grid grid-cols-2 gap-2 mb-3 bg-gray-50 rounded-lg p-3">
-        <div>
-          <p className="text-xs text-gray-500">수량</p>
-          {isPending ? (
+      {/* 수량 + 가격 설정 (대기중일 때만) */}
+      {isPending && (
+        <div className="bg-gray-50 rounded-lg p-2 mb-2">
+          {/* 수량 */}
+          <div className="flex items-center justify-between mb-2">
+            <span className="text-xs text-gray-500">수량</span>
             <div className="flex items-center gap-1">
-              <button
-                onClick={() => handleQuantityChange(-1)}
-                className="w-7 h-7 flex items-center justify-center bg-gray-200 hover:bg-gray-300 rounded text-gray-700 font-bold"
-              >
-                -
-              </button>
+              <button onClick={() => handleQuantityChange(-1)} className="w-6 h-6 flex items-center justify-center bg-gray-200 hover:bg-gray-300 rounded text-gray-700 font-bold text-sm">-</button>
               <input
                 type="number"
                 value={customQuantity}
                 onChange={(e) => setCustomQuantity(Math.max(1, parseInt(e.target.value) || 1))}
-                className="w-14 h-7 text-center font-bold text-gray-800 border border-gray-300 rounded"
+                className="w-12 h-6 text-center font-bold text-gray-800 border border-gray-300 rounded text-sm"
                 min="1"
               />
-              <button
-                onClick={() => handleQuantityChange(1)}
-                className="w-7 h-7 flex items-center justify-center bg-gray-200 hover:bg-gray-300 rounded text-gray-700 font-bold"
-              >
-                +
-              </button>
-              <span className="text-sm text-gray-600">주</span>
+              <button onClick={() => handleQuantityChange(1)} className="w-6 h-6 flex items-center justify-center bg-gray-200 hover:bg-gray-300 rounded text-gray-700 font-bold text-sm">+</button>
+              <span className="text-xs text-gray-600 ml-1">주</span>
             </div>
-          ) : (
-            <p className="font-bold text-gray-800">{suggestion.quantity}주</p>
-          )}
-        </div>
-        <div>
-          <p className="text-xs text-gray-500">
-            {isBuy ? 'AI 점수' : '수익률'}
-          </p>
-          {isBuy ? (
-            <p
-              className={`font-bold ${
-                (suggestion.score || 0) >= 80
-                  ? 'text-green-600'
-                  : (suggestion.score || 0) >= 60
-                  ? 'text-yellow-600'
-                  : 'text-gray-600'
-              }`}
-            >
-              {suggestion.score || '-'}점
-            </p>
-          ) : (
-            <p
-              className={`font-bold ${
-                (suggestion.profit_rate || 0) >= 0 ? 'text-red-600' : 'text-blue-600'
-              }`}
-            >
-              {(suggestion.profit_rate || 0) >= 0 ? '+' : ''}
-              {suggestion.profit_rate?.toFixed(2) || 0}%
-            </p>
-          )}
-        </div>
-      </div>
+          </div>
 
-      {/* 제안 사유 */}
-      {suggestion.reason && (
-        <div className="mb-3">
-          <p className="text-xs text-gray-500 mb-1">제안 사유</p>
-          <p
-            className={`text-sm p-2 rounded-lg ${
-              isBuy ? 'text-gray-700 bg-blue-50' : 'text-gray-700 bg-orange-50'
-            }`}
-          >
-            {suggestion.reason}
-          </p>
-        </div>
-      )}
-
-      {/* 주문 가격 설정 (대기중일 때만) */}
-      {isPending && (
-        <div className="mb-3 p-3 bg-purple-50 rounded-lg border border-purple-200">
-          <div className="flex items-center justify-between mb-2">
-            <p className="text-sm font-medium text-purple-700">주문 가격 설정</p>
-            <label className="flex items-center gap-2 cursor-pointer">
-              <span className="text-xs text-purple-600">시장가</span>
-              <div
-                onClick={handleMarketOrderToggle}
-                className={`relative w-10 h-5 rounded-full transition-colors ${
-                  isMarketOrder ? 'bg-purple-600' : 'bg-gray-300'
-                }`}
-              >
-                <div
-                  className={`absolute top-0.5 w-4 h-4 rounded-full bg-white transition-transform ${
-                    isMarketOrder ? 'translate-x-5' : 'translate-x-0.5'
-                  }`}
-                />
+          {/* 가격 + 시장가 토글 */}
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-1">
+              <span className="text-xs text-gray-500">가격</span>
+              {!isMarketOrder && (
+                <>
+                  <button onClick={() => handlePriceChange(-1)} className="w-6 h-6 flex items-center justify-center bg-blue-100 hover:bg-blue-200 rounded text-blue-700 font-bold text-sm">-</button>
+                  <span className="w-20 text-center font-bold text-gray-800 text-sm">{selectedPrice.toLocaleString()}</span>
+                  <button onClick={() => handlePriceChange(1)} className="w-6 h-6 flex items-center justify-center bg-red-100 hover:bg-red-200 rounded text-red-700 font-bold text-sm">+</button>
+                </>
+              )}
+              {isMarketOrder && <span className="text-sm font-medium text-purple-700 flex items-center gap-1"><Zap size={14} className="text-yellow-500" />시장가</span>}
+            </div>
+            <label className="flex items-center gap-1 cursor-pointer">
+              <span className="text-xs text-gray-500">시장가</span>
+              <div onClick={handleMarketOrderToggle} className={`relative w-8 h-4 rounded-full transition-colors ${isMarketOrder ? 'bg-purple-600' : 'bg-gray-300'}`}>
+                <div className={`absolute top-0.5 w-3 h-3 rounded-full bg-white transition-transform ${isMarketOrder ? 'translate-x-4' : 'translate-x-0.5'}`} />
               </div>
             </label>
           </div>
 
-          {!isMarketOrder && (
-            <>
-              {/* 가격 슬라이더 */}
-              <div className="mb-2">
-                <input
-                  type="range"
-                  min={minPrice}
-                  max={maxPrice}
-                  value={selectedPrice}
-                  onChange={handleSliderChange}
-                  disabled={priceRangeEqual}
-                  className="w-full h-2 bg-purple-200 rounded-lg appearance-none cursor-pointer accent-purple-600 disabled:opacity-50"
-                />
-                <div className="flex justify-between text-xs text-gray-500 mt-1">
-                  <span>{minPrice.toLocaleString()}원</span>
-                  <span>{maxPrice.toLocaleString()}원</span>
-                </div>
-              </div>
-
-              {/* 선택된 가격 표시 */}
-              <div className="flex items-center justify-between">
-                <span className="text-sm text-purple-700">주문 가격:</span>
-                <span className="text-lg font-bold text-purple-800">
-                  {selectedPrice.toLocaleString()}원
-                </span>
-              </div>
-            </>
-          )}
-
-          {isMarketOrder && (
-            <div className="flex items-center gap-2 text-sm text-purple-700">
-              <Zap size={16} className="text-yellow-500" />
-              <span>시장가로 즉시 체결됩니다</span>
-            </div>
-          )}
-
           {/* 예상 금액 */}
-          <div className="mt-2 pt-2 border-t border-purple-200 flex items-center justify-between">
-            <span className="text-xs text-purple-600">예상 체결금액:</span>
-            <span className="text-sm font-medium text-purple-800">
-              {(
-                (isMarketOrder ? currentPrice : selectedPrice) * customQuantity
-              ).toLocaleString()}
-              원
+          <div className="flex items-center justify-end mt-2 pt-2 border-t border-gray-200">
+            <span className="text-xs text-gray-500 mr-2">예상금액</span>
+            <span className="text-sm font-bold text-gray-800">
+              {((isMarketOrder ? currentPrice : selectedPrice) * customQuantity).toLocaleString()}원
             </span>
           </div>
         </div>
       )}
 
-      {/* 제안 시간 */}
-      <div className="flex items-center justify-between text-xs text-gray-500 mb-3">
-        <span>제안 시간: {suggestion.created_at}</span>
-      </div>
+      {/* 비대기 상태: 수량만 표시 */}
+      {!isPending && (
+        <div className="text-xs text-gray-500 mb-2">
+          {suggestion.quantity}주 × {suggestedPrice.toLocaleString()}원
+        </div>
+      )}
 
       {/* 승인/거부 버튼 (대기중일 때만) */}
       {isPending && (
@@ -404,19 +247,17 @@ function SuggestionCard({ suggestion, activeTab, onApprove, onReject, isApprovin
           <button
             onClick={handleApproveClick}
             disabled={isApproving}
-            className={`flex-1 flex items-center justify-center gap-2 text-white py-2 rounded-lg font-medium hover:opacity-90 disabled:opacity-50 transition-colors ${
-              isBuy ? 'bg-red-500' : 'bg-blue-500'
-            }`}
+            className={`flex-1 flex items-center justify-center gap-1 text-white py-2 rounded-lg font-medium text-sm hover:opacity-90 disabled:opacity-50 ${isBuy ? 'bg-red-500' : 'bg-blue-500'}`}
           >
-            <Check size={18} />
-            {isBuy ? '매수 승인' : '매도 승인'}
+            <Check size={16} />
+            {isBuy ? '매수' : '매도'}
           </button>
           <button
             onClick={handleRejectClick}
             disabled={isRejecting}
-            className="flex-1 flex items-center justify-center gap-2 bg-gray-500 text-white py-2 rounded-lg font-medium hover:bg-gray-600 disabled:opacity-50 transition-colors"
+            className="flex-1 flex items-center justify-center gap-1 bg-gray-400 text-white py-2 rounded-lg font-medium text-sm hover:bg-gray-500 disabled:opacity-50"
           >
-            <X size={18} />
+            <X size={16} />
             거부
           </button>
         </div>
