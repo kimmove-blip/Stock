@@ -373,28 +373,24 @@ async def search_stocks(
     q: str = Query(..., min_length=1, description="검색어 (종목코드 또는 종목명)"),
     limit: int = Query(20, ge=1, le=100, description="최대 결과 수")
 ):
-    """종목 검색"""
-    libs = get_stock_libs()
-    if not libs:
-        raise HTTPException(status_code=503, detail="주식 데이터 서비스 이용 불가")
+    """종목 검색 (캐시된 KRX 리스트 사용, 대소문자 무관)"""
+    # 캐시된 KRX 리스트 사용 (24시간 캐싱으로 속도 향상)
+    krx = get_krx_listing()
+    if krx is None or krx.empty:
+        return []
 
     try:
-        get_all_krx = libs['get_all_krx']
-        krx = get_all_krx()
-
-        if krx is None or krx.empty:
-            return []
-
         results = []
+        q_upper = q.upper()  # 종목코드는 대문자
 
-        # 종목코드 정확 매칭
-        code_match = krx[krx['Code'] == q]
+        # 종목코드 정확 매칭 (대소문자 무관)
+        code_match = krx[krx['Code'] == q_upper]
         if not code_match.empty:
             r = code_match.iloc[0]
             market = r.get('Market', 'KOSPI') if 'Market' in krx.columns else None
             return [StockSearch(code=r['Code'], name=r['Name'], market=market)]
 
-        # 종목명 검색
+        # 종목명 검색 (대소문자 무관)
         mask = krx['Name'].str.contains(q, case=False, na=False)
         for _, r in krx[mask].head(limit).iterrows():
             market = r.get('Market', None) if 'Market' in krx.columns else None

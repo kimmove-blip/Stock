@@ -113,7 +113,7 @@ export default function Layout() {
       )}
 
       {/* 메인 컨텐츠 */}
-      <main className={`flex-1 pb-20 ${isHome || isAutoTradeMain ? 'overflow-hidden' : 'overflow-y-auto p-4'}`}>
+      <main id="main-content" className={`flex-1 pb-20 ${isHome || isAutoTradeMain ? 'overflow-hidden' : 'overflow-y-auto p-4'}`}>
         <Outlet />
       </main>
 
