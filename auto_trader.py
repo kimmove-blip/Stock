@@ -86,7 +86,7 @@ def load_scores_from_csv(max_age_minutes: int = 15) -> Optional[Tuple[List[Dict]
         return None
 
     # 필수 컬럼 확인
-    required_cols = ['code', 'name', 'close', 'v2']
+    required_cols = ['code', 'name', 'close', 'v5']
     if not all(col in df.columns for col in required_cols):
         print(f"  [CSV] 필수 컬럼 부족: {required_cols}")
         return None
@@ -97,7 +97,7 @@ def load_scores_from_csv(max_age_minutes: int = 15) -> Optional[Tuple[List[Dict]
 
     for _, row in df.iterrows():
         code = str(row['code']).zfill(6)
-        score = int(row.get('v2', 0))
+        score = int(row.get('v5', 0))
         all_scores[code] = score
 
         # 시그널 파싱
@@ -122,7 +122,7 @@ def load_scores_from_csv(max_age_minutes: int = 15) -> Optional[Tuple[List[Dict]
         }
         top_stocks.append(stock)
 
-    # V2 점수 내림차순 정렬
+    # V5 점수 내림차순 정렬
     top_stocks.sort(key=lambda x: x['score'], reverse=True)
 
     stats = {
@@ -442,6 +442,11 @@ class AutoTrader:
             # 거래량 조건
             volume_ratio = stock.get("indicators", {}).get("volume_ratio", 0)
             if volume_ratio < self.config.MIN_VOLUME_RATIO:
+                continue
+
+            # 15% 이상 상승 종목 제외 (V5 전략)
+            change_pct = stock.get("change_pct", 0)
+            if change_pct >= 15:
                 continue
 
             # 신뢰도 높은 신호 포함 여부
