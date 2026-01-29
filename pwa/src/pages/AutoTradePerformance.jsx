@@ -15,6 +15,9 @@ import {
   PieChart,
   BarChart3,
   LineChart,
+  Wallet,
+  Plus,
+  Minus,
 } from 'lucide-react';
 import {
   ResponsiveContainer,
@@ -58,6 +61,14 @@ export default function AutoTradePerformance() {
   const { data: dailyAssetData } = useQuery({
     queryKey: ['dailyAssetHistory'],
     queryFn: () => autoTradeAPI.dailyAsset(365).then((res) => res.data),
+    staleTime: 1000 * 60 * 5,
+    refetchOnWindowFocus: false,
+  });
+
+  // 자본 투입/회수 이력 조회
+  const { data: capitalData } = useQuery({
+    queryKey: ['capitalEvents'],
+    queryFn: () => autoTradeAPI.getCapitalEvents().then((res) => res.data),
     staleTime: 1000 * 60 * 5,
     refetchOnWindowFocus: false,
   });
@@ -122,56 +133,6 @@ export default function AutoTradePerformance() {
           </button>
         </div>
       </div>
-
-      {/* 총 수익 (초기투자금 기준) */}
-      {initial_investment > 0 ? (
-        <div
-          className={`rounded-xl p-4 ${
-            total_profit_from_initial >= 0
-              ? 'bg-gradient-to-r from-red-500 to-pink-500'
-              : 'bg-gradient-to-r from-blue-500 to-indigo-500'
-          } text-white`}
-        >
-          <div className="flex items-center justify-between mb-2">
-            <div className="flex items-center gap-2">
-              {total_profit_from_initial >= 0 ? <TrendingUp size={20} /> : <TrendingDown size={20} />}
-              <span className="font-medium">총 수익</span>
-            </div>
-            <span className="text-xs opacity-70">초기투자금 기준</span>
-          </div>
-          <div className="flex items-end gap-2">
-            <p className="text-3xl font-bold">
-              {total_profit_from_initial >= 0 ? '+' : ''}
-              {total_profit_from_initial?.toLocaleString()}원
-            </p>
-            <p className="text-lg opacity-80 mb-1">
-              ({total_profit_rate_from_initial >= 0 ? '+' : ''}
-              {total_profit_rate_from_initial?.toFixed(2)}%)
-            </p>
-          </div>
-          <div className="mt-3 pt-3 border-t border-white/20 grid grid-cols-2 gap-2 text-sm">
-            <div>
-              <p className="opacity-70">초기투자금</p>
-              <p className="font-medium">{initial_investment?.toLocaleString()}원</p>
-            </div>
-            <div>
-              <p className="opacity-70">현재 총자산</p>
-              <p className="font-medium">{current_total_asset?.toLocaleString()}원</p>
-            </div>
-          </div>
-        </div>
-      ) : (
-        <div className="rounded-xl p-4 bg-gradient-to-r from-gray-500 to-gray-600 text-white">
-          <div className="flex items-center gap-2 mb-2">
-            <TrendingUp size={20} />
-            <span className="font-medium">총 수익</span>
-          </div>
-          <p className="text-lg mb-2">초기투자금을 설정하면 총수익을 확인할 수 있습니다</p>
-          <p className="text-xs opacity-70">
-            자동매매 설정 &gt; 초기 투자금에서 설정하세요
-          </p>
-        </div>
-      )}
 
       {/* 일별 총자산 그래프 */}
       {dailyAssetData && dailyAssetData.daily_asset?.length > 0 && (
@@ -245,8 +206,18 @@ export default function AutoTradePerformance() {
                   y={100}
                   stroke="#9ca3af"
                   strokeDasharray="5 5"
-                  label={{ value: '초기투자금', fontSize: 10, fill: '#9ca3af' }}
+                  label={{ value: '시작', fontSize: 10, fill: '#9ca3af' }}
                 />
+                {/* 자본 투입 시점 표시 */}
+                {capitalData?.events?.filter(e => e.event_type === 'deposit').slice(1).map((event, idx) => (
+                  <ReferenceLine
+                    key={`deposit-${idx}`}
+                    x={event.event_date}
+                    stroke="#22c55e"
+                    strokeDasharray="3 3"
+                    label={{ value: '투입', fontSize: 9, fill: '#22c55e', position: 'top' }}
+                  />
+                ))}
                 {/* 내 자산 */}
                 <Line
                   type="monotone"
@@ -279,6 +250,61 @@ export default function AutoTradePerformance() {
           </div>
           <div className="mt-2 text-xs text-gray-500 text-center">
             초기투자금 기준 100%로 환산 (KOSPI/KOSDAQ도 동일 기간 시작일 기준)
+          </div>
+        </div>
+      )}
+
+      {/* 자본 투입/회수 이력 */}
+      {capitalData?.events?.length > 0 && (
+        <div className="bg-white rounded-xl p-4 shadow-sm">
+          <h3 className="font-bold text-gray-800 mb-3 flex items-center gap-2">
+            <Wallet size={18} className="text-green-600" />
+            자본 투입/회수 이력
+          </h3>
+          <div className="space-y-2">
+            {capitalData.events.map((event) => (
+              <div
+                key={event.id}
+                className={`flex items-center justify-between p-3 rounded-lg ${
+                  event.event_type === 'deposit' ? 'bg-green-50' : 'bg-red-50'
+                }`}
+              >
+                <div className="flex items-center gap-3">
+                  <div className={`p-2 rounded-full ${
+                    event.event_type === 'deposit' ? 'bg-green-100' : 'bg-red-100'
+                  }`}>
+                    {event.event_type === 'deposit' ? (
+                      <Plus size={16} className="text-green-600" />
+                    ) : (
+                      <Minus size={16} className="text-red-600" />
+                    )}
+                  </div>
+                  <div>
+                    <p className="text-sm font-medium text-gray-800">
+                      {event.event_type === 'deposit' ? '투입' : '회수'}
+                    </p>
+                    <p className="text-xs text-gray-500">{event.event_date}</p>
+                  </div>
+                </div>
+                <div className="text-right">
+                  <p className={`font-bold ${
+                    event.event_type === 'deposit' ? 'text-green-600' : 'text-red-600'
+                  }`}>
+                    {event.event_type === 'deposit' ? '+' : '-'}
+                    {event.amount?.toLocaleString()}원
+                  </p>
+                  {event.memo && (
+                    <p className="text-xs text-gray-500">{event.memo}</p>
+                  )}
+                </div>
+              </div>
+            ))}
+          </div>
+          <div className="mt-3 pt-3 border-t border-gray-100 flex justify-between text-sm">
+            <span className="text-gray-600">순 투입금</span>
+            <span className="font-bold text-gray-800">
+              {capitalData.net_capital?.toLocaleString()}원
+            </span>
           </div>
         </div>
       )}

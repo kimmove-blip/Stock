@@ -249,57 +249,82 @@ export default function AutoTradeSettings() {
               </div>
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-2">
-                  최소 매수 점수
+                  매매 점수 범위
                 </label>
-                <div className="bg-green-50 rounded-xl p-3">
-                  <div className="flex items-center justify-between mb-2">
-                    <span className="text-xs text-gray-500">50</span>
-                    <span className="text-lg font-bold text-green-600">{formData.min_buy_score}점</span>
-                    <span className="text-xs text-gray-500">100</span>
+                <div className="bg-gray-50 rounded-xl p-4">
+                  {/* 점수 표시 */}
+                  <div className="flex items-center justify-between mb-3">
+                    <div className="text-center">
+                      <span className="text-xs text-gray-500 block">매도</span>
+                      <span className="text-lg font-bold text-red-600">{formData.sell_score}점</span>
+                    </div>
+                    <div className="flex-1 text-center">
+                      <span className="text-xs text-gray-400">이하 매도 ← → 이상 매수</span>
+                    </div>
+                    <div className="text-center">
+                      <span className="text-xs text-gray-500 block">매수</span>
+                      <span className="text-lg font-bold text-green-600">{formData.min_buy_score}점</span>
+                    </div>
                   </div>
-                  <input
-                    type="range"
-                    value={formData.min_buy_score}
-                    onChange={(e) =>
-                      setFormData({ ...formData, min_buy_score: parseInt(e.target.value) })
-                    }
-                    disabled={!formData.trading_enabled}
-                    min={50}
-                    max={100}
-                    className="w-full h-3 bg-green-200 rounded-full appearance-none cursor-pointer disabled:cursor-not-allowed
-                      [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:w-6 [&::-webkit-slider-thumb]:h-6
-                      [&::-webkit-slider-thumb]:bg-green-600 [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:shadow-lg
-                      [&::-webkit-slider-thumb]:border-4 [&::-webkit-slider-thumb]:border-white"
-                  />
-                </div>
-                <p className="text-xs text-gray-500 mt-1">높을수록 매수 기준이 엄격해집니다</p>
-              </div>
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-2">
-                  매도 점수
-                </label>
-                <div className="bg-red-50 rounded-xl p-3">
-                  <div className="flex items-center justify-between mb-2">
-                    <span className="text-xs text-gray-500">0</span>
-                    <span className="text-lg font-bold text-red-600">{formData.sell_score}점</span>
-                    <span className="text-xs text-gray-500">60</span>
+                  {/* 듀얼 레인지 슬라이더 */}
+                  <div className="relative h-3 mt-4">
+                    {/* 배경 트랙 */}
+                    <div className="absolute w-full h-3 bg-gray-200 rounded-full" />
+                    {/* 활성 영역 (매도~매수 사이) */}
+                    <div
+                      className="absolute h-3 bg-gradient-to-r from-red-300 via-yellow-200 to-green-300 rounded-full"
+                      style={{
+                        left: `${formData.sell_score}%`,
+                        width: `${formData.min_buy_score - formData.sell_score}%`
+                      }}
+                    />
+                    {/* 매도 점수 슬라이더 (0~100, 실제 조작은 0~50) */}
+                    <input
+                      type="range"
+                      value={formData.sell_score}
+                      onChange={(e) => {
+                        const val = parseInt(e.target.value);
+                        if (val <= 50 && val < formData.min_buy_score - 10) {
+                          setFormData({ ...formData, sell_score: val });
+                        }
+                      }}
+                      disabled={!formData.trading_enabled}
+                      min={0}
+                      max={100}
+                      className="absolute w-full h-3 appearance-none bg-transparent pointer-events-auto cursor-pointer disabled:cursor-not-allowed
+                        [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:w-6 [&::-webkit-slider-thumb]:h-6
+                        [&::-webkit-slider-thumb]:bg-red-500 [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:shadow-lg
+                        [&::-webkit-slider-thumb]:border-4 [&::-webkit-slider-thumb]:border-white [&::-webkit-slider-thumb]:relative [&::-webkit-slider-thumb]:z-20"
+                    />
+                    {/* 매수 점수 슬라이더 (0~100, 실제 조작은 50~100) */}
+                    <input
+                      type="range"
+                      value={formData.min_buy_score}
+                      onChange={(e) => {
+                        const val = parseInt(e.target.value);
+                        if (val >= 50 && val > formData.sell_score + 10) {
+                          setFormData({ ...formData, min_buy_score: val });
+                        }
+                      }}
+                      disabled={!formData.trading_enabled}
+                      min={0}
+                      max={100}
+                      className="absolute w-full h-3 appearance-none bg-transparent pointer-events-auto cursor-pointer disabled:cursor-not-allowed
+                        [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:w-6 [&::-webkit-slider-thumb]:h-6
+                        [&::-webkit-slider-thumb]:bg-green-500 [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:shadow-lg
+                        [&::-webkit-slider-thumb]:border-4 [&::-webkit-slider-thumb]:border-white [&::-webkit-slider-thumb]:relative [&::-webkit-slider-thumb]:z-20"
+                    />
                   </div>
-                  <input
-                    type="range"
-                    value={formData.sell_score}
-                    onChange={(e) =>
-                      setFormData({ ...formData, sell_score: parseInt(e.target.value) })
-                    }
-                    disabled={!formData.trading_enabled}
-                    min={0}
-                    max={60}
-                    className="w-full h-3 bg-red-200 rounded-full appearance-none cursor-pointer disabled:cursor-not-allowed
-                      [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:w-6 [&::-webkit-slider-thumb]:h-6
-                      [&::-webkit-slider-thumb]:bg-red-600 [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:shadow-lg
-                      [&::-webkit-slider-thumb]:border-4 [&::-webkit-slider-thumb]:border-white"
-                  />
+                  {/* 눈금 */}
+                  <div className="flex justify-between mt-2 text-xs text-gray-400">
+                    <span>0</span>
+                    <span>25</span>
+                    <span>50</span>
+                    <span>75</span>
+                    <span>100</span>
+                  </div>
                 </div>
-                <p className="text-xs text-gray-500 mt-1">이 점수 이하로 떨어지면 매도 제안</p>
+                <p className="text-xs text-gray-500 mt-1">매도점수 이하면 매도, 매수점수 이상이면 매수 제안</p>
               </div>
             </div>
           </div>

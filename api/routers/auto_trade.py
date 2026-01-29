@@ -769,9 +769,14 @@ async def get_daily_asset_history(
     logger = get_trade_logger()
     user_id = current_user.get('id')
 
-    # 초기투자금 조회
+    # 자본 투입 이력 조회 (TWR 계산용)
+    capital_events = logger.get_capital_events(user_id)
+    capital_summary = logger.get_capital_summary(user_id)
+
+    # 초기투자금: 첫 번째 자본 투입금 (전체 net_capital 아님)
     settings = logger.get_auto_trade_settings(user_id)
-    initial_investment = settings.get('initial_investment', 0) if settings else 0
+    first_deposit = capital_events[0]['amount'] if capital_events else 0
+    initial_investment = first_deposit or (settings.get('initial_investment', 0) if settings else 0)
 
     # daily_performance 테이블에서 전체 일별 자산 조회 (첫 투자일부터)
     today = datetime.now().strftime('%Y-%m-%d')
@@ -909,15 +914,53 @@ async def get_daily_asset_history(
                 'value': round(item['close'] / base_kosdaq * 100, 2) if base_kosdaq > 0 else 100
             })
 
-    # 총자산도 초기투자금 기준 100%로 환산
+    # TWR 기반 스케일 계산 (자본 투입 시점마다 리베이싱)
     scaled_asset = []
     base_asset = initial_investment if initial_investment > 0 else (daily_data[0]['total_asset'] if daily_data else 0)
 
+    # 자본 이벤트를 날짜별로 정리 (첫 투입 제외)
+    capital_by_date = {}
+    for i, event in enumerate(capital_events):
+        if i == 0:  # 첫 투입은 시작점이므로 제외
+            continue
+        event_date = event['event_date']
+        if event_date not in capital_by_date:
+            capital_by_date[event_date] = 0
+        if event['event_type'] == 'deposit':
+            capital_by_date[event_date] += event['amount']
+        else:
+            capital_by_date[event_date] -= event['amount']
+
+    # TWR 기반 누적 수익률 계산
+    cumulative_return = 1.0
+    prev_asset = base_asset
+
     for item in daily_data:
+        date = item['date']
+        total_asset = item['total_asset']
+
+        # 자본 투입이 있는 날인지 확인
+        if date in capital_by_date and prev_asset > 0:
+            # 투입 전 자산으로 수익률 계산 (투입금 제외)
+            asset_before_deposit = total_asset - capital_by_date[date]
+            period_return = asset_before_deposit / prev_asset
+            cumulative_return *= period_return
+            twr_value = cumulative_return * 100
+            prev_asset = total_asset  # 새 베이스: 투입 후 총자산
+        else:
+            # 일반 날: 전일 대비 수익률 반영
+            if prev_asset > 0:
+                period_return = total_asset / prev_asset
+                cumulative_return *= period_return
+                twr_value = cumulative_return * 100
+            else:
+                twr_value = 100
+            prev_asset = total_asset
+
         scaled_asset.append({
-            'date': item['date'],
-            'total_asset': item['total_asset'],
-            'value': round(item['total_asset'] / base_asset * 100, 2) if base_asset > 0 else 100
+            'date': date,
+            'total_asset': total_asset,
+            'value': round(twr_value, 2)
         })
 
     return {
@@ -2463,3 +2506,160 @@ async def get_greenlight_decisions(
         })
 
     return {"decisions": result, "total": len(result)}
+
+
+# ========== 자본 투입/회수 이력 API ==========
+
+class CapitalEventCreate(BaseModel):
+    """자본 이벤트 생성 요청"""
+    event_date: str  # YYYY-MM-DD
+    event_type: str  # 'deposit' or 'withdraw'
+    amount: int
+    memo: Optional[str] = None
+
+
+class CapitalEventResponse(BaseModel):
+    """자본 이벤트 응답"""
+    id: int
+    user_id: int
+    event_date: str
+    event_type: str
+    amount: int
+    memo: Optional[str]
+    created_at: str
+
+
+class CapitalSummaryResponse(BaseModel):
+    """자본 요약 응답"""
+    total_deposit: int
+    total_withdraw: int
+    net_capital: int
+    events: List[CapitalEventResponse]
+    twr: Optional[float] = None  # 시간가중수익률
+    simple_return: Optional[float] = None  # 단순수익률
+    current_asset: Optional[int] = None  # 현재 총자산
+
+
+@router.get("/capital-events")
+async def get_capital_events(
+    current_user: dict = Depends(get_current_user_required)
+):
+    """자본 투입/회수 이력 조회 + TWR 계산"""
+    check_auto_trade_permission(current_user)
+
+    logger = get_trade_logger()
+    user_id = current_user.get('id')
+
+    events = logger.get_capital_events(user_id)
+    summary = logger.get_capital_summary(user_id)
+
+    # 현재 총자산 조회 (TWR 계산용)
+    current_asset = 0
+    twr_data = {'twr': 0, 'simple_return': 0}
+
+    try:
+        api_key_data = logger.get_api_key_settings(user_id)
+        if api_key_data:
+            account_data = logger.get_real_account_balance(
+                app_key=api_key_data.get('app_key'),
+                app_secret=api_key_data.get('app_secret'),
+                account_number=api_key_data.get('account_number'),
+                account_product_code=api_key_data.get('account_product_code', '01'),
+                is_mock=bool(api_key_data.get('is_mock', True))
+            )
+
+            acct_summary = account_data.get('summary', {})
+            is_mock = bool(api_key_data.get('is_mock', True))
+
+            if is_mock:
+                # 모의투자: 평가금액 + 예수금
+                total_eval = acct_summary.get('total_eval_amount', 0) or acct_summary.get('total_evaluation', 0)
+                cash = acct_summary.get('d2_cash_balance', 0) or acct_summary.get('cash_balance', 0)
+                current_asset = total_eval + cash
+            else:
+                # 실전투자: 평가금액 + 예수금
+                total_eval = acct_summary.get('total_eval_amount', 0) or acct_summary.get('total_evaluation', 0)
+                cash = acct_summary.get('d2_cash_balance', 0) or acct_summary.get('cash_balance', 0)
+                current_asset = total_eval + cash
+
+            # TWR 계산
+            if current_asset > 0 and events:
+                twr_data = logger.calculate_twr(user_id, current_asset)
+    except Exception as e:
+        print(f"TWR 계산 오류: {e}")
+
+    return {
+        "total_deposit": summary['total_deposit'],
+        "total_withdraw": summary['total_withdraw'],
+        "net_capital": summary['net_capital'],
+        "events": events,
+        "twr": twr_data.get('twr', 0),
+        "simple_return": twr_data.get('simple_return', 0),
+        "current_asset": current_asset
+    }
+
+
+@router.post("/capital-events", response_model=CapitalEventResponse)
+async def create_capital_event(
+    event: CapitalEventCreate,
+    current_user: dict = Depends(get_current_user_required)
+):
+    """자본 투입/회수 이벤트 기록"""
+    check_auto_trade_permission(current_user)
+    
+    # 유효성 검사
+    if event.event_type not in ('deposit', 'withdraw'):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="event_type must be 'deposit' or 'withdraw'"
+        )
+    if event.amount <= 0:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="amount must be positive"
+        )
+    
+    logger = get_trade_logger()
+    user_id = current_user.get('id')
+    
+    event_id = logger.add_capital_event(
+        user_id=user_id,
+        event_date=event.event_date,
+        event_type=event.event_type,
+        amount=event.amount,
+        memo=event.memo
+    )
+    
+    # 생성된 이벤트 조회
+    events = logger.get_capital_events(user_id)
+    created_event = next((e for e in events if e['id'] == event_id), None)
+    
+    if not created_event:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to create capital event"
+        )
+    
+    return created_event
+
+
+@router.delete("/capital-events/{event_id}")
+async def delete_capital_event(
+    event_id: int,
+    current_user: dict = Depends(get_current_user_required)
+):
+    """자본 이벤트 삭제"""
+    check_auto_trade_permission(current_user)
+    
+    logger = get_trade_logger()
+    user_id = current_user.get('id')
+    
+    success = logger.delete_capital_event(event_id, user_id)
+    
+    if not success:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Capital event not found or not authorized"
+        )
+    
+    return {"success": True, "message": "Capital event deleted"}

@@ -258,6 +258,12 @@ export const autoTradeAPI = {
   deleteLLMSettings: () => api.delete('/auto-trade/llm-settings'),
   // Green Light 결정 이력 조회
   getGreenlightDecisions: (limit = 20) => api.get(`/auto-trade/greenlight-decisions?limit=${limit}`),
+  // 자본 투입/회수 이력 조회
+  getCapitalEvents: () => api.get('/auto-trade/capital-events'),
+  // 자본 투입/회수 기록
+  addCapitalEvent: (data) => api.post('/auto-trade/capital-events', data),
+  // 자본 이벤트 삭제
+  deleteCapitalEvent: (id) => api.delete(`/auto-trade/capital-events/${id}`),
 };
 
 export default api;

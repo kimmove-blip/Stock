@@ -79,6 +79,13 @@ export default function AutoTrade() {
     staleTime: 1000 * 60,
   });
 
+  // 자본 투입/회수 이력 조회
+  const { data: capitalData } = useQuery({
+    queryKey: ['capitalEvents'],
+    queryFn: () => autoTradeAPI.getCapitalEvents().then((res) => res.data),
+    staleTime: 1000 * 60 * 5,
+  });
+
   const isConnected = apiKeyData?.is_connected;
   const pendingCount = statusData?.pending_suggestions?.length || 0;
   const pendingOrdersCount = pendingOrdersData?.orders?.length || 0;
@@ -211,16 +218,18 @@ export default function AutoTrade() {
         {/* 자동매매 계좌 카드 */}
         {isConnected ? (
           (() => {
-            // 모의투자는 1천만원 기준, 실제투자는 설정된 초기투자금 사용
+            // 모의투자는 1천만원 기준, 실제투자는 자본 투입 이력 또는 초기투자금 사용
             const isMock = apiKeyData?.is_mock;
-            const initialInvestment = isMock ? 10000000 : (settings?.initial_investment || 0);
+            const initialInvestment = isMock ? 10000000 : (capitalData?.net_capital || settings?.initial_investment || 0);
             const totalEvaluation = accountData?.summary?.total_eval_amount || accountData?.summary?.total_evaluation || accountData?.total_evaluation || 0;
             // D+2 예수금 사용 (balance.cash 또는 summary에서 조회)
             const cashBalance = accountData?.balance?.cash || accountData?.summary?.d2_cash_balance || accountData?.summary?.cash_balance || 0;
-            // 모의투자: 총자산 = 평가금액 + D+2 예수금
-            const totalAsset = isMock ? (totalEvaluation + cashBalance) : (accountData?.summary?.total_asset || totalEvaluation);
+            // 총자산 = 평가금액 + D+2 예수금
+            const totalAsset = totalEvaluation + cashBalance;
             const totalProfit = initialInvestment > 0 ? totalAsset - initialInvestment : 0;
-            const profitRate = initialInvestment > 0 ? ((totalAsset / initialInvestment) - 1) * 100 : 0;
+            // TWR(시간가중수익률) 사용, 없으면 단순수익률
+            const twr = capitalData?.twr;
+            const profitRate = (twr !== undefined && twr !== null && !isMock) ? twr : (initialInvestment > 0 ? ((totalAsset / initialInvestment) - 1) * 100 : 0);
             const isProfit = totalProfit >= 0;
             const summaryProfit = accountData?.summary?.total_profit || accountData?.total_profit_loss || 0;
             const summaryProfitRate = accountData?.summary?.profit_rate || accountData?.profit_rate || 0;
@@ -262,7 +271,7 @@ export default function AutoTrade() {
                     </div>
                     <div className="grid grid-cols-3 gap-2 pt-3 border-t border-white/20">
                       <div>
-                        <p className="text-xs opacity-70">{isMock ? '시작금액' : '초기투자금'}</p>
+                        <p className="text-xs opacity-70">{isMock ? '시작금액' : '총 투입금'}</p>
                         <p className="text-sm font-medium">{initialInvestment.toLocaleString()}원</p>
                       </div>
                       <div>

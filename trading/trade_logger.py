@@ -302,6 +302,21 @@ class TradeLogger:
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_greenlight_feedback_user ON greenlight_feedback(user_id)")
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_greenlight_feedback_decision ON greenlight_feedback(decision_id)")
 
+            # 자본 투입/회수 이력 테이블 (TWR 계산용)
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS capital_events (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    user_id INTEGER NOT NULL,
+                    event_date TEXT NOT NULL,
+                    event_type TEXT NOT NULL,
+                    amount INTEGER NOT NULL,
+                    memo TEXT,
+                    created_at TEXT DEFAULT CURRENT_TIMESTAMP
+                )
+            """)
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_capital_events_user ON capital_events(user_id)")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_capital_events_date ON capital_events(event_date)")
+
             # user_id 컬럼 추가 (기존 테이블 호환 - 다중 사용자 지원)
             user_id_tables = [
                 "trade_log",
@@ -2200,6 +2215,209 @@ class TradeLogger:
 
             conn.commit()
             return cursor.lastrowid
+
+    # ========== 자본 투입/회수 이력 관리 (TWR 계산용) ==========
+
+    def add_capital_event(
+        self,
+        user_id: int,
+        event_date: str,
+        event_type: str,
+        amount: int,
+        memo: str = None
+    ) -> int:
+        """
+        자본 투입/회수 이벤트 기록
+
+        Args:
+            user_id: 사용자 ID
+            event_date: 이벤트 날짜 (YYYY-MM-DD)
+            event_type: 'deposit' (투입) / 'withdraw' (회수)
+            amount: 금액 (양수)
+            memo: 메모
+
+        Returns:
+            생성된 이벤트 ID
+        """
+        if event_type not in ('deposit', 'withdraw'):
+            raise ValueError("event_type must be 'deposit' or 'withdraw'")
+        if amount <= 0:
+            raise ValueError("amount must be positive")
+
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                INSERT INTO capital_events (user_id, event_date, event_type, amount, memo)
+                VALUES (?, ?, ?, ?, ?)
+            """, (user_id, event_date, event_type, amount, memo))
+            conn.commit()
+            return cursor.lastrowid
+
+    def get_capital_events(self, user_id: int) -> List[Dict]:
+        """
+        자본 이벤트 이력 조회
+
+        Args:
+            user_id: 사용자 ID
+
+        Returns:
+            이벤트 목록 (날짜순 정렬)
+        """
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                SELECT id, user_id, event_date, event_type, amount, memo, created_at
+                FROM capital_events
+                WHERE user_id = ?
+                ORDER BY event_date ASC, id ASC
+            """, (user_id,))
+            rows = cursor.fetchall()
+            return [dict(row) for row in rows]
+
+    def delete_capital_event(self, event_id: int, user_id: int) -> bool:
+        """
+        자본 이벤트 삭제
+
+        Args:
+            event_id: 이벤트 ID
+            user_id: 사용자 ID (권한 확인용)
+
+        Returns:
+            삭제 성공 여부
+        """
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                DELETE FROM capital_events
+                WHERE id = ? AND user_id = ?
+            """, (event_id, user_id))
+            conn.commit()
+            return cursor.rowcount > 0
+
+    def get_capital_summary(self, user_id: int) -> Dict:
+        """
+        자본 투입/회수 요약
+
+        Args:
+            user_id: 사용자 ID
+
+        Returns:
+            총 투입액, 총 회수액, 순 투입액
+        """
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                SELECT
+                    COALESCE(SUM(CASE WHEN event_type = 'deposit' THEN amount ELSE 0 END), 0) as total_deposit,
+                    COALESCE(SUM(CASE WHEN event_type = 'withdraw' THEN amount ELSE 0 END), 0) as total_withdraw
+                FROM capital_events
+                WHERE user_id = ?
+            """, (user_id,))
+            row = cursor.fetchone()
+            total_deposit = row['total_deposit'] if row else 0
+            total_withdraw = row['total_withdraw'] if row else 0
+            return {
+                'total_deposit': total_deposit,
+                'total_withdraw': total_withdraw,
+                'net_capital': total_deposit - total_withdraw
+            }
+
+    def calculate_twr(self, user_id: int, current_total_asset: int) -> Dict:
+        """
+        시간가중수익률(TWR) 계산
+
+        자본 투입/회수 영향을 제거하고 순수 운용 성과만 측정
+
+        Args:
+            user_id: 사용자 ID
+            current_total_asset: 현재 총자산 (평가금액 + 예수금)
+
+        Returns:
+            {
+                'twr': float,  # 시간가중수익률 (%)
+                'simple_return': float,  # 단순수익률 (%)
+                'periods': list,  # 구간별 수익률
+            }
+        """
+        events = self.get_capital_events(user_id)
+        if not events:
+            return {'twr': 0, 'simple_return': 0, 'periods': []}
+
+        # 일별 자산 데이터 조회
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                SELECT trade_date, total_assets
+                FROM daily_performance
+                WHERE user_id = ?
+                ORDER BY trade_date ASC
+            """, (user_id,))
+            daily_data = {row['trade_date']: row['total_assets'] for row in cursor.fetchall()}
+
+        # 구간별 수익률 계산
+        periods = []
+        cumulative_return = 1.0
+
+        for i, event in enumerate(events):
+            event_date = event['event_date']
+            event_type = event['event_type']
+            amount = event['amount']
+
+            if i == 0:
+                # 첫 번째 이벤트: 시작 자산 설정
+                start_asset = amount if event_type == 'deposit' else 0
+                start_date = event_date
+            else:
+                # 이전 이벤트 이후 ~ 현재 이벤트 전날까지의 수익률
+                # 이벤트 전날의 자산 조회
+                prev_dates = [d for d in sorted(daily_data.keys()) if d < event_date]
+                if prev_dates:
+                    end_asset = daily_data[prev_dates[-1]]
+                    if start_asset > 0:
+                        period_return = (end_asset / start_asset)
+                        cumulative_return *= period_return
+                        periods.append({
+                            'start_date': start_date,
+                            'end_date': prev_dates[-1],
+                            'start_asset': start_asset,
+                            'end_asset': end_asset,
+                            'return': (period_return - 1) * 100
+                        })
+
+                # 새 구간 시작: 이전 자산 + 투입 (또는 - 회수)
+                if event_type == 'deposit':
+                    start_asset = (end_asset if prev_dates else start_asset) + amount
+                else:
+                    start_asset = (end_asset if prev_dates else start_asset) - amount
+                start_date = event_date
+
+        # 마지막 구간: 마지막 이벤트 이후 ~ 현재
+        if start_asset > 0 and current_total_asset > 0:
+            period_return = current_total_asset / start_asset
+            cumulative_return *= period_return
+            periods.append({
+                'start_date': start_date,
+                'end_date': 'now',
+                'start_asset': start_asset,
+                'end_asset': current_total_asset,
+                'return': (period_return - 1) * 100
+            })
+
+        # TWR 계산
+        twr = (cumulative_return - 1) * 100
+
+        # 단순 수익률 계산
+        capital_summary = self.get_capital_summary(user_id)
+        net_capital = capital_summary['net_capital']
+        simple_return = ((current_total_asset - net_capital) / net_capital * 100) if net_capital > 0 else 0
+
+        return {
+            'twr': round(twr, 2),
+            'simple_return': round(simple_return, 2),
+            'net_capital': net_capital,
+            'current_asset': current_total_asset,
+            'periods': periods
+        }
 
 
 class BuySuggestionManager:

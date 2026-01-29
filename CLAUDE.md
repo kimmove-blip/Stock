@@ -382,6 +382,32 @@ python monitor_realtime_scores.py --top
 - Fernet 암호화 (AES 128-bit CBC + HMAC SHA256)
 - 암호화 키: `database/.encryption_key` 또는 환경변수 `AUTO_TRADE_ENCRYPTION_KEY`
 
+### 나스닥 연동 투자금액 조정
+
+> 나스닥 전일 등락률에 따라 종목당 투자금액을 자동 조정 (리스크 관리)
+
+| 나스닥 등락률 | 조정계수 | 투자금액 (20만원 기준) |
+|--------------|---------|----------------------|
+| -3% 이하 | 0.3배 | 60,000원 |
+| -2% ~ -3% | 0.5배 | 100,000원 |
+| -1% ~ -2% | 0.7배 | 140,000원 |
+| -1% 이상 | 1.0배 | 200,000원 (기본값) |
+
+```python
+from trading.nasdaq_monitor import get_adjusted_investment_amount
+
+# 나스닥 조정 투자금액 조회
+adjusted, multiplier, nasdaq_change = get_adjusted_investment_amount(200000)
+# → (200000, 1.0, 0.17) : 나스닥 +0.17%면 조정 없음
+# → (60000, 0.3, -3.5)  : 나스닥 -3.5%면 0.3배 적용
+```
+
+#### 관련 파일
+| 파일 | 설명 |
+|------|------|
+| `trading/nasdaq_monitor.py` | 나스닥 조회 및 조정계수 계산 |
+| `trading/risk_manager.py` | TradingLimits (max_holdings=20) |
+
 ---
 
 ## 한국투자증권 Open API
