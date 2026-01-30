@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react';
 import { useParams, useNavigate, useLocation } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { stockAPI, portfolioAPI, watchlistAPI, realtimeAPI } from '../api/client';
+import { useAuth } from '../contexts/AuthContext';
 import Loading from '../components/Loading';
 import { ArrowLeft, Star, Plus, TrendingUp, TrendingDown, FileText, Check, RefreshCw, Share2 } from 'lucide-react';
 import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer } from 'recharts';
@@ -11,6 +12,8 @@ export default function StockDetail() {
   const navigate = useNavigate();
   const location = useLocation();
   const queryClient = useQueryClient();
+  const { user } = useAuth();
+  const scoreVersion = user?.score_version || 'v5';
 
   // 보유종목 추가 모달 상태
   const [showAddModal, setShowAddModal] = useState(false);
@@ -62,8 +65,8 @@ export default function StockDetail() {
   } : null;
 
   const { data: analysis, isLoading: analysisLoading } = useQuery({
-    queryKey: ['stock-analysis', code],
-    queryFn: () => stockAPI.analysis(code).then((res) => res.data),
+    queryKey: ['stock-analysis', code, scoreVersion],
+    queryFn: () => stockAPI.analysis(code, scoreVersion).then((res) => res.data),
     enabled: !!detail,
     // preloadedData의 score가 있으면 초기값 사용 (점수만) - 즉시 stale 처리
     initialData: preloadedData?.score ? {
@@ -218,8 +221,9 @@ export default function StockDetail() {
 
   const isPositive = (detail.change_rate || 0) >= 0;
 
-  // AI 점수 (analysis 또는 top100Score에서)
-  const aiScore = analysis?.score || top100Score || 0;
+  // AI 점수 (analysis에서, null이면 분석대상 아님)
+  const aiScore = analysis?.score ?? top100Score ?? null;
+  const isNotInTarget = analysis && analysis.score === null;
 
   return (
     <div>
@@ -233,17 +237,16 @@ export default function StockDetail() {
           <p className="text-sm text-base-content/60">{detail.code} | {detail.market}</p>
         </div>
         {/* AI 점수 */}
-        {aiScore > 0 && (
-          <div className="text-center">
-            <div className={`text-3xl font-bold ${
-              aiScore >= 80 ? 'text-success' :
-              aiScore >= 60 ? 'text-warning' : 'text-error'
-            }`}>
-              {aiScore}
-            </div>
-            <div className="text-xs text-base-content/60">AI점수</div>
+        <div className="text-center">
+          <div className={`text-3xl font-bold ${
+            isNotInTarget ? 'text-base-content/40' :
+            aiScore >= 80 ? 'text-success' :
+            aiScore >= 60 ? 'text-warning' : 'text-error'
+          }`}>
+            {isNotInTarget ? '-' : (aiScore > 0 ? aiScore : '-')}
           </div>
-        )}
+          <div className="text-xs text-base-content/60">AI점수</div>
+        </div>
         {/* 공유 버튼 */}
         <button onClick={handleShare} className="btn btn-ghost btn-sm">
           <Share2 size={20} />

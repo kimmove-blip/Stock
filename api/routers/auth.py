@@ -124,7 +124,8 @@ async def get_me(current_user: dict = Depends(get_current_user_required)):
         email_subscription=bool(current_user.get('email_subscription', 0)),
         is_admin=bool(current_user.get('is_admin', 0)),
         auto_trade_enabled=bool(current_user.get('auto_trade_enabled', 0)),
-        profile_picture=current_user.get('profile_picture')
+        profile_picture=current_user.get('profile_picture'),
+        score_version=current_user.get('score_version', 'v5')
     )
 
 
@@ -145,6 +146,7 @@ async def refresh_token(current_user: dict = Depends(get_current_user_required))
 class UserSettingsUpdate(BaseModel):
     """사용자 설정 업데이트"""
     email_subscription: bool = None
+    score_version: str = None  # AI 스코어 엔진 버전 (v1, v2, v3.5, v4, v5, v6, v7, v8)
 
 
 @router.put("/settings", response_model=UserResponse)
@@ -162,6 +164,24 @@ async def update_user_settings(
                 "UPDATE users SET email_subscription = ? WHERE id = ?",
                 (1 if settings.email_subscription else 0, user_id)
             )
+        if settings.score_version is not None:
+            # 유효한 버전인지 확인
+            valid_versions = ['v1', 'v2', 'v3.5', 'v4', 'v5', 'v6', 'v7', 'v8']
+            if settings.score_version in valid_versions:
+                conn.execute(
+                    "UPDATE users SET score_version = ? WHERE id = ?",
+                    (settings.score_version, user_id)
+                )
+                # 자동매매 설정에도 동기화 (auto_trade.db)
+                try:
+                    from trading.trade_logger import TradeLogger
+                    trade_logger = TradeLogger()
+                    existing = trade_logger.get_auto_trade_settings(user_id)
+                    if existing:
+                        existing['score_version'] = settings.score_version
+                        trade_logger.save_auto_trade_settings(user_id, existing)
+                except Exception as e:
+                    print(f"[Auth] auto_trade_settings 동기화 실패: {e}")
         conn.commit()
 
     user = db.get_user_by_id(user_id)
@@ -172,7 +192,8 @@ async def update_user_settings(
         email=user.get('email'),
         name=user.get('name'),
         email_subscription=bool(user.get('email_subscription', 0)),
-        is_admin=bool(user.get('is_admin', 0))
+        is_admin=bool(user.get('is_admin', 0)),
+        score_version=user.get('score_version', 'v5')
     )
 
 

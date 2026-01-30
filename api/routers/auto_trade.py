@@ -1371,7 +1371,8 @@ async def get_settings(
 @router.post("/settings")
 async def save_settings(
     request: AutoTradeSettingsRequest,
-    current_user: dict = Depends(get_current_user_required)
+    current_user: dict = Depends(get_current_user_required),
+    db: DatabaseManager = Depends(get_db)
 ):
     """자동매매 설정 저장"""
     check_auto_trade_permission(current_user)
@@ -1387,6 +1388,17 @@ async def save_settings(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="설정 저장에 실패했습니다"
         )
+
+    # score_version이 있으면 users 테이블에도 동기화
+    if request.score_version:
+        valid_versions = ['v1', 'v2', 'v3.5', 'v4', 'v5', 'v6', 'v7', 'v8']
+        if request.score_version in valid_versions:
+            with db.get_connection() as conn:
+                conn.execute(
+                    "UPDATE users SET score_version = ? WHERE id = ?",
+                    (request.score_version, current_user.get('id'))
+                )
+                conn.commit()
 
     return {"message": "설정이 저장되었습니다"}
 

@@ -48,7 +48,7 @@ export const stockAPI = {
   search: (q) => api.get(`/stocks/search?q=${encodeURIComponent(q)}`),
   list: () => api.get('/stocks/list'),  // 전체 종목 목록 (자동완성용)
   detail: (code) => api.get(`/stocks/${code}`),
-  analysis: (code) => api.get(`/stocks/${code}/analysis`),
+  analysis: (code, scoreVersion = 'v5') => api.get(`/stocks/${code}/analysis?score_version=${scoreVersion}`),
   fundamental: (code) => api.get(`/stocks/${code}/fundamental`),
 };
 
@@ -71,7 +71,12 @@ export const watchlistAPI = {
 
 // TOP 100 API
 export const top100API = {
-  list: (date) => api.get(`/top100${date ? `?date=${date}` : ''}`),
+  list: (date, scoreVersion = 'v5') => {
+    const params = new URLSearchParams();
+    if (date) params.append('date', date);
+    params.append('score_version', scoreVersion);
+    return api.get(`/top100?${params.toString()}`);
+  },
   history: (days = 7) => api.get(`/top100/history?days=${days}`),
   stockHistory: (code) => api.get(`/top100/stock/${code}`),
 };

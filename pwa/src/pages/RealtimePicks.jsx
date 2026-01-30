@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { useNavigate } from 'react-router-dom';
 import { top100API, realtimeAPI, portfolioAPI, watchlistAPI } from '../api/client';
+import { useAuth } from '../contexts/AuthContext';
 import { Zap, TrendingUp, TrendingDown, RefreshCw, Brain, Activity } from 'lucide-react';
 
 // AI 분석 중 로딩 컴포넌트
@@ -48,6 +49,8 @@ function AnalyzingLoader() {
 
 export default function RealtimePicks() {
   const navigate = useNavigate();
+  const { user } = useAuth();
+  const scoreVersion = user?.score_version || 'v5';
   const [realtimePrices, setRealtimePrices] = useState({});
   const [lastUpdate, setLastUpdate] = useState(null);
   const [isRefreshing, setIsRefreshing] = useState(false);
@@ -57,10 +60,10 @@ export default function RealtimePicks() {
   const hasSeenAnimation = sessionStorage.getItem('realtimeAnalyzingSeen');
   const [showAnalyzing, setShowAnalyzing] = useState(!hasSeenAnimation);
 
-  // TOP100 데이터 조회 (종목 목록)
+  // TOP100 데이터 조회 (종목 목록) - 사용자의 스코어 엔진 사용
   const { data, isLoading } = useQuery({
-    queryKey: ['top100'],
-    queryFn: () => top100API.list().then((res) => res.data),
+    queryKey: ['top100', scoreVersion],
+    queryFn: () => top100API.list(null, scoreVersion).then((res) => res.data),
   });
 
   // 보유종목/관심종목 데이터

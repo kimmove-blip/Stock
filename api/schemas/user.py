@@ -33,6 +33,7 @@ class UserResponse(UserBase):
     is_admin: bool = False
     auto_trade_enabled: bool = False
     profile_picture: Optional[str] = None
+    score_version: str = "v5"  # AI 스코어 엔진 버전
     created_at: Optional[datetime] = None
 
     class Config:

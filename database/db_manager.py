@@ -144,6 +144,7 @@ class DatabaseManager:
             self._migrate_telegram_columns(conn)
             self._migrate_push_columns(conn)
             self._migrate_profile_picture_column(conn)
+            self._migrate_score_version_column(conn)
 
     def _migrate_telegram_columns(self, conn):
         """users 테이블에 telegram 관련 컬럼 추가 (마이그레이션)"""
@@ -184,6 +185,16 @@ class DatabaseManager:
 
         if 'profile_picture' not in columns:
             conn.execute("ALTER TABLE users ADD COLUMN profile_picture TEXT")
+
+        conn.commit()
+
+    def _migrate_score_version_column(self, conn):
+        """users 테이블에 AI 스코어 엔진 버전 컬럼 추가 (마이그레이션)"""
+        cursor = conn.execute("PRAGMA table_info(users)")
+        columns = [row[1] for row in cursor.fetchall()]
+
+        if 'score_version' not in columns:
+            conn.execute("ALTER TABLE users ADD COLUMN score_version TEXT DEFAULT 'v5'")
 
         conn.commit()
 
