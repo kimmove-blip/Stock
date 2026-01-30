@@ -19,8 +19,8 @@ print("  갭 예측 모델 학습 V2")
 print("=" * 50)
 
 # 5년치 데이터
-end_date = "20260123"
-start_date = "20210123"
+end_date = "20260130"
+start_date = "20210130"
 
 print("\n[1] 데이터 수집...")
 ticker_df = StockTicker().listed
