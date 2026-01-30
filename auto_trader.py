@@ -1946,13 +1946,20 @@ class AutoTrader:
         # 2. 보유 종목 매도 체크 (손절 + 점수 기반, 모두 사용자 설정)
         sell_count = 0
         if holdings:
-            # 사용자 설정에서 sell_score, score_version, stop_loss_rate 가져오기
+            # 사용자 설정에서 sell_score, score_version, stop_loss_rate, min_buy_score 가져오기
             user_settings = self.logger.get_auto_trade_settings(self.user_id) or {}
             sell_score = user_settings.get('sell_score', 40)
             score_version = user_settings.get('score_version', 'v5')
             stop_loss_rate = abs(user_settings.get('stop_loss_rate', 7.0))  # 절대값 사용
+            min_buy_score = user_settings.get('min_buy_score', 70)
 
-            print(f"\n[2] 보유 종목 매도 체크 중... (손절 -{stop_loss_rate}% 또는 {score_version.upper()} <= {sell_score}점)")
+            # 15:13 장마감 정리 매도 체크
+            is_closing_time = now.hour == 15 and now.minute >= 10
+
+            if is_closing_time:
+                print(f"\n[2] 장마감 정리 매도 체크 중... (점수 < {min_buy_score}점 또는 손절 -{stop_loss_rate}%)")
+            else:
+                print(f"\n[2] 보유 종목 매도 체크 중... (손절 -{stop_loss_rate}% 또는 {score_version.upper()} <= {sell_score}점)")
 
             # CSV에서 점수 로드
             scores_map = {}
@@ -1989,8 +1996,11 @@ class AutoTrader:
                 if profit_rate <= -stop_loss_rate:
                     sell_reasons.append(f"손절 ({profit_rate:.1f}% <= -{stop_loss_rate}%)")
 
-                # 점수 기반 매도 (sell_score 이하)
-                if current_score <= sell_score:
+                # 15:13 장마감 정리: 점수 < min_buy_score면 매도
+                if is_closing_time and current_score < min_buy_score:
+                    sell_reasons.append(f"장마감정리 {score_version.upper()} {current_score}점 < {min_buy_score}점")
+                # 일반 점수 기반 매도 (sell_score 이하)
+                elif current_score <= sell_score:
                     sell_reasons.append(f"{score_version.upper()} {current_score}점 <= {sell_score}점")
 
                 if sell_reasons:
