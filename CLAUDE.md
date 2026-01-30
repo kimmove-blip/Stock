@@ -103,20 +103,20 @@ python -m py_compile <filename>.py
 
 ## 스코어링/전략 엔진
 
-### 기술적 분석 스코어링 (V1~V10)
+### 기술적 분석 스코어링 (V1~V5)
 
-| 버전 | 전략명 | 설명 |
-|------|--------|------|
-| V1 | 종합 기술적 분석 | 과매도 가점, 역발상 |
-| **V2** | **추세 추종 강화** | **역배열 과락, 20일선 기울기 (현재 운영 기본값)** |
-| V3 | 사일런트 바이어 | OBV 다이버전스, 매집봉, Spring, VCP |
-| V3.5 | 사일런트 바이어 발전형 | 와이코프 Phase, 위치 필터, 숏커버링 |
-| V4 | Hybrid Sniper | VCP, OBV 다이버전스, 수급 |
-| V5 | 장대양봉 | 눌림목, BB수축, 이평선 밀집, OBV 다이버전스 |
-| V6 | Swing Predictor | 2~5일 홀딩, 목표가/손절가 청산 |
-| V7 | Trend Momentum | 추세필터, 3일홀딩, 트레일링스탑 |
-| V8 | Contrarian Bounce | 약세종목 모멘텀반전, 바닥확인 |
-| **V10** | **Leader-Follower** | **대장주-종속주 상관관계 캐치업 전략** |
+| 버전 | 전략명 | 설명 | 상태 |
+|------|--------|------|------|
+| V1 | 종합 기술적 분석 | 과매도 가점, 역발상 | 활성 |
+| **V2** | **추세 추종 강화** | **역배열 과락, 20일선 기울기** | **기본값** |
+| V4 | Hybrid Sniper | VCP, OBV 다이버전스, 수급 | 활성 |
+| V5 | 장대양봉 | 눌림목, BB수축, 이평선 밀집 | 활성 |
+| ~~V3.5~~ | ~~사일런트 바이어~~ | ~~와이코프 Phase~~ | 비활성 |
+| ~~V6~~ | ~~Swing Predictor~~ | ~~2~5일 홀딩~~ | 비활성 |
+| ~~V7~~ | ~~Trend Momentum~~ | ~~추세필터, 3일홀딩~~ | 비활성 |
+| ~~V8~~ | ~~Contrarian Bounce~~ | ~~약세종목 모멘텀반전~~ | 비활성 |
+
+> **참고**: V3.5, V6~V8, V9, V10은 장중 스코어 계산에서 제외됨 (시간 단축)
 
 ### V9: 갭상승 확률 예측 (ML 기반)
 
@@ -260,20 +260,27 @@ result = calculate_score(df, version='v4')
 result = calculate_score_v4_with_investor(df, investor_data)
 ```
 
-### 장중 스코어 기록 (V1~V10)
+### 장중 스코어 기록 (V1, V2, V4, V5)
 
-> 10분마다 전 종목 스코어를 CSV로 기록
+> 5분마다 전 종목 스코어를 CSV로 기록
 
 | 항목 | 값 |
 |------|-----|
 | 대상 종목 | 거래대금 30억+, 시총 300억+ (~800개) |
-| 스코어 | V1~V8 + V9 갭상승확률 + V10 Leader-Follower |
-| 실행 시간 | 09:03 ~ 15:43 (10분 간격, 39회/일) |
+| 스코어 | V1, V2, V4, V5 (약 2분 30초 소요) |
+| 실행 시간 | 09:00 ~ 15:45 (5분 간격) |
 | 저장 경로 | `output/intraday_scores/YYYYMMDD_HHMM.csv` |
 | 로그 | `/tmp/intraday_scores.log` |
 
+#### 크론 스케줄
+| 시간 | 스코어 기록 | auto_trader |
+|------|-------------|-------------|
+| 09:00, 09:05 | ✓ | ✗ (장 초반 노이즈) |
+| 09:10 ~ 15:10 | ✓ | ✓ (5분 간격) |
+| 15:45 | ✓ | ✗ (마감 기록) |
+
 ```bash
-# 기본 실행 (V1~V10)
+# 기본 실행 (V1, V2, V4, V5)
 python record_intraday_scores.py
 
 # 한투 API 연동 (체결강도/수급 데이터 추가)
@@ -289,9 +296,9 @@ python record_intraday_scores.py --filter
 #### CSV 컬럼
 ```
 code, name, market, open, high, low, close, prev_close, change_pct,
-volume, prev_amount, prev_marcap,
+volume, volume_ratio, prev_amount, prev_marcap,
 buy_strength, foreign_net, inst_net, rel_strength,  # --kis 옵션 시 유효
-v1, v2, v3.5, v4, v5, v6, v7, v8, v9_prob, v10, signals
+v1, v2, v4, v5, signals
 ```
 
 | 컬럼 | 설명 | 조건 |
@@ -300,7 +307,7 @@ v1, v2, v3.5, v4, v5, v6, v7, v8, v9_prob, v10, signals
 | `foreign_net` | 외국인 당일 순매수 | `--kis` |
 | `inst_net` | 기관 당일 순매수 | `--kis` |
 | `rel_strength` | 시장 대비 상대강도 | `--kis` |
-| `v10` | Leader-Follower 스코어 | 기본 포함 |
+| `volume_ratio` | 5일 평균 대비 거래량 비율 | 기본 포함 |
 
 ### 장중 스코어 기반 급등/급락 감지
 
