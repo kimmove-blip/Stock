@@ -1943,10 +1943,32 @@ class AutoTrader:
         print(f"  주문가능금액: {max_buy_amt:,}원")
         print(f"  보유 종목: {len(holdings)}개")
 
-        # 2. 보유 종목 매도 체크 (손절 -7%만)
+        # 2. 보유 종목 매도 체크 (손절 + 점수 기반, 모두 사용자 설정)
         sell_count = 0
         if holdings:
-            print(f"\n[2] 보유 종목 매도 체크 중... (손절 -7%만)")
+            # 사용자 설정에서 sell_score, score_version, stop_loss_rate 가져오기
+            user_settings = self.logger.get_auto_trade_settings(self.user_id) or {}
+            sell_score = user_settings.get('sell_score', 40)
+            score_version = user_settings.get('score_version', 'v5')
+            stop_loss_rate = user_settings.get('stop_loss_rate', 7.0)
+
+            print(f"\n[2] 보유 종목 매도 체크 중... (손절 -{stop_loss_rate}% 또는 {score_version.upper()} <= {sell_score}점)")
+
+            # CSV에서 점수 로드
+            scores_map = {}
+            try:
+                import glob
+                import pandas as pd
+                score_files = sorted(glob.glob(str(INTRADAY_SCORES_DIR / "*.csv")))
+                if score_files:
+                    latest_csv = score_files[-1]
+                    df = pd.read_csv(latest_csv)
+                    df['code'] = df['code'].astype(str).str.zfill(6)
+                    if score_version in df.columns:
+                        for _, row in df.iterrows():
+                            scores_map[row['code']] = int(row.get(score_version, 0))
+            except Exception as e:
+                print(f"  점수 로드 실패: {e}")
 
             sell_list = []
             for h in holdings:
@@ -1960,16 +1982,25 @@ class AutoTrader:
                     continue
 
                 profit_rate = (current_price - avg_price) / avg_price * 100
+                current_score = scores_map.get(stock_code, 50)
+                sell_reasons = []
 
-                # 손절 -7% 체크
-                if profit_rate <= -7:
+                # 손절 체크 (사용자 설정 stop_loss_rate 사용)
+                if profit_rate <= -stop_loss_rate:
+                    sell_reasons.append(f"손절 ({profit_rate:.1f}% <= -{stop_loss_rate}%)")
+
+                # 점수 기반 매도 (sell_score 이하)
+                if current_score <= sell_score:
+                    sell_reasons.append(f"{score_version.upper()} {current_score}점 <= {sell_score}점")
+
+                if sell_reasons:
                     sell_list.append({
                         "stock_code": stock_code,
                         "stock_name": stock_name,
                         "quantity": quantity,
                         "current_price": current_price,
                         "avg_price": avg_price,
-                        "sell_reasons": [f"손절 ({profit_rate:.1f}%)"]
+                        "sell_reasons": sell_reasons
                     })
 
             if sell_list:
