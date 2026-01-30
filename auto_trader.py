@@ -2176,7 +2176,7 @@ class AutoTrader:
         if not filtered_candidates:
             return {"status": "completed", "buy_count": 0}
 
-        # 6. 매수 실행
+        # 6. 매수 실행 (점수 높은 순으로, 종목당 투자금 고정)
         print("\n[6] 매수 주문 실행 중...")
         base_investment = self.risk_manager.calculate_investment_amount()
 
@@ -2184,11 +2184,11 @@ class AutoTrader:
         adjusted_investment, nasdaq_multiplier, nasdaq_change = get_adjusted_investment_amount(base_investment)
         investment_per_stock = adjusted_investment
 
-        actual_investment = min(investment_per_stock, max_buy_amt // len(filtered_candidates))
         if nasdaq_multiplier < 1.0:
             print(f"  [NASDAQ 조정] 기본: {base_investment:,}원 × {nasdaq_multiplier} = {investment_per_stock:,}원")
-        print(f"  종목당 투자금: {actual_investment:,}원")
+        print(f"  종목당 투자금: {investment_per_stock:,}원 (주문가능: {max_buy_amt:,}원)")
 
+        remaining_cash = max_buy_amt  # 남은 주문가능금액 추적
         buy_count = 0
         for candidate in filtered_candidates:
             stock_code = candidate["stock_code"]
@@ -2216,7 +2216,12 @@ class AutoTrader:
                     print(f"  {stock_name}: 실시간 급등주 제외 ({realtime_change_pct:+.1f}%)")
                     continue
 
-            quantity = actual_investment // current_price
+            # 주문가능금액 부족 시 중단
+            if remaining_cash < current_price:
+                print(f"  주문가능금액 소진 ({remaining_cash:,}원) - 매수 중단")
+                break
+
+            quantity = investment_per_stock // current_price
 
             # 가용현금 부족 시에도 semi 모드는 시그널 기록
             if quantity <= 0:
@@ -2282,6 +2287,8 @@ class AutoTrader:
 
             if result.get("success"):
                 buy_count += 1
+                order_amount = current_price * quantity
+                remaining_cash -= order_amount  # 남은 주문가능금액 차감
 
                 # 거래 기록
                 self.logger.log_order(
@@ -2299,7 +2306,7 @@ class AutoTrader:
                 # 알림
                 self.notifier.notify_buy(stock_name, current_price, quantity, stock_code)
 
-                print(f"  매수 완료!")
+                print(f"  매수 완료! (잔여: {remaining_cash:,}원)")
 
         print("\n" + "=" * 60)
         print(f"  장중 스크리닝 완료: 매도 {sell_count}건, 매수 {buy_count}건")
