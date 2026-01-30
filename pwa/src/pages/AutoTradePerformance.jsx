@@ -240,7 +240,7 @@ export default function AutoTradePerformance() {
                 <Line
                   type="monotone"
                   dataKey="kosdaq"
-                  stroke="#3b82f6"
+                  stroke="#22c55e"
                   strokeWidth={1.5}
                   dot={false}
                   strokeDasharray="3 3"
