@@ -277,22 +277,6 @@ export default function StockDetail() {
                 </span>
               </p>
             </div>
-            {/* 추천 매수가 표시 (점수 50 초과시만) */}
-            {aiScore > 50 && (
-              <div className="text-right">
-                <div className="text-xs text-base-content/50">추천 매수가</div>
-                {detail.bb_mid ? (
-                  <div className="text-lg font-bold text-primary">
-                    {Math.round(detail.bb_mid).toLocaleString()}원
-                  </div>
-                ) : (
-                  <div className="flex items-center justify-end gap-1 text-base-content/40 py-1">
-                    <RefreshCw size={14} className="animate-spin" />
-                    <span className="text-xs">분석중</span>
-                  </div>
-                )}
-              </div>
-            )}
           </div>
 
           {/* 액션 버튼 */}

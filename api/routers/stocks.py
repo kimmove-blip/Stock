@@ -857,21 +857,51 @@ async def analyze_stock(
         # 코멘트 생성
         comment = generate_natural_comment(score, signals_list, {}, prob_conf)
 
-        # 점수 평활화
-        smoothed = smooth_score(code, score)
+        # 가격 히스토리와 지지/저항선 추가
+        price_history = None
+        support_resistance = None
+        try:
+            libs = get_stock_libs()
+            if libs:
+                get_ohlcv = libs['get_ohlcv']
+                ohlcv = get_ohlcv(code, 365)
+                if ohlcv is not None and len(ohlcv) >= 20:
+                    ohlcv = ohlcv.rename(columns={
+                        '시가': 'Open', '고가': 'High', '저가': 'Low',
+                        '종가': 'Close', '거래량': 'Volume'
+                    })
+                    ohlcv['MA5'] = ohlcv['Close'].rolling(window=5).mean()
+                    ohlcv['MA20'] = ohlcv['Close'].rolling(window=20).mean()
+                    price_history = []
+                    for i in range(-20, 0):
+                        row = ohlcv.iloc[i]
+                        price_history.append({
+                            'date': row.name.strftime('%m/%d'),
+                            'close': int(row['Close']),
+                            'ma5': round(float(row['MA5']), 0) if not pd.isna(row['MA5']) else None,
+                            'ma20': round(float(row['MA20']), 0) if not pd.isna(row['MA20']) else None,
+                        })
+                    from technical_analyst import TechnicalAnalyst
+                    analyst = TechnicalAnalyst()
+                    sr_levels = analyst.calculate_support_resistance(ohlcv)
+                    if sr_levels:
+                        from api.schemas.stock import SupportResistance
+                        support_resistance = SupportResistance(**sr_levels)
+        except Exception as e:
+            print(f"Intraday 히스토리 조회 오류: {e}")
 
         return StockAnalysis(
             code=code,
             name=intraday.get("name", ""),
-            score=smoothed,
+            score=score,  # 장중 스코어는 평활화 없이 원본 사용
             opinion=opinion,
             probability=prob_conf['probability'],
             confidence=prob_conf['confidence'],
             technical_score=score,
             signals={},
             signal_descriptions=desc_list,
-            support_resistance=None,
-            price_history=None,
+            support_resistance=support_resistance,
+            price_history=price_history,
             comment=comment
         )
 
