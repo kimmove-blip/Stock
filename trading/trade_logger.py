@@ -583,6 +583,9 @@ class TradeLogger:
         매수/매도 여부 상관없이 오늘 거래된 모든 종목을 반환합니다.
         장중 10분 스크리닝 시 같은 종목 왕복매매 방지용.
 
+        단, 시초가 매도(09:05 이전 매도)는 블랙리스트에서 제외합니다.
+        (설정 변경 등으로 의도치 않게 매도된 종목 재매수 허용)
+
         Args:
             user_id: 사용자 ID
 
@@ -594,12 +597,14 @@ class TradeLogger:
 
         today = datetime.now().strftime("%Y-%m-%d")
 
+        # 시초가 매도(09:05 이전 매도)는 제외
         query = """
             SELECT DISTINCT stock_code
             FROM trade_log
             WHERE user_id = ?
               AND trade_date = ?
               AND status = 'executed'
+              AND NOT (side = 'sell' AND trade_time < '09:05:00')
         """
 
         with self._get_connection() as conn:

@@ -115,11 +115,11 @@ def load_scores_from_csv(max_age_minutes: int = 15) -> Optional[Tuple[List[Dict]
         signals_str = row.get('signals', '')
         signals = signals_str.split(',') if signals_str and pd.notna(signals_str) else []
 
-        # volume_ratio 계산 (CSV에 없으면 기본값 1.0)
-        volume_ratio = float(row.get('volume_ratio', 1.0)) if 'volume_ratio' in df.columns else 1.0
-
         # 거래대금 (prev_amount 또는 amount)
         amount = int(row.get('prev_amount', 0) or row.get('amount', 0) or 0)
+
+        # 체결강도 (100 이상이면 매수세 우위)
+        buy_strength = float(row.get('buy_strength', 0) or 0)
 
         stock = {
             "code": code,
@@ -132,9 +132,7 @@ def load_scores_from_csv(max_age_minutes: int = 15) -> Optional[Tuple[List[Dict]
             "close": int(row.get('close', 0)),
             "change_pct": float(row.get('change_pct', 0)),
             "amount": amount,  # 거래대금
-            "indicators": {
-                "volume_ratio": volume_ratio,
-            },
+            "buy_strength": buy_strength,  # 체결강도
         }
         top_stocks.append(stock)
 
@@ -2122,21 +2120,8 @@ class AutoTrader:
         except Exception as e:
             print(f"  JSON 저장 실패: {e}")
 
-        # 4. 매수 후보 필터링 (점수 + 거래량 조건)
-        print(f"\n[4] 매수 후보 필터링 중 ({score_version.upper()} >= {min_score}, 거래량 조건 적용)...")
-
-        # 시간대별 거래량 보정 계수
-        now = datetime.now()
-        hour = now.hour
-        if hour < 10:
-            volume_multiplier = 4.0  # 9시~10시
-        elif hour < 11:
-            volume_multiplier = 2.5  # 10시~11시
-        elif hour < 14:
-            volume_multiplier = 1.5  # 11시~14시
-        else:
-            volume_multiplier = 1.0  # 14시 이후
-        print(f"  시간대 거래량 보정: x{volume_multiplier}")
+        # 4. 매수 후보 필터링 (점수 + 체결강도 조건)
+        print(f"\n[4] 매수 후보 필터링 중 ({score_version.upper()} >= {min_score}, 체결강도 >= 100)...")
 
         candidates = []
         for stock in top_stocks:
@@ -2145,16 +2130,14 @@ class AutoTrader:
             score = scores.get(score_version, stock.get("score", 0))
             code = stock.get("code")
             name = stock.get("name")
-            volume_ratio = stock.get("indicators", {}).get("volume_ratio", 1.0)
+            buy_strength = stock.get("buy_strength", 0)
 
             # 점수 조건
             if score < min_score:
                 continue
 
-            # 거래량 조건 (시간대 보정 적용, 보정 후 1.5배 이상)
-            adjusted_volume = volume_ratio * volume_multiplier
-            if adjusted_volume < 1.5:
-                print(f"  [{name}] 거래량 부족 (원본 {volume_ratio:.1f}배, 보정 {adjusted_volume:.1f}배) - 제외")
+            # 체결강도 조건 (100 이상 = 매수세 우위)
+            if buy_strength < 100:
                 continue
 
             # auto_trader 형식으로 변환
@@ -2164,9 +2147,9 @@ class AutoTrader:
                 "score": score,
                 "signals": stock.get("signals", []),
                 "current_price": int(stock.get("close", 0)),
-                "volume_ratio": volume_ratio,
                 "change_pct": stock.get("change_pct", 0),
-                "amount": stock.get("amount", 0),  # 거래대금
+                "amount": stock.get("amount", 0),  # 전일 거래대금
+                "buy_strength": buy_strength,  # 체결강도
             })
 
         # 점수순 정렬 (동점 시 거래대금 많은 순)
