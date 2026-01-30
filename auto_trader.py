@@ -1996,9 +1996,10 @@ class AutoTrader:
                 if profit_rate <= -stop_loss_rate:
                     sell_reasons.append(f"손절 ({profit_rate:.1f}% <= -{stop_loss_rate}%)")
 
-                # 15:13 장마감 정리: 점수 < min_buy_score면 매도
-                if is_closing_time and current_score < min_buy_score:
-                    sell_reasons.append(f"장마감정리 {score_version.upper()} {current_score}점 < {min_buy_score}점")
+                # 15:13 장마감 정리: 점수 < (min_buy_score + 5)면 매도
+                hold_score = min_buy_score + 5  # 보유 조건: 매수점수 + 5점
+                if is_closing_time and current_score < hold_score:
+                    sell_reasons.append(f"장마감정리 {score_version.upper()} {current_score}점 < {hold_score}점")
                 # 일반 점수 기반 매도 (sell_score 이하)
                 elif current_score <= sell_score:
                     sell_reasons.append(f"{score_version.upper()} {current_score}점 <= {sell_score}점")
