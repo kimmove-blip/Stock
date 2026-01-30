@@ -2144,7 +2144,6 @@ class AutoTrader:
                 "current_price": int(stock.get("close", 0)),
                 "change_pct": stock.get("change_pct", 0),
                 "amount": stock.get("amount", 0),  # 전일 거래대금
-                "buy_strength": buy_strength,  # 체결강도
             })
 
         # 점수순 정렬 (동점 시 거래대금 많은 순)
