@@ -792,7 +792,7 @@ def get_intraday_score(code: str, score_version: str = 'v5'):
 @router.get("/{code}/analysis", response_model=StockAnalysis)
 async def analyze_stock(
     code: str,
-    score_version: str = Query("v5", description="스코어 버전 (v1, v2, v3.5, v4, v5, v6, v7, v8)")
+    score_version: str = Query("v2", description="스코어 버전 (v1, v2, v3.5, v4, v5, v6, v7, v8)")
 ):
     """종목 AI 분석 (장중 스코어 우선, 없으면 TOP100/실시간 계산)"""
     # 유효한 스코어 버전 확인

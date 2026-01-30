@@ -52,7 +52,7 @@ def get_top100_file_by_date(date_str: str) -> Optional[str]:
 @router.get("", response_model=Top100Response)
 async def get_top100(
     date: Optional[str] = Query(None, description="조회 날짜 (YYYYMMDD), 미입력시 최신"),
-    score_version: str = Query("v5", description="스코어 버전 (v1, v2, v3.5, v4, v5, v6, v7, v8)")
+    score_version: str = Query("v2", description="스코어 버전 (v1, v2, v3.5, v4, v5, v6, v7, v8)")
 ):
     """오늘의 AI 추천 TOP 100 (지정된 스코어 버전 기준, intraday CSV에서 읽음)"""
     import glob
@@ -152,7 +152,7 @@ async def get_top100(
 @router.get("/intraday-score/{code}")
 async def get_intraday_score(
     code: str,
-    score_version: str = Query("v5", description="스코어 버전 (v1, v2, v3.5, v4, v5, v6, v7, v8)")
+    score_version: str = Query("v2", description="스코어 버전 (v1, v2, v3.5, v4, v5, v6, v7, v8)")
 ):
     """특정 종목의 장중 스코어 조회 (intraday CSV에서)"""
     import glob

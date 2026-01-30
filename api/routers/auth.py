@@ -125,7 +125,7 @@ async def get_me(current_user: dict = Depends(get_current_user_required)):
         is_admin=bool(current_user.get('is_admin', 0)),
         auto_trade_enabled=bool(current_user.get('auto_trade_enabled', 0)),
         profile_picture=current_user.get('profile_picture'),
-        score_version=current_user.get('score_version', 'v5')
+        score_version=current_user.get('score_version', 'v2')
     )
 
 
@@ -193,7 +193,7 @@ async def update_user_settings(
         name=user.get('name'),
         email_subscription=bool(user.get('email_subscription', 0)),
         is_admin=bool(user.get('is_admin', 0)),
-        score_version=user.get('score_version', 'v5')
+        score_version=user.get('score_version', 'v2')
     )
 
 

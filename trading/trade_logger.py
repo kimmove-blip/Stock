@@ -1609,7 +1609,7 @@ class TradeLogger:
                 llm_provider,
                 llm_api_key,
                 llm_model,
-                settings.get('score_version', 'v5'),
+                settings.get('score_version', 'v2'),
                 now.isoformat()
             ))
             return cursor.rowcount > 0

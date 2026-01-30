@@ -1949,7 +1949,7 @@ class AutoTrader:
             # 사용자 설정에서 sell_score, score_version, stop_loss_rate, min_buy_score 가져오기
             user_settings = self.logger.get_auto_trade_settings(self.user_id) or {}
             sell_score = user_settings.get('sell_score', 40)
-            score_version = user_settings.get('score_version', 'v5')
+            score_version = user_settings.get('score_version', 'v2')
             stop_loss_rate = abs(user_settings.get('stop_loss_rate', 7.0))  # 절대값 사용
             min_buy_score = user_settings.get('min_buy_score', 70)
 
@@ -2131,6 +2131,12 @@ class AutoTrader:
         # 4. 매수 후보 필터링 (점수 + 시간대별 거래량 조건)
         now = datetime.now()
         hour = now.hour
+
+        # 15:10 이후 장마감 시간에는 신규 매수 금지 (매도만 실행)
+        is_closing_time = hour == 15 and now.minute >= 10
+        if is_closing_time:
+            print(f"\n[4] 장마감 시간 ({now.strftime('%H:%M')}) - 신규 매수 없음")
+            return {"status": "completed", "buy_count": 0}
 
         # 시간대별 volume_ratio 기준 (장 초반은 거래량 적어도 허용)
         if hour < 10:
@@ -2482,7 +2488,7 @@ def run_for_all_users(dry_run: bool = False, min_score: int = 75):
             user_settings = logger.get_auto_trade_settings(user_id) or {}
             user_min_score = user_settings.get('min_buy_score', min_score)
             user_sell_score = user_settings.get('sell_score', 40)
-            user_score_version = user_settings.get('score_version', 'v5')
+            user_score_version = user_settings.get('score_version', 'v2')
             print(f"  설정: {user_score_version.upper()} min_buy={user_min_score}점, sell={user_sell_score}점")
 
             trader = AutoTrader(
