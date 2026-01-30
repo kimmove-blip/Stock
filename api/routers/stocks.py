@@ -16,6 +16,9 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspa
 from api.schemas.stock import StockSearch, StockDetail, StockAnalysis, FundamentalAnalysis
 from api.dependencies import get_current_user
 
+# 출력 디렉토리 경로
+OUTPUT_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), 'output')
+
 # 주식 데이터 라이브러리 지연 임포트
 _stock_utils = None
 
@@ -741,15 +744,143 @@ async def get_stock_detail(code: str):
         raise HTTPException(status_code=500, detail="종목 정보 조회 중 오류가 발생했습니다")
 
 
+def get_intraday_score(code: str, score_version: str = 'v5'):
+    """장중 스코어 CSV에서 특정 종목 점수 조회"""
+    import glob
+    import pandas as pd
+
+    code = code.zfill(6)
+    intraday_dir = os.path.join(OUTPUT_DIR, 'intraday_scores')
+    csv_files = sorted(glob.glob(os.path.join(intraday_dir, "*.csv")))
+
+    if not csv_files:
+        return None
+
+    latest_csv = csv_files[-1]
+
+    try:
+        df = pd.read_csv(latest_csv)
+        df['code'] = df['code'].astype(str).str.zfill(6)
+    except Exception:
+        return None
+
+    # 스코어 컬럼 확인
+    score_col = score_version
+    if score_col not in df.columns:
+        score_col = 'v5'
+        if score_col not in df.columns:
+            return None
+
+    # 종목 검색
+    stock_row = df[df['code'] == code]
+    if stock_row.empty:
+        return {"in_target": False}  # 분석 대상 아님
+
+    row = stock_row.iloc[0]
+    signals_str = str(row.get('signals', ''))
+    signals = [s.strip() for s in signals_str.split(',') if s.strip()]
+
+    return {
+        "in_target": True,
+        "score": int(row.get(score_col, 0)),
+        "name": row.get('name', ''),
+        "signals": signals,
+        "change_pct": round(float(row.get('change_pct', 0)), 2)
+    }
+
+
 @router.get("/{code}/analysis", response_model=StockAnalysis)
-async def analyze_stock(code: str):
-    """종목 AI 분석 (30분 캐싱, TOP100 우선)"""
-    # 1. 캐시 확인
+async def analyze_stock(
+    code: str,
+    score_version: str = Query("v5", description="스코어 버전 (v1, v2, v3.5, v4, v5, v6, v7, v8)")
+):
+    """종목 AI 분석 (장중 스코어 우선, 없으면 TOP100/실시간 계산)"""
+    # 유효한 스코어 버전 확인
+    valid_versions = ['v1', 'v2', 'v3.5', 'v4', 'v5', 'v6', 'v7', 'v8']
+    if score_version not in valid_versions:
+        score_version = 'v5'
+
+    # 1. 장중 스코어 CSV 확인 (최우선)
+    intraday = get_intraday_score(code, score_version)
+    if intraday:
+        if not intraday.get("in_target"):
+            # 분석 대상 종목이 아님 (896개에 포함 안됨) - score를 None으로 반환
+            return StockAnalysis(
+                code=code,
+                name="",
+                score=None,  # 프론트에서 "-"로 표시
+                opinion="분석대상외",
+                probability=None,
+                confidence=None,
+                technical_score=None,
+                signals={},
+                signal_descriptions=["분석 대상 종목이 아닙니다"],
+                support_resistance=None,
+                price_history=None,
+                comment="이 종목은 현재 장중 스코어링 대상에 포함되지 않습니다."
+            )
+
+        # 장중 스코어가 있음 - 이를 기반으로 분석 반환
+        score = intraday["score"]
+        signals_list = intraday.get("signals", [])
+
+        # 의견 계산
+        if score >= 65:
+            opinion = "매수"
+        elif score >= 50:
+            opinion = "관망"
+        else:
+            opinion = "주의"
+
+        # 확률/신뢰도 계산
+        from technical_analyst import TechnicalAnalyst
+        analyst = TechnicalAnalyst()
+        prob_conf = analyst.calculate_probability_confidence(score, signals_list)
+
+        # 신호 설명 변환
+        signal_map = {
+            'MA_ALIGNED': '✅ 이평선 정배열 (강한 상승 추세)',
+            'GOLDEN_CROSS_5_20': '✅ 단기 골든크로스 (5/20일선)',
+            'GOLDEN_CROSS_20_60': '✅ 중기 골든크로스 (20/60일선)',
+            'DEAD_CROSS_5_20': '⚠️ 단기 데드크로스 (하락 주의)',
+            'RSI_OVERSOLD': '✅ RSI 과매도 (반등 기대)',
+            'RSI_RECOVERING': '📈 RSI 회복 중',
+            'RSI_OVERBOUGHT': '⚠️ RSI 과매수 (조정 주의)',
+            'MACD_GOLDEN_CROSS': '✅ MACD 골든크로스',
+            'VOLUME_SURGE': '🔥 거래량 급증',
+            'BB_LOWER_BOUNCE': '✅ 볼린저밴드 하단 반등',
+            'VOLUME_EXPLOSION': '🔥 거래량 폭발',
+            'BULLISH_CANDLE': '✅ 장대양봉',
+        }
+        desc_list = [signal_map.get(s, s) for s in signals_list if s in signal_map][:6]
+
+        # 코멘트 생성
+        comment = generate_natural_comment(score, signals_list, {}, prob_conf)
+
+        # 점수 평활화
+        smoothed = smooth_score(code, score)
+
+        return StockAnalysis(
+            code=code,
+            name=intraday.get("name", ""),
+            score=smoothed,
+            opinion=opinion,
+            probability=prob_conf['probability'],
+            confidence=prob_conf['confidence'],
+            technical_score=score,
+            signals={},
+            signal_descriptions=desc_list,
+            support_resistance=None,
+            price_history=None,
+            comment=comment
+        )
+
+    # 2. 캐시 확인 (장중 스코어가 없을 때)
     cached = get_cached_analysis(code)
     if cached:
         return cached
 
-    # 2. TOP100 데이터에 있으면 바로 반환 (즉시 응답)
+    # 3. TOP100 데이터에 있으면 바로 반환 (즉시 응답)
     top100_data = get_top100_analysis(code)
     if top100_data:
         stock_name = top100_data['name']

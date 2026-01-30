@@ -14,6 +14,7 @@ import {
   Trash2,
   UserX,
   RefreshCw,
+  Brain,
 } from 'lucide-react';
 import { authAPI } from '../api/client';
 
@@ -22,6 +23,41 @@ export default function Settings() {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const [darkMode, setDarkMode] = useState(false);
+  const [scoreVersion, setScoreVersion] = useState(user?.score_version || 'v5');
+
+  // 스코어 엔진 옵션
+  const scoreVersionOptions = [
+    { value: 'v1', label: 'V1 - 종합 기술적 분석' },
+    { value: 'v2', label: 'V2 - 추세 추종 강화' },
+    { value: 'v3.5', label: 'V3.5 - 사일런트 바이어' },
+    { value: 'v4', label: 'V4 - Hybrid Sniper' },
+    { value: 'v5', label: 'V5 - 장대양봉 (기본)' },
+    { value: 'v6', label: 'V6 - Swing Predictor' },
+    { value: 'v7', label: 'V7 - Trend Momentum' },
+    { value: 'v8', label: 'V8 - Contrarian Bounce' },
+  ];
+
+  // 스코어 엔진 변경
+  const scoreVersionMutation = useMutation({
+    mutationFn: (version) => authAPI.updateSettings({ score_version: version }),
+    onSuccess: () => {
+      refreshUser && refreshUser();
+      queryClient.invalidateQueries(['user']);
+      queryClient.invalidateQueries(['top100']);
+      queryClient.invalidateQueries(['stockDetail']);
+    },
+    onError: (error) => {
+      alert(error.response?.data?.detail || '설정 변경에 실패했습니다');
+      setScoreVersion(user?.score_version || 'v5');
+    },
+  });
+
+  // user 변경 시 scoreVersion 동기화
+  useEffect(() => {
+    if (user?.score_version) {
+      setScoreVersion(user.score_version);
+    }
+  }, [user?.score_version]);
 
   // 이메일 구독 토글
   const emailMutation = useMutation({
@@ -177,6 +213,32 @@ export default function Settings() {
       <div className="bg-white rounded-xl shadow-sm mb-4">
         <div className="px-4 py-3 border-b border-gray-100">
           <h3 className="font-semibold text-gray-700 text-sm">앱 설정</h3>
+        </div>
+
+        {/* AI 스코어 엔진 선택 */}
+        <div className="flex items-center justify-between p-4 border-b border-gray-100">
+          <div className="flex items-center gap-3">
+            <Brain size={20} className="text-purple-500" />
+            <div>
+              <span className="text-gray-700 block">AI 스코어 엔진</span>
+              <span className="text-xs text-gray-400">실시간 추천 및 종목 분석용</span>
+            </div>
+          </div>
+          <select
+            value={scoreVersion}
+            onChange={(e) => {
+              setScoreVersion(e.target.value);
+              scoreVersionMutation.mutate(e.target.value);
+            }}
+            disabled={scoreVersionMutation.isPending}
+            className="text-sm bg-gray-100 border-0 rounded-lg px-3 py-2 text-gray-700 focus:ring-2 focus:ring-purple-500"
+          >
+            {scoreVersionOptions.map((opt) => (
+              <option key={opt.value} value={opt.value}>
+                {opt.label}
+              </option>
+            ))}
+          </select>
         </div>
 
         {/* 앱 새로고침 */}

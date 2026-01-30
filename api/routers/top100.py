@@ -51,13 +51,19 @@ def get_top100_file_by_date(date_str: str) -> Optional[str]:
 
 @router.get("", response_model=Top100Response)
 async def get_top100(
-    date: Optional[str] = Query(None, description="조회 날짜 (YYYYMMDD), 미입력시 최신")
+    date: Optional[str] = Query(None, description="조회 날짜 (YYYYMMDD), 미입력시 최신"),
+    score_version: str = Query("v5", description="스코어 버전 (v1, v2, v3.5, v4, v5, v6, v7, v8)")
 ):
-    """오늘의 AI 추천 TOP 100 (V5 점수 기준, intraday CSV에서 읽음)"""
+    """오늘의 AI 추천 TOP 100 (지정된 스코어 버전 기준, intraday CSV에서 읽음)"""
     import glob
     import pandas as pd
 
-    # 장중 스코어 CSV에서 V5 Top 100 조회
+    # 유효한 스코어 버전 확인
+    valid_versions = ['v1', 'v2', 'v3.5', 'v4', 'v5', 'v6', 'v7', 'v8']
+    if score_version not in valid_versions:
+        score_version = 'v5'
+
+    # 장중 스코어 CSV에서 Top 100 조회
     intraday_dir = os.path.join(OUTPUT_DIR, 'intraday_scores')
 
     if date:
@@ -80,11 +86,16 @@ async def get_top100(
         print(f"[TOP100 Error] {e}")
         raise HTTPException(status_code=500, detail="데이터 파일 읽기 중 오류가 발생했습니다")
 
-    # V5 점수 기준 정렬
-    if 'v5' not in df.columns:
-        raise HTTPException(status_code=500, detail="V5 점수 컬럼이 없습니다")
+    # 선택된 스코어 버전으로 정렬
+    # CSV에서 v3.5는 'v3.5' 컬럼으로 저장됨
+    score_col = score_version
+    if score_col not in df.columns:
+        # 컬럼이 없으면 v5로 폴백
+        score_col = 'v5'
+        if score_col not in df.columns:
+            raise HTTPException(status_code=500, detail=f"{score_version} 점수 컬럼이 없습니다")
 
-    df_sorted = df.sort_values('v5', ascending=False).head(100)
+    df_sorted = df.sort_values(score_col, ascending=False).head(100)
 
     # 파일명에서 날짜 추출
     filename = os.path.basename(latest_csv)
@@ -97,7 +108,7 @@ async def get_top100(
     items = []
     for i, (_, row) in enumerate(df_sorted.iterrows(), 1):
         stock_code = row['code']
-        score = int(row.get('v5', 0))
+        score = int(row.get(score_col, 0))
         change_rate = 0.0 if is_before_market else round(float(row.get('change_pct', 0)), 2)
         current_price = int(row.get('close', 0))
 
@@ -136,6 +147,77 @@ async def get_top100(
         total_count=len(items),
         items=items
     )
+
+
+@router.get("/intraday-score/{code}")
+async def get_intraday_score(
+    code: str,
+    score_version: str = Query("v5", description="스코어 버전 (v1, v2, v3.5, v4, v5, v6, v7, v8)")
+):
+    """특정 종목의 장중 스코어 조회 (intraday CSV에서)"""
+    import glob
+    import pandas as pd
+
+    # 유효한 스코어 버전 확인
+    valid_versions = ['v1', 'v2', 'v3.5', 'v4', 'v5', 'v6', 'v7', 'v8']
+    if score_version not in valid_versions:
+        score_version = 'v5'
+
+    # 종목 코드 6자리로 정규화
+    code = code.zfill(6)
+
+    # 장중 스코어 CSV에서 조회
+    intraday_dir = os.path.join(OUTPUT_DIR, 'intraday_scores')
+    csv_files = sorted(glob.glob(os.path.join(intraday_dir, "*.csv")))
+
+    if not csv_files:
+        # 장중 스코어 파일 없음 = 분석 대상 아님
+        return {"code": code, "score": None, "in_target": False, "message": "장중 스코어 데이터 없음"}
+
+    latest_csv = csv_files[-1]
+
+    try:
+        df = pd.read_csv(latest_csv)
+        df['code'] = df['code'].astype(str).str.zfill(6)
+    except Exception as e:
+        print(f"[IntradayScore Error] {e}")
+        return {"code": code, "score": None, "in_target": False, "message": "데이터 파일 읽기 오류"}
+
+    # 스코어 컬럼 확인
+    score_col = score_version
+    if score_col not in df.columns:
+        score_col = 'v5'
+        if score_col not in df.columns:
+            return {"code": code, "score": None, "in_target": False, "message": f"{score_version} 컬럼 없음"}
+
+    # 종목 검색
+    stock_row = df[df['code'] == code]
+
+    if stock_row.empty:
+        # 분석 대상 종목 아님 (896개에 포함 안됨)
+        return {"code": code, "score": None, "in_target": False, "message": "분석 대상 종목 아님"}
+
+    row = stock_row.iloc[0]
+    score = int(row.get(score_col, 0))
+
+    # signals 파싱
+    signals_str = str(row.get('signals', ''))
+    signals = [s.strip() for s in signals_str.split(',') if s.strip()]
+
+    # 파일명에서 시간 추출
+    filename = os.path.basename(latest_csv)
+    file_time = filename.replace('.csv', '')  # YYYYMMDD_HHMM
+
+    return {
+        "code": code,
+        "name": row.get('name', ''),
+        "score": score,
+        "score_version": score_version,
+        "in_target": True,
+        "signals": signals,
+        "change_pct": round(float(row.get('change_pct', 0)), 2),
+        "updated_at": file_time
+    }
 
 
 @router.get("/history", response_model=List[dict])

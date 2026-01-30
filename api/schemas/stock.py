@@ -66,7 +66,7 @@ class StockAnalysis(BaseModel):
     """종목 AI 분석 결과"""
     code: str
     name: str
-    score: float = Field(..., ge=0, le=100, description="종합 점수 (0-100)")
+    score: Optional[float] = Field(None, ge=0, le=100, description="종합 점수 (0-100), None이면 분석대상 아님")
     opinion: str = Field(..., description="기술적 신호 (매수/관망/주의/하락 신호)")
 
     # 상승확률 및 신뢰도
