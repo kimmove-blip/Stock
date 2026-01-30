@@ -406,22 +406,70 @@ async def get_trade_history(
         if order_nos:
             trade_reasons = logger.get_trade_reasons_by_order_nos(order_nos, user_id)
 
-        # 종목별 매수 평균가 계산 (매도 손익 계산용)
-        from collections import defaultdict
-        stock_buys = defaultdict(lambda: {'total_amount': 0, 'total_qty': 0})
-        for h in history:
-            if h.get('side') == 'buy':
-                code = h.get('stock_code')
-                qty = h.get('executed_qty', 0)
-                price = h.get('executed_price', 0)
-                stock_buys[code]['total_amount'] += qty * price
-                stock_buys[code]['total_qty'] += qty
-
-        # 종목별 매수 평균가
+        # 매도 종목의 평균 매수가 조회 (DB에서 전체 기간 조회)
+        sell_codes = list(set([h.get('stock_code') for h in history if h.get('side') == 'sell' and h.get('stock_code')]))
         stock_avg_buy_price = {}
-        for code, data in stock_buys.items():
-            if data['total_qty'] > 0:
-                stock_avg_buy_price[code] = data['total_amount'] / data['total_qty']
+
+        if sell_codes:
+            # 1. DB에서 매수 평균가 조회 (전체 기간)
+            stock_avg_buy_price = logger.get_avg_buy_prices(user_id, sell_codes)
+
+            # 2. DB에 없으면 현재 조회 기간 내 매수에서 계산
+            missing_codes = [c for c in sell_codes if c not in stock_avg_buy_price]
+            if missing_codes:
+                from collections import defaultdict
+                stock_buys = defaultdict(lambda: {'total_amount': 0, 'total_qty': 0})
+                for h in history:
+                    if h.get('side') == 'buy':
+                        code = h.get('stock_code')
+                        if code in missing_codes:
+                            qty = h.get('executed_qty', 0)
+                            price = h.get('executed_price', 0)
+                            stock_buys[code]['total_amount'] += qty * price
+                            stock_buys[code]['total_qty'] += qty
+
+                for code, data in stock_buys.items():
+                    if data['total_qty'] > 0:
+                        stock_avg_buy_price[code] = data['total_amount'] / data['total_qty']
+
+            # 3. 여전히 없으면 KIS 30일 체결내역에서 매수 조회
+            still_missing = [c for c in sell_codes if c not in stock_avg_buy_price]
+            if still_missing:
+                try:
+                    from collections import defaultdict
+                    buy_start = (datetime.now() - timedelta(days=30)).strftime("%Y%m%d")
+                    buy_end = datetime.now().strftime("%Y%m%d")
+                    buy_history = client.get_order_history(start_date=buy_start, end_date=buy_end)
+                    buy_history = [h for h in buy_history if h.get('executed_qty', 0) > 0 and h.get('side') == 'buy']
+
+                    stock_buys = defaultdict(lambda: {'total_amount': 0, 'total_qty': 0})
+                    for h in buy_history:
+                        code = h.get('stock_code')
+                        if code in still_missing:
+                            qty = h.get('executed_qty', 0)
+                            price = h.get('executed_price', 0)
+                            stock_buys[code]['total_amount'] += qty * price
+                            stock_buys[code]['total_qty'] += qty
+
+                    for code, data in stock_buys.items():
+                        if data['total_qty'] > 0:
+                            stock_avg_buy_price[code] = data['total_amount'] / data['total_qty']
+                except Exception as e:
+                    print(f"[거래내역] KIS 매수내역 조회 실패: {e}")
+
+            # 4. 여전히 없으면 KIS 잔고에서 조회
+            still_missing = [c for c in sell_codes if c not in stock_avg_buy_price]
+            if still_missing:
+                try:
+                    balance = client.get_balance()
+                    for holding in balance.get('holdings', []):
+                        code = holding.get('stock_code')
+                        if code in still_missing:
+                            avg_price = holding.get('avg_price', 0)
+                            if avg_price > 0:
+                                stock_avg_buy_price[code] = avg_price
+                except Exception as e:
+                    print(f"[거래내역] 잔고에서 평균가 조회 실패: {e}")
 
         # 응답 형식 변환 (매매사유 병합 + 매도 손익 계산)
         result = []
