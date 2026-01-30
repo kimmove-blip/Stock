@@ -1211,7 +1211,10 @@ async def get_account(
         # 총 자산 = 평가금액 + d2 예수금 (실제 자산 기준)
         total_asset = total_evaluation + d2_cash_balance
 
-        # holdings에 AI 점수 추가 (장중 스코어 CSV에서 V5 점수 사용)
+        # holdings에 AI 점수 추가 (사용자 설정 버전 점수 사용)
+        user_settings = logger.get_auto_trade_settings(current_user.get('id')) or {}
+        score_version = user_settings.get('score_version', 'v5')
+
         scores_map = {}
         try:
             import glob
@@ -1222,11 +1225,14 @@ async def get_account(
                 latest_csv = score_files[-1]
                 df = pd.read_csv(latest_csv)
                 df['code'] = df['code'].astype(str).str.zfill(6)
-                if 'v5' in df.columns:
+                if score_version in df.columns:
+                    for _, row in df.iterrows():
+                        scores_map[row['code']] = int(row.get(score_version, 0))
+                elif 'v5' in df.columns:  # fallback to v5
                     for _, row in df.iterrows():
                         scores_map[row['code']] = int(row.get('v5', 0))
         except Exception as e:
-            print(f"V5 점수 조회 실패: {e}")
+            print(f"{score_version} 점수 조회 실패: {e}")
 
         # holdings에 점수 추가
         for h in holdings:
@@ -1760,7 +1766,11 @@ async def get_diagnosis(
     # 종목 코드 목록
     stock_codes = [h.get('stock_code', '') for h in holdings]
 
-    # 장중 스코어 CSV에서 V5 점수 가져오기 (계좌현황과 동일한 방식)
+    # 사용자 설정에서 score_version 조회 (없으면 v5 기본값)
+    user_settings = logger.get_auto_trade_settings(current_user.get('id')) or {}
+    score_version = user_settings.get('score_version', 'v5')
+
+    # 장중 스코어 CSV에서 사용자 설정 버전 점수 가져오기
     scores_map = {}
     try:
         import glob
@@ -1771,11 +1781,14 @@ async def get_diagnosis(
             latest_csv = score_files[-1]
             df = pd.read_csv(latest_csv)
             df['code'] = df['code'].astype(str).str.zfill(6)
-            if 'v5' in df.columns:
+            if score_version in df.columns:
+                for _, row in df.iterrows():
+                    scores_map[row['code']] = int(row.get(score_version, 0))
+            elif 'v5' in df.columns:  # fallback to v5
                 for _, row in df.iterrows():
                     scores_map[row['code']] = int(row.get('v5', 0))
     except Exception as e:
-        print(f"V5 점수 조회 실패: {e}")
+        print(f"{score_version} 점수 조회 실패: {e}")
 
     # 가격 정보를 병렬로 조회
     price_infos = await asyncio.gather(*[get_stock_price_info(code) for code in stock_codes])
