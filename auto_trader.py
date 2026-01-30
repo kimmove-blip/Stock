@@ -2120,8 +2120,8 @@ class AutoTrader:
         except Exception as e:
             print(f"  JSON 저장 실패: {e}")
 
-        # 4. 매수 후보 필터링 (점수 + 체결강도 조건)
-        print(f"\n[4] 매수 후보 필터링 중 ({score_version.upper()} >= {min_score}, 체결강도 >= 90)...")
+        # 4. 매수 후보 필터링 (점수 조건)
+        print(f"\n[4] 매수 후보 필터링 중 ({score_version.upper()} >= {min_score})...")
 
         candidates = []
         for stock in top_stocks:
@@ -2130,14 +2130,9 @@ class AutoTrader:
             score = scores.get(score_version, stock.get("score", 0))
             code = stock.get("code")
             name = stock.get("name")
-            buy_strength = stock.get("buy_strength", 0)
 
             # 점수 조건
             if score < min_score:
-                continue
-
-            # 체결강도 조건 (90 이상)
-            if buy_strength < 90:
                 continue
 
             # auto_trader 형식으로 변환
