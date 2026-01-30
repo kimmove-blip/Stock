@@ -1950,9 +1950,20 @@ class AutoTrader:
             user_settings = self.logger.get_auto_trade_settings(self.user_id) or {}
             sell_score = user_settings.get('sell_score', 40)
             score_version = user_settings.get('score_version', 'v5')
-            stop_loss_rate = user_settings.get('stop_loss_rate', 7.0)
+            stop_loss_rate = abs(user_settings.get('stop_loss_rate', 7.0))  # 절대값 사용
 
             print(f"\n[2] 보유 종목 매도 체크 중... (손절 -{stop_loss_rate}% 또는 {score_version.upper()} <= {sell_score}점)")
+
+            # 매도 블랙리스트 로드 (당일 매매 종목 보호)
+            sell_blacklist = set()
+            blacklist_file = Path(__file__).parent / f"sell_blacklist_{datetime.now().strftime('%Y%m%d')}.txt"
+            if blacklist_file.exists():
+                with open(blacklist_file, 'r') as f:
+                    for line in f:
+                        line = line.strip()
+                        if line and not line.startswith('#'):
+                            sell_blacklist.add(line.zfill(6))
+                print(f"  매도 블랙리스트: {len(sell_blacklist)}개 종목")
 
             # CSV에서 점수 로드
             scores_map = {}
@@ -1984,6 +1995,11 @@ class AutoTrader:
                 profit_rate = (current_price - avg_price) / avg_price * 100
                 current_score = scores_map.get(stock_code, 50)
                 sell_reasons = []
+
+                # 매도 블랙리스트 체크
+                if stock_code in sell_blacklist:
+                    print(f"    [{stock_name}] 블랙리스트 - 매도 제외")
+                    continue
 
                 # 손절 체크 (사용자 설정 stop_loss_rate 사용)
                 if profit_rate <= -stop_loss_rate:
