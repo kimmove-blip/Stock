@@ -2,10 +2,11 @@
 """
 10분 단위 전 종목 스코어 기록기
 
-- 10분마다 거래대금 30억+ 종목에 대해 V1~V9 스코어 계산
+- 10분마다 거래대금 30억+ 종목에 대해 V1~V5 스코어 계산
 - 주가, 거래량, 거래대금 등 지표 기록
 - output/intraday_scores/ 폴더에 CSV 저장
-- V9: 갭상승 확률 예측 (ML 모델)
+- V4: Hybrid Sniper 전략
+- V5: 장대양봉 전략
 - 한투 API 연동 시 체결강도, 외국인/기관 수급, 시장지수 추가
 
 사용법:
@@ -18,7 +19,6 @@ import os
 import sys
 import argparse
 import warnings
-import pickle
 import time
 from datetime import datetime
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -35,22 +35,13 @@ PROJECT_ROOT = Path(__file__).parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
 from scoring import SCORING_FUNCTIONS
-from scoring.score_v10_leader_follower import calculate_score_v10, load_reference as load_v10_reference
 
 # 설정
 OUTPUT_DIR = PROJECT_ROOT / "output" / "intraday_scores"
-V9_MODEL_PATH = PROJECT_ROOT / "models" / "gap_model_v9.pkl"
 MIN_MARKET_CAP = 30_000_000_000      # 300억
 MIN_TRADING_AMOUNT = 3_000_000_000   # 30억 (어제 기준)
 MAX_WORKERS = 40
-VERSIONS = ['v1', 'v2', 'v3.5', 'v4', 'v5', 'v6', 'v7', 'v8']
-
-# V10 모델 (전역 로드)
-V10_REFERENCE = None
-
-# V9 모델 (전역 로드)
-V9_MODEL = None
-V9_FEATURES = None
+VERSIONS = ['v1', 'v2', 'v4', 'v5']  # V1, V2, V4, V5만 사용
 
 # 한투 API 클라이언트 (전역)
 KIS_CLIENT = None
@@ -129,207 +120,6 @@ def get_kis_extra_data(code: str) -> dict:
         pass
 
     return result
-
-
-def load_v10_model():
-    """V10 레퍼런스 로드"""
-    global V10_REFERENCE
-    try:
-        V10_REFERENCE = load_v10_reference()
-        return V10_REFERENCE is not None
-    except Exception as e:
-        print(f"[경고] V10 레퍼런스 로드 실패: {e}")
-        return False
-
-
-def calculate_v10_scores(records: list) -> list:
-    """모든 종목에 대해 V10 스코어 계산"""
-    global V10_REFERENCE
-
-    if not V10_REFERENCE:
-        for r in records:
-            r['v10'] = 0
-        return records
-
-    # today_changes 딕셔너리 생성 (종목코드 -> 등락률)
-    today_changes = {r['code']: r['change_pct'] for r in records}
-
-    # 종속주 목록 (V10 레퍼런스에서)
-    follower_to_leaders = V10_REFERENCE.get('follower_to_leaders', {})
-
-    for r in records:
-        code = r['code']
-
-        # 이 종목이 종속주인지 확인
-        leaders = follower_to_leaders.get(code, [])
-
-        if not leaders:
-            r['v10'] = 0
-            continue
-
-        # 최적의 대장주 찾기
-        best_score = 0
-
-        for leader_info in leaders:
-            leader_code = leader_info.get('leader_code')
-            correlation = leader_info.get('correlation', 0)
-
-            leader_change = today_changes.get(leader_code, 0)
-            follower_change = r['change_pct']
-            gap = leader_change - follower_change
-
-            # 대장주 상승 + 종속주 미추종 조건
-            if leader_change >= 2.0 and gap > 1.0:
-                # 점수 계산 (간소화 버전)
-                score = 50
-
-                # 대장주 움직임 점수 (35점)
-                if leader_change >= 5:
-                    score += 35
-                elif leader_change >= 3:
-                    score += 25
-                else:
-                    score += 15
-
-                # 상관관계 점수 (25점)
-                if correlation >= 0.85:
-                    score += 25
-                elif correlation >= 0.75:
-                    score += 20
-                elif correlation >= 0.65:
-                    score += 15
-                else:
-                    score += 10
-
-                # 캐치업 갭 점수 (25점)
-                if gap >= 4:
-                    score += 25
-                elif gap >= 3:
-                    score += 20
-                elif gap >= 2:
-                    score += 15
-                else:
-                    score += 10
-
-                if score > best_score:
-                    best_score = score
-
-        r['v10'] = min(best_score, 100)  # 최대 100점
-
-    return records
-
-
-def load_v9_model():
-    """V9 모델 로드"""
-    global V9_MODEL, V9_FEATURES
-    try:
-        with open(V9_MODEL_PATH, 'rb') as f:
-            data = pickle.load(f)
-        V9_MODEL = data['model']
-        V9_FEATURES = data['features']
-        return True
-    except Exception as e:
-        print(f"[경고] V9 모델 로드 실패: {e}")
-        return False
-
-
-def calc_v9_features(df):
-    """V9 피처 계산 (FDR 컬럼명 사용: Open, High, Low, Close, Volume)"""
-    if len(df) < 21:
-        return None
-
-    idx = len(df) - 1
-    row = df.iloc[idx]
-    prev_rows = df.iloc[idx-20:idx]
-
-    o, h, l, c, v = row['Open'], row['High'], row['Low'], row['Close'], row['Volume']
-    if o == 0 or c == 0 or v == 0:
-        return None
-
-    f = {}
-    body = abs(c - o)
-    total_range = h - l if h > l else 1
-
-    f['close_pos'] = (c - l) / total_range if total_range > 0 else 0.5
-    f['close_high'] = (c - l) / (h - l) if h > l else 0.5
-    f['is_bull'] = 1 if c > o else 0
-    f['body_ratio'] = body / total_range if total_range > 0 else 0
-    f['upper_wick'] = (h - max(o, c)) / total_range if total_range > 0 else 0
-    f['lower_wick'] = (min(o, c) - l) / total_range if total_range > 0 else 0
-
-    prev_close = df.iloc[idx-1]['Close']
-    f['day_change'] = (c - prev_close) / prev_close * 100 if prev_close > 0 else 0
-
-    ma5 = prev_rows['Close'].tail(5).mean()
-    ma20 = prev_rows['Close'].mean()
-    f['dist_ma5'] = (c - ma5) / ma5 * 100 if ma5 > 0 else 0
-    f['dist_ma20'] = (c - ma20) / ma20 * 100 if ma20 > 0 else 0
-
-    avg_vol = prev_rows['Volume'].mean()
-    f['vol_ratio'] = v / avg_vol if avg_vol > 0 else 1
-
-    recent_vol = prev_rows['Volume'].tail(5).mean()
-    older_vol = prev_rows['Volume'].head(15).mean()
-    f['vol_declining'] = 1 if recent_vol < older_vol * 0.7 else 0
-
-    changes = prev_rows['Close'].diff()
-    gains = changes.where(changes > 0, 0).mean()
-    losses = (-changes.where(changes < 0, 0)).mean()
-    f['rsi'] = gains / (gains + losses) * 100 if gains + losses > 0 else 50
-    f['rsi_overbought'] = 1 if f['rsi'] > 70 else 0
-
-    recent_5 = df.iloc[idx-4:idx+1]
-    f['consec_bull'] = sum(1 for i in range(len(recent_5))
-                           if recent_5.iloc[i]['Close'] > recent_5.iloc[i]['Open'])
-
-    ma5_val = df.iloc[idx-4:idx+1]['Close'].mean()
-    ma10_val = df.iloc[idx-9:idx+1]['Close'].mean()
-    ma20_val = df.iloc[idx-19:idx+1]['Close'].mean()
-    f['aligned'] = 1 if c > ma5_val > ma10_val > ma20_val else 0
-
-    high_20d = prev_rows['High'].max()
-    low_20d = prev_rows['Low'].min()
-    f['near_high_20d'] = c / high_20d if high_20d > 0 else 0
-    f['from_low_20d'] = (c - low_20d) / low_20d * 100 if low_20d > 0 else 0
-
-    f['volatility'] = prev_rows['Close'].pct_change().std() * 100
-    f['trade_value'] = row['Volume'] * c / 100000000
-    f['is_surge'] = 1 if f['day_change'] >= 15 else 0
-
-    if idx >= 2:
-        prev_prev_close = df.iloc[idx-2]['Close']
-        two_day_change = (c - prev_prev_close) / prev_prev_close * 100
-        f['two_day_surge'] = 1 if two_day_change >= 20 else 0
-    else:
-        f['two_day_surge'] = 0
-
-    return f
-
-
-def predict_v9_prob(df) -> float:
-    """V9 갭상승 확률 예측"""
-    global V9_MODEL, V9_FEATURES
-
-    if V9_MODEL is None:
-        return 0.0
-
-    try:
-        features = calc_v9_features(df)
-        if features is None:
-            return 0.0
-
-        # 피처 필터링 (등락률, 거래대금)
-        if not (-15 <= features['day_change'] <= 25):
-            return 0.0
-        if features['trade_value'] < 50:  # 50억
-            return 0.0
-
-        # 예측
-        X = pd.DataFrame([features])[V9_FEATURES]
-        prob = V9_MODEL.predict_proba(X)[0][1]
-        return round(prob * 100, 1)
-    except:
-        return 0.0
 
 
 def get_filtered_stocks_path(date_str: str = None) -> Path:
@@ -441,7 +231,7 @@ def calculate_scores(df: pd.DataFrame) -> dict:
 
 
 def process_stock(stock_info: dict) -> dict:
-    """단일 종목 처리 - 데이터 1회 로드 후 V1~V9 모두 계산"""
+    """단일 종목 처리 - 데이터 1회 로드 후 V1~V5 모두 계산"""
     global USE_KIS_API, MARKET_INDEX
 
     code = stock_info['Code']
@@ -450,7 +240,7 @@ def process_stock(stock_info: dict) -> dict:
     stocks = stock_info.get('Stocks', 0)  # 발행주식수
 
     try:
-        # 데이터 1회만 로드 (V1~V9 공유)
+        # 데이터 1회만 로드 (V1~V5 공유)
         df = get_stock_data(code)
         if df is None or len(df) < 60:
             return None
@@ -479,9 +269,6 @@ def process_stock(stock_info: dict) -> dict:
         # V1~V8 스코어 계산 (같은 df 사용)
         scores, signals = calculate_scores(df)
 
-        # V9 갭상승 확률 계산 (같은 df 사용)
-        v9_prob = predict_v9_prob(df)
-
         result = {
             'code': code,
             'name': name,
@@ -498,13 +285,8 @@ def process_stock(stock_info: dict) -> dict:
             'prev_marcap': prev_marcap,  # 전일 시총
             'v1': scores.get('v1', 0),
             'v2': scores.get('v2', 0),
-            'v3.5': scores.get('v3.5', 0),
             'v4': scores.get('v4', 0),
             'v5': scores.get('v5', 0),
-            'v6': scores.get('v6', 0),
-            'v7': scores.get('v7', 0),
-            'v8': scores.get('v8', 0),
-            'v9_prob': v9_prob,
             'signals': ','.join(signals.get('v2', [])),
         }
 
@@ -542,11 +324,11 @@ def save_to_csv(records: list, recorded_at: datetime) -> str:
 
     df = pd.DataFrame(records)
 
-    # 컬럼 순서 정리 (체결강도, 수급, 상대강도, V10, volume_ratio 추가)
+    # 컬럼 순서 정리 (체결강도, 수급, 상대강도, volume_ratio 추가)
     columns = ['code', 'name', 'market', 'open', 'high', 'low', 'close', 'prev_close',
                'change_pct', 'volume', 'volume_ratio', 'prev_amount', 'prev_marcap',
                'buy_strength', 'foreign_net', 'inst_net', 'rel_strength',
-               'v1', 'v2', 'v3.5', 'v4', 'v5', 'v6', 'v7', 'v8', 'v9_prob', 'v10', 'signals']
+               'v1', 'v2', 'v4', 'v5', 'signals']
 
     # 존재하는 컬럼만 선택 (이전 버전 호환)
     columns = [c for c in columns if c in df.columns]
@@ -629,25 +411,10 @@ def main():
 
     recorded_at = datetime.now()
     print("=" * 60)
-    print(f"  전 종목 스코어 기록 (V1~V10) - {recorded_at.strftime('%Y-%m-%d %H:%M:%S')}")
+    print(f"  전 종목 스코어 기록 (V1, V2, V4, V5) - {recorded_at.strftime('%Y-%m-%d %H:%M:%S')}")
     if args.kis:
         print("  [한투 API 모드: 체결강도/수급 데이터 포함]")
     print("=" * 60)
-
-    # V9 모델 로드
-    print("\n[0] V9 모델 로드...")
-    if load_v9_model():
-        print(f"    완료: {len(V9_FEATURES)}개 피처")
-    else:
-        print("    실패 - V9 확률 0으로 처리")
-
-    # V10 레퍼런스 로드
-    print("\n[0.1] V10 레퍼런스 로드...")
-    if load_v10_model():
-        follower_count = len(V10_REFERENCE.get('follower_to_leaders', {}))
-        print(f"    완료: {follower_count}개 종속주 매핑")
-    else:
-        print("    실패 - V10 점수 0으로 처리")
 
     # 한투 API 초기화 (--kis 옵션)
     if args.kis:
@@ -667,7 +434,7 @@ def main():
     print(f"    {len(stocks_df)}개 종목")
 
     # 병렬 처리
-    print(f"\n[2] 스코어 계산 (V1~V8)...")
+    print(f"\n[2] 스코어 계산 (V1, V2, V4, V5)...")
     stocks = stocks_df.to_dict('records')
     records = []
 
@@ -686,12 +453,6 @@ def main():
 
     print(f"    완료: {len(records)}개 종목 처리")
 
-    # V10 스코어 계산 (모든 종목 등락률 필요)
-    print(f"\n[2.5] V10 스코어 계산 (Leader-Follower)...")
-    records = calculate_v10_scores(records)
-    v10_active = len([r for r in records if r.get('v10', 0) > 50])
-    print(f"    완료: {v10_active}개 종목 활성 시그널")
-
     # 저장
     if args.dry_run:
         print("\n[3] 드라이런 모드 - 저장 스킵")
@@ -699,19 +460,7 @@ def main():
         top10_v2 = sorted(records, key=lambda x: x['v2'], reverse=True)[:10]
         print("\n    V2 스코어 상위 10:")
         for r in top10_v2:
-            print(f"      {r['code']} {r['name']}: V2={r['v2']}, V4={r['v4']}, V9={r['v9_prob']}%")
-
-        # V9 상위 10개 출력
-        top10_v9 = sorted(records, key=lambda x: x['v9_prob'], reverse=True)[:10]
-        print("\n    V9 갭상승확률 상위 10:")
-        for r in top10_v9:
-            print(f"      {r['code']} {r['name']}: V9={r['v9_prob']}%, V2={r['v2']}")
-
-        # V10 상위 10개 출력
-        top10_v10 = sorted(records, key=lambda x: x.get('v10', 0), reverse=True)[:10]
-        print("\n    V10 Leader-Follower 상위 10:")
-        for r in top10_v10:
-            print(f"      {r['code']} {r['name']}: V10={r.get('v10', 0)}, 등락률={r['change_pct']:+.2f}%")
+            print(f"      {r['code']} {r['name']}: V2={r['v2']}, V4={r['v4']}, V5={r['v5']}")
     else:
         print("\n[3] CSV 저장...")
         filepath = save_to_csv(records, recorded_at)

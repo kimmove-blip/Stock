@@ -26,8 +26,8 @@ def get_daily_report_css():
         background: linear-gradient(135deg, #f6f9fc 0%, #eef2f7 100%);
         border: 1px solid #cbd5e0;
         border-radius: 8px;
-        padding: 15px;
-        margin: 15px 0;
+        padding: 10px;
+        margin: 8px 0;
     }
     .profit { color: #c53030; font-weight: bold; }
     .loss { color: #2b6cb0; font-weight: bold; }
@@ -51,7 +51,7 @@ def get_daily_report_css():
     }
     .account-table {
         width: 100%;
-        margin: 15px 0;
+        margin: 8px 0;
     }
     .account-table td:first-child {
         background-color: #edf2f7;
@@ -88,16 +88,17 @@ def get_daily_report_css():
         background: #f7fafc;
         border-radius: 8px;
     }
-    /* 페이지 나눔 방지 - 제목과 표가 같이 이동 */
+    /* 페이지 나눔 - 제목과 표 분리 허용, 행 단위 분리 방지 */
     .section {
-        page-break-inside: avoid;
-        break-inside: avoid;
+        margin-top: 10px;
     }
     h2 {
         page-break-after: avoid;
         break-after: avoid;
+        margin-top: 12px;
+        margin-bottom: 6px;
     }
-    table {
+    tr {
         page-break-inside: avoid;
         break-inside: avoid;
     }

@@ -218,7 +218,7 @@ export default function AutoTradeSettings() {
                     </button>
                   ))}
                 </div>
-                <p className="text-xs text-gray-500 mt-1">V5 장대양봉 전략 권장 (승률 67%)</p>
+                <p className="text-xs text-gray-500 mt-1">V2 추세 추종 전략 권장</p>
               </div>
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-2">

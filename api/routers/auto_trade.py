@@ -1261,7 +1261,7 @@ async def get_account(
 
         # holdings에 AI 점수 추가 (사용자 설정 버전 점수 사용)
         user_settings = logger.get_auto_trade_settings(current_user.get('id')) or {}
-        score_version = user_settings.get('score_version', 'v5')
+        score_version = user_settings.get('score_version', 'v2')
 
         scores_map = {}
         try:
@@ -1328,7 +1328,7 @@ class AutoTradeSettingsRequest(BaseModel):
     sell_score: int = 40  # 매도 점수 (이 점수 이하면 매도)
     trading_enabled: bool = True
     initial_investment: int = 0  # 초기 투자금
-    score_version: str = "v5"  # 스코어 버전 (v1, v2, v5)
+    score_version: str = "v2"  # 스코어 버전 (v1, v2, v5)
 
 
 @router.get("/settings")
@@ -1350,7 +1350,7 @@ async def get_settings(
         "sell_score": 40,
         "trading_enabled": True,
         "initial_investment": 0,
-        "score_version": "v5"
+        "score_version": "v2"
     }
 
     if not settings:
@@ -1828,7 +1828,7 @@ async def get_diagnosis(
 
     # 사용자 설정에서 score_version 조회 (없으면 v5 기본값)
     user_settings = logger.get_auto_trade_settings(current_user.get('id')) or {}
-    score_version = user_settings.get('score_version', 'v5')
+    score_version = user_settings.get('score_version', 'v2')
 
     # 장중 스코어 CSV에서 사용자 설정 버전 점수 가져오기
     scores_map = {}

@@ -194,7 +194,7 @@ class DatabaseManager:
         columns = [row[1] for row in cursor.fetchall()]
 
         if 'score_version' not in columns:
-            conn.execute("ALTER TABLE users ADD COLUMN score_version TEXT DEFAULT 'v5'")
+            conn.execute("ALTER TABLE users ADD COLUMN score_version TEXT DEFAULT 'v2'")
 
         conn.commit()
 
