@@ -780,7 +780,7 @@ class AutoTrader:
 
                 # 실현손익 = 매도금액 - 매수금액 - 수수료/세금
                 realized_profit = sell_amount - buy_amount - total_fees
-                realized_rate = realized_profit / buy_amount if buy_amount > 0 else 0
+                realized_rate = (realized_profit / buy_amount * 100) if buy_amount > 0 else 0  # 퍼센트로 저장
 
                 # 거래 기록
                 self.logger.log_order(
