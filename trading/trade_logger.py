@@ -1939,6 +1939,49 @@ class TradeLogger:
 
             return result
 
+    def get_avg_buy_prices(self, user_id: int, stock_codes: List[str]) -> Dict[str, float]:
+        """
+        종목별 평균 매수가 조회 (DB에서 최근 매수 내역 기준)
+
+        Args:
+            user_id: 사용자 ID
+            stock_codes: 종목 코드 리스트
+
+        Returns:
+            {stock_code: avg_price, ...}
+        """
+        if not stock_codes:
+            return {}
+
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            placeholders = ','.join(['?' for _ in stock_codes])
+
+            # 최근 30일 매수 내역에서 평균가 계산 (executed, ordered 모두 포함)
+            query = f"""
+                SELECT stock_code,
+                       SUM(price * quantity) as total_amount,
+                       SUM(quantity) as total_qty
+                FROM trade_log
+                WHERE user_id = ? AND side = 'buy'
+                  AND stock_code IN ({placeholders})
+                  AND status IN ('executed', 'ordered')
+                  AND trade_date >= date('now', '-30 days')
+                GROUP BY stock_code
+            """
+            cursor.execute(query, [user_id] + stock_codes)
+            rows = cursor.fetchall()
+
+            result = {}
+            for row in rows:
+                row_dict = dict(row)
+                code = row_dict.get('stock_code')
+                total_qty = row_dict.get('total_qty', 0)
+                if code and total_qty > 0:
+                    result[code] = row_dict.get('total_amount', 0) / total_qty
+
+            return result
+
     # ========== Green Light 모드 관련 메서드 ==========
 
     def get_llm_settings(self, user_id: int) -> Optional[Dict]:

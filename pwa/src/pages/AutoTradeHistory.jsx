@@ -55,19 +55,23 @@ export default function AutoTradeHistory() {
       } else {
         acc.sellCount++;
         acc.sellAmount += trade.amount || 0;
-        if (trade.profit_rate !== null) {
-          if (trade.profit_rate >= 0) {
+        if (trade.profit_loss !== null && trade.profit_loss !== undefined) {
+          if (trade.profit_loss >= 0) {
             acc.profitCount++;
+            acc.profitAmount += trade.profit_loss || 0;
           } else {
             acc.lossCount++;
+            acc.lossAmount += trade.profit_loss || 0;
           }
           acc.totalProfitRate += trade.profit_rate || 0;
+        } else {
+          acc.unknownCount++;  // 손익 미확인
         }
       }
       return acc;
     },
-    { buyCount: 0, sellCount: 0, buyAmount: 0, sellAmount: 0, profitCount: 0, lossCount: 0, totalProfitRate: 0 }
-  ) || { buyCount: 0, sellCount: 0, buyAmount: 0, sellAmount: 0, profitCount: 0, lossCount: 0, totalProfitRate: 0 };
+    { buyCount: 0, sellCount: 0, buyAmount: 0, sellAmount: 0, profitCount: 0, lossCount: 0, profitAmount: 0, lossAmount: 0, unknownCount: 0, totalProfitRate: 0 }
+  ) || { buyCount: 0, sellCount: 0, buyAmount: 0, sellAmount: 0, profitCount: 0, lossCount: 0, profitAmount: 0, lossAmount: 0, unknownCount: 0, totalProfitRate: 0 };
 
   if (isLoading) return <Loading text="거래 내역 불러오는 중..." />;
 
@@ -130,12 +134,19 @@ export default function AutoTradeHistory() {
           <div className="bg-green-50 rounded-lg p-3">
             <p className="text-xs text-green-600">수익</p>
             <p className="text-lg font-bold text-green-700">{summary.profitCount}건</p>
+            <p className="text-xs text-green-500">+{summary.profitAmount?.toLocaleString()}원</p>
           </div>
           <div className="bg-gray-50 rounded-lg p-3">
             <p className="text-xs text-gray-600">손실</p>
             <p className="text-lg font-bold text-gray-700">{summary.lossCount}건</p>
+            <p className="text-xs text-red-500">{summary.lossAmount?.toLocaleString()}원</p>
           </div>
         </div>
+        {summary.unknownCount > 0 && (
+          <p className="text-xs text-gray-400 mt-2 text-center">
+            * 손익 미확인 {summary.unknownCount}건 (매수 내역 없음)
+          </p>
+        )}
       </div>
 
       {/* 필터 */}
