@@ -199,11 +199,11 @@ if not predictions:
     log("매수 대상 종목 없음. 종료.")
     sys.exit(0)
 
-# 상위 5개만
-predictions = predictions[:5]
-log("    상위 5개:")
-for p in predictions:
-    log(f"      {p['ticker']} {p['name']} - 확률 {p['prob']*100:.1f}%")
+# 상위 10개만
+predictions = predictions[:10]
+log("    상위 10개:")
+for i, p in enumerate(predictions, 1):
+    log(f"      {i}. {p['ticker']} {p['name']} - 확률 {p['prob']*100:.4f}%")
 
 # =============================================================================
 # 5. 자동매매 계정 조회 및 매수 실행
@@ -256,17 +256,21 @@ for user_id, max_per_stock, trade_mode, app_key_enc, app_secret_enc, account_enc
 
         cash = balance.get('summary', {}).get('cash_balance', 0)
         log(f"    현금 잔고: {cash:,}원")
+        log(f"    종목당 최대투자: {max_per_stock:,}원")
 
-        # 종목당 투자금액
-        invest_per_stock = min(max_per_stock, cash // len(predictions))
-        if invest_per_stock < 50000:
-            log(f"    투자금액 부족 ({invest_per_stock:,}원)")
+        if cash < 50000:
+            log(f"    현금 부족, 스킵")
             continue
 
-        log(f"    종목당 투자: {invest_per_stock:,}원")
+        remaining_cash = cash
+        bought_count = 0
 
-        # 매수 실행 또는 제안
+        # 매수 실행 또는 제안 (순위대로, 종목당 max_per_stock까지)
         for p in predictions:
+            if remaining_cash < 50000:
+                log(f"    남은 현금 부족 ({remaining_cash:,}원), 매수 종료")
+                break
+
             ticker = p['ticker']
             name = p['name']
 
@@ -280,15 +284,18 @@ for user_id, max_per_stock, trade_mode, app_key_enc, app_secret_enc, account_enc
             if current_price <= 0:
                 continue
 
-            # 매수 수량 계산
-            quantity = invest_per_stock // current_price
+            # 투자금액: min(종목당한도, 남은현금)
+            invest_amount = min(max_per_stock, remaining_cash)
+            quantity = invest_amount // current_price
             if quantity <= 0:
                 log(f"    {name}: 매수 수량 0")
                 continue
 
+            actual_amount = quantity * current_price
+
             if trade_mode == 'auto':
                 # AUTO 모드: 자동 매수 주문
-                log(f"    {name}({ticker}): {quantity}주 @ {current_price:,}원 [자동매수]")
+                log(f"    {name}({ticker}): {quantity}주 @ {current_price:,}원 = {actual_amount:,}원 [자동매수]")
                 result = client.place_order(
                     stock_code=ticker,
                     side='buy',
@@ -307,14 +314,17 @@ for user_id, max_per_stock, trade_mode, app_key_enc, app_secret_enc, account_enc
                         quantity=quantity,
                         price=current_price,
                         order_no=result.get('order_no'),
-                        reason=f"V9 자동매매 (확률 {p['prob']*100:.1f}%)"
+                        reason=f"V9 자동매매 (확률 {p['prob']*100:.4f}%)"
                     )
+                    remaining_cash -= actual_amount
+                    bought_count += 1
+                    log(f"      → 남은 현금: {remaining_cash:,}원")
                 else:
                     log(f"      → 주문 실패: {result.get('error')}")
 
             else:
                 # SEMI 모드: 매수 제안만 등록
-                log(f"    {name}({ticker}): {quantity}주 @ {current_price:,}원 [제안등록]")
+                log(f"    {name}({ticker}): {quantity}주 @ {current_price:,}원 = {actual_amount:,}원 [제안등록]")
                 try:
                     trade_logger.add_buy_suggestion(
                         user_id=user_id,
@@ -322,16 +332,20 @@ for user_id, max_per_stock, trade_mode, app_key_enc, app_secret_enc, account_enc
                         stock_name=name,
                         target_price=current_price,
                         quantity=quantity,
-                        reason=f"V9 갭상승 확률 {p['prob']*100:.1f}%",
+                        reason=f"V9 갭상승 확률 {p['prob']*100:.4f}%",
                         score=int(p['prob'] * 100)
                     )
                     log(f"      → 제안 등록 완료")
+                    remaining_cash -= actual_amount
+                    bought_count += 1
                 except Exception as e:
                     log(f"      → 제안 등록 실패: {e}")
 
             # 주문 간 딜레이
             import time
             time.sleep(0.5)
+
+        log(f"    매수 완료: {bought_count}종목, 남은 현금: {remaining_cash:,}원")
 
     except Exception as e:
         log(f"    에러: {e}")
