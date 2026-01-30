@@ -2121,7 +2121,7 @@ class AutoTrader:
             print(f"  JSON 저장 실패: {e}")
 
         # 4. 매수 후보 필터링 (점수 + 체결강도 조건)
-        print(f"\n[4] 매수 후보 필터링 중 ({score_version.upper()} >= {min_score}, 체결강도 >= 100)...")
+        print(f"\n[4] 매수 후보 필터링 중 ({score_version.upper()} >= {min_score}, 체결강도 >= 90)...")
 
         candidates = []
         for stock in top_stocks:
@@ -2136,8 +2136,8 @@ class AutoTrader:
             if score < min_score:
                 continue
 
-            # 체결강도 조건 (100 이상 = 매수세 우위)
-            if buy_strength < 100:
+            # 체결강도 조건 (90 이상)
+            if buy_strength < 90:
                 continue
 
             # auto_trader 형식으로 변환
