@@ -247,37 +247,70 @@ def generate_daily_report_html(user_id: int, report_date: str = None, save_snaps
     except Exception:
         pass
 
-    # 전일 대비 증감
+    # 오늘 입금/출금 조회 (capital_events)
+    today_deposits = 0
+    today_withdrawals = 0
+    try:
+        with logger._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                SELECT event_type, SUM(amount) as total
+                FROM capital_events
+                WHERE user_id = ? AND event_date = ?
+                GROUP BY event_type
+            """, (user_id, report_date))
+            for row in cursor.fetchall():
+                if row['event_type'] == 'deposit':
+                    today_deposits = row['total'] or 0
+                elif row['event_type'] == 'withdrawal':
+                    today_withdrawals = row['total'] or 0
+    except Exception:
+        pass
+
+    # 전일 대비 증감 (입금/출금 반영)
     if prev_total_assets:
-        asset_diff = total_assets - prev_total_assets
+        # 실제 손익 = 오늘 자산 - 전일 자산 - 오늘 입금 + 오늘 출금
+        asset_diff = total_assets - prev_total_assets - today_deposits + today_withdrawals
         asset_diff_rate = (asset_diff / prev_total_assets * 100) if prev_total_assets > 0 else 0
-        asset_diff_str, asset_diff_cls = format_change(total_assets, prev_total_assets)
+        asset_diff_str = f"{asset_diff:+,}원"
+        asset_diff_cls = "change-positive" if asset_diff >= 0 else "change-negative"
     else:
         asset_diff = 0
         asset_diff_rate = 0
         asset_diff_str = "-"
         asset_diff_cls = ""
 
-    # 최초 투자 대비 증감 (auto_trade_settings에서 initial_investment 조회)
-    initial_investment = None
+    # 총 투자금 대비 실손익 (capital_events에서 총 입금/출금 계산)
+    total_invested_capital = 0
     try:
         with logger._get_connection() as conn:
             cursor = conn.cursor()
-            cursor.execute("SELECT initial_investment FROM auto_trade_settings WHERE user_id = ?", (user_id,))
-            row = cursor.fetchone()
-            if row and row['initial_investment']:
-                initial_investment = row['initial_investment']
+            cursor.execute("""
+                SELECT event_type, SUM(amount) as total
+                FROM capital_events
+                WHERE user_id = ?
+                GROUP BY event_type
+            """, (user_id,))
+            for row in cursor.fetchall():
+                if row['event_type'] == 'deposit':
+                    total_invested_capital += row['total'] or 0
+                elif row['event_type'] == 'withdrawal':
+                    total_invested_capital -= row['total'] or 0
     except Exception:
         pass
 
-    if initial_investment and initial_investment > 0:
-        initial_diff = total_assets - initial_investment
-        initial_diff_rate = (initial_diff / initial_investment * 100)
+    if total_invested_capital and total_invested_capital > 0:
+        # 실손익 = 현재 자산 - 총 투자금
+        initial_diff = total_assets - total_invested_capital
+        initial_diff_rate = (initial_diff / total_invested_capital * 100)
         initial_diff_cls = "change-positive" if initial_diff >= 0 else "change-negative"
     else:
         initial_diff = 0
         initial_diff_rate = 0
         initial_diff_cls = ""
+
+    # 변수명 호환성 (템플릿에서 사용)
+    initial_investment = total_invested_capital
 
     # 오늘 실현손익 계산 (매도 거래에서)
     realized_profit = sum((t.get('profit_loss') or 0) for t in today_sells)
@@ -497,16 +530,16 @@ def generate_daily_report_html(user_id: int, report_date: str = None, save_snaps
         </div>
         """
 
-    # 최초 투자 대비 박스
+    # 투자금 대비 실손익 박스
     if initial_investment and initial_investment > 0:
         initial_box_html = f"""
         <div class='summary-box' style='background: linear-gradient(135deg, #faf5ff 0%, #e9d8fd 100%); border-color: #9f7aea;'>
-            <strong style='font-size: 12pt;'>최초 투자 대비</strong><br>
+            <strong style='font-size: 12pt;'>투자금 대비 실손익</strong><br>
             <span style='font-size: 18pt; font-weight: bold;' class='{initial_diff_cls}'>
                 {initial_diff:+,.0f}원 ({initial_diff_rate:+.2f}%)
             </span><br>
             <span style='font-size: 9pt; color: #718096;'>
-                최초 {initial_investment:,}원 → 현재 {total_assets:,}원
+                총 투자 {initial_investment:,}원 → 현재 {total_assets:,}원
             </span>
         </div>
         """
