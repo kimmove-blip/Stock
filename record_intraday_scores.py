@@ -427,10 +427,10 @@ def run_auto_trader_all():
 
 
 def is_market_hours() -> bool:
-    """장 시간(09:00~15:20) 여부 확인"""
+    """장 시간(09:00~15:45) 여부 확인"""
     now = datetime.now()
     market_open = now.replace(hour=9, minute=0, second=0, microsecond=0)
-    market_close = now.replace(hour=15, minute=20, second=0, microsecond=0)
+    market_close = now.replace(hour=15, minute=45, second=0, microsecond=0)
     return market_open <= now <= market_close
 
 
