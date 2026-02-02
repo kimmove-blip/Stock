@@ -415,6 +415,51 @@ adjusted, multiplier, nasdaq_change = get_adjusted_investment_amount(200000)
 | `trading/nasdaq_monitor.py` | 나스닥 조회 및 조정계수 계산 |
 | `trading/risk_manager.py` | TradingLimits (max_holdings=20) |
 
+### auto_trader.py 구조 (리팩토링 완료)
+
+> `run_intraday` 메서드를 4개 헬퍼 메서드로 분리 (614줄 → 113줄)
+
+| 메서드 | 줄수 | 역할 |
+|--------|------|------|
+| `run_intraday` | 113 | 메인 흐름 제어 |
+| `_check_and_sell_holdings` | 125 | 보유종목 매도 체크 |
+| `_filter_buy_candidates` | 104 | 매수 후보 필터링 |
+| `_execute_intraday_buys` | 70 | 매수 주문 실행 |
+| `_save_screening_json` | 40 | JSON 저장 |
+
+### 개선된 매매 전략 (2026-02-02 분석 기반)
+
+> 분석 리포트: `output/score_validation_analysis_20260202.md`
+
+#### 매수 조건 (strategy='advanced')
+```python
+# V2 >= 75 (기존 70에서 상향)
+# V1 < 50 (역발상 - V1이 낮을수록 성과 좋음)
+# V4_DELTA <= 0 (V4 상승 중인 종목 제외)
+# 11시 이후 매수 (오전 매수 성과 나쁨)
+```
+
+#### 매도 조건 (V5 기반 홀딩)
+```python
+# V5 >= 60 → 홀딩 (분석결과 +12.50% 추가상승)
+# V4 >= 55 또는 V2 >= 60 → 홀딩
+# V4 < 40 → 매도
+# V2 < 50 AND V4 < 45 → 매도
+# 손절: -7%
+```
+
+#### 장마감 정리매도 (15:00~)
+```python
+# V5 >= 60 → 홀딩 유지 (강한 신호)
+# V5 < 60 → 정리매도
+```
+
+#### 기대 효과
+| 구분 | 이전 | 개선 후 |
+|------|------|---------|
+| 매수 승률 | 23.7% | 50~57% |
+| 평균 수익률 | -1.75% | +0.5~2.0% |
+
 ---
 
 ## 한국투자증권 Open API
@@ -594,6 +639,159 @@ if is_before_market:
 else:
     change_rate = cached.get('change_rate') or stock.get('change_pct')
 ```
+
+---
+
+## AI 에이전트 시스템
+
+> Claude Code Task 도구를 활용한 주식 분석/예측 전문 서브에이전트 시스템
+
+### 에이전트 구조
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                     Stock Orchestrator                           │
+│                    (작업 분배 및 결과 통합)                        │
+└───────────────────────────┬─────────────────────────────────────┘
+                            │
+        ┌───────────────────┼───────────────────┐
+        ▼                   ▼                   ▼
+┌───────────────┐  ┌───────────────┐  ┌───────────────┐
+│  Data Agents  │  │Analysis Agents│  │Execution Agents│
+│  (데이터 수집) │  │  (분석/예측)   │  │   (매매 실행)  │
+└───────────────┘  └───────────────┘  └───────────────┘
+```
+
+### 에이전트 유형
+
+| 유형 | 에이전트 | 설명 |
+|------|----------|------|
+| **Data** | market-data | 실시간 시세, OHLCV 수집 |
+| | investor-flow | 외국인/기관 수급 분석 |
+| | macro | 나스닥, 환율, 매크로 지표 |
+| **Analysis** | technical | 기술적 분석 (MA, RSI, MACD) |
+| | scoring | V1~V10 스코어 계산 |
+| | pattern | 차트 패턴 감지 (VCP, 장대양봉) |
+| | sector | 섹터/테마, 대장주-종속주 |
+| | prediction | ML 갭상승 예측 (V9) |
+| **Strategy** | signal | 매수/매도 신호 생성 |
+| | risk | 리스크 평가, 손절가 |
+| | portfolio | 포트폴리오 최적화 |
+| **Execution** | order | 주문 실행 |
+| | monitor | 보유종목 모니터링 |
+| | report | 리포트 생성 |
+
+### 에이전트 CLI 사용법
+
+> 에이전트를 명령줄에서 직접 실행할 수 있습니다.
+
+```bash
+cd /home/kimhc/Stock && source venv/bin/activate
+
+# 개별 에이전트 실행
+python -m agents.cli scoring 005930      # V1~V10 스코어 계산
+python -m agents.cli technical 005930    # 기술적 분석 (MA/RSI/BB)
+python -m agents.cli pattern 005930      # 패턴 감지 (VCP/OBV/눌림목)
+python -m agents.cli signal 005930       # 매매 신호 (BUY/HOLD/SELL)
+python -m agents.cli risk 005930         # 리스크 평가, 손절가
+python -m agents.cli investor 005930     # 수급 분석 (외국인/기관)
+python -m agents.cli macro               # 매크로 환경 (나스닥)
+python -m agents.cli monitor 005930,000660  # 보유종목 모니터링
+python -m agents.cli report 005930       # 종목 분석 리포트
+
+# 종합 분석 (전체 파이프라인)
+python -m agents.cli analyze 005930 --pretty
+```
+
+#### CLI 옵션
+
+| 옵션 | 설명 |
+|------|------|
+| `--pretty`, `-p` | JSON 포맷팅 (읽기 쉽게) |
+| `--version`, `-v` | 스코어 버전 지정 (scoring용) |
+
+#### 출력 예시
+
+```bash
+$ python -m agents.cli signal 005930 --pretty
+{
+  "agent": "SignalAgent",
+  "stock_code": "005930",
+  "stock_name": "삼성전자",
+  "signal": {
+    "total_score": 58.5,
+    "decision": "HOLD",
+    "confidence": 0.55,
+    "knockout": null
+  }
+}
+```
+
+### Claude Code Task 연동
+
+```python
+# Claude Code에서 에이전트 호출
+Task(
+    subagent_type="general-purpose",
+    prompt="python -m agents.cli signal 005930 실행하고 결과 해석해줘"
+)
+```
+
+### 프롬프트 파일 위치
+
+```
+agents/
+├── prompts/
+│   ├── scoring_agent.md      # V1~V10 스코어링
+│   ├── technical_agent.md    # 기술적 분석
+│   ├── signal_agent.md       # 매매 신호
+│   ├── pattern_agent.md      # 패턴 감지
+│   ├── sector_agent.md       # 섹터/테마
+│   ├── prediction_agent.md   # ML 예측
+│   ├── risk_agent.md         # 리스크 평가
+│   ├── portfolio_agent.md    # 포트폴리오
+│   ├── market_data_agent.md  # 시세 수집
+│   ├── investor_flow_agent.md # 수급 분석
+│   ├── macro_agent.md        # 매크로
+│   ├── order_agent.md        # 주문 실행
+│   ├── monitor_agent.md      # 모니터링
+│   └── report_agent.md       # 리포트
+├── schemas/
+│   └── analysis_output.json  # 출력 스키마
+├── orchestrator.py           # 에이전트 조율
+└── __init__.py
+```
+
+### 종합 분석 파이프라인
+
+1. **MarketDataAgent**: 시세 데이터 수집
+2. **TechnicalAgent**: 기술적 분석 (병렬)
+3. **ScoringAgent**: V1~V10 스코어 계산 (병렬)
+4. **PatternAgent**: 차트 패턴 감지 (병렬)
+5. **InvestorFlowAgent**: 수급 분석 (선택)
+6. **SignalAgent**: 최종 매매 신호 생성
+
+### 출력 형식 (JSON 스키마)
+
+모든 에이전트는 표준화된 JSON 형식으로 결과를 반환합니다.
+스키마 정의: `agents/schemas/analysis_output.json`
+
+```json
+{
+  "stock_code": "005930",
+  "scores": {"v1": 65, "v2": 53, "v4": 43, "v5": 29},
+  "signals": ["정배열", "RSI 중립"],
+  "recommendation": "HOLD",
+  "confidence": 0.65
+}
+```
+
+### 에이전트 사용 팁
+
+1. **병렬 호출**: 독립적인 분석은 병렬로 실행
+2. **프롬프트 참조**: 각 에이전트 프롬프트 파일에 상세 가이드
+3. **결과 통합**: SignalAgent가 모든 분석 결과를 종합
+4. **리스크 확인**: 매매 전 RiskAgent로 검증
 
 ---
 
