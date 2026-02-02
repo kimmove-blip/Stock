@@ -207,9 +207,10 @@ def get_stock_data(code: str, days: int = 120) -> pd.DataFrame:
 
 
 def calculate_scores(df: pd.DataFrame) -> dict:
-    """V1~V8 스코어 계산"""
+    """V1~V5 스코어 및 지표 계산"""
     scores = {}
     signals = {}
+    indicators = {}
 
     for version in VERSIONS:
         try:
@@ -220,6 +221,26 @@ def calculate_scores(df: pd.DataFrame) -> dict:
                     scores[version] = result.get('score', 0)
                     if version == 'v2':
                         signals['v2'] = result.get('signals', [])[:5]
+                        # V2 지표
+                        ind = result.get('indicators', {})
+                        indicators['rsi'] = round(ind.get('rsi', 0), 1)
+                        indicators['sma20_slope'] = round(ind.get('sma20_slope', 0), 2)
+                        indicators['volume_ratio'] = round(ind.get('volume_ratio', 0), 2)
+                        indicators['trading_value_억'] = round(ind.get('trading_value_억', 0), 1)
+                        indicators['high_60d_pct'] = round(ind.get('high_60d_pct', 0), 2)
+                    elif version == 'v4':
+                        # V4 지표
+                        ind = result.get('indicators', {})
+                        patterns = result.get('patterns', [])
+                        indicators['v4_vcp'] = 1 if 'VCP' in patterns else 0
+                        indicators['v4_obv_div'] = 1 if 'OBV_DIV' in patterns else 0
+                        indicators['v4_stochrsi'] = round(ind.get('stoch_rsi_k', 0), 1)
+                    elif version == 'v5':
+                        # V5 지표
+                        indicators['v5_pullback'] = result.get('pullback_score', 0)
+                        indicators['v5_bb'] = result.get('bollinger_score', 0)
+                        indicators['v5_ma'] = result.get('ma_score', 0)
+                        indicators['v5_obv'] = result.get('obv_score', 0)
                 else:
                     scores[version] = 0
             else:
@@ -227,7 +248,7 @@ def calculate_scores(df: pd.DataFrame) -> dict:
         except:
             scores[version] = 0
 
-    return scores, signals
+    return scores, signals, indicators
 
 
 def process_stock(stock_info: dict) -> dict:
@@ -266,8 +287,8 @@ def process_stock(stock_info: dict) -> dict:
         current_volume = int(latest.get('Volume', 0))
         volume_ratio = round(current_volume / avg_volume_5d, 2) if avg_volume_5d > 0 else 1.0
 
-        # V1~V8 스코어 계산 (같은 df 사용)
-        scores, signals = calculate_scores(df)
+        # V1~V5 스코어 계산 (같은 df 사용)
+        scores, signals, indicators = calculate_scores(df)
 
         result = {
             'code': code,
@@ -283,10 +304,26 @@ def process_stock(stock_info: dict) -> dict:
             'volume_ratio': volume_ratio,  # 5일 평균 대비 거래량 비율
             'prev_amount': prev_amount,  # 전일 거래대금
             'prev_marcap': prev_marcap,  # 전일 시총
+            # 스코어
             'v1': scores.get('v1', 0),
             'v2': scores.get('v2', 0),
             'v4': scores.get('v4', 0),
             'v5': scores.get('v5', 0),
+            # V2 지표
+            'rsi': indicators.get('rsi', 0),
+            'sma20_slope': indicators.get('sma20_slope', 0),
+            'trading_value_억': indicators.get('trading_value_억', 0),
+            'high_60d_pct': indicators.get('high_60d_pct', 0),
+            # V4 지표
+            'v4_vcp': indicators.get('v4_vcp', 0),
+            'v4_obv_div': indicators.get('v4_obv_div', 0),
+            'v4_stochrsi': indicators.get('v4_stochrsi', 0),
+            # V5 지표
+            'v5_pullback': indicators.get('v5_pullback', 0),
+            'v5_bb': indicators.get('v5_bb', 0),
+            'v5_ma': indicators.get('v5_ma', 0),
+            'v5_obv': indicators.get('v5_obv', 0),
+            # 시그널
             'signals': ','.join(signals.get('v2', [])),
         }
 
@@ -324,11 +361,18 @@ def save_to_csv(records: list, recorded_at: datetime) -> str:
 
     df = pd.DataFrame(records)
 
-    # 컬럼 순서 정리 (체결강도, 수급, 상대강도, volume_ratio 추가)
+    # 컬럼 순서 정리 (체결강도, 수급, 상대강도, volume_ratio, 지표 추가)
     columns = ['code', 'name', 'market', 'open', 'high', 'low', 'close', 'prev_close',
                'change_pct', 'volume', 'volume_ratio', 'prev_amount', 'prev_marcap',
                'buy_strength', 'foreign_net', 'inst_net', 'rel_strength',
-               'v1', 'v2', 'v4', 'v5', 'signals']
+               'v1', 'v2', 'v4', 'v5',
+               # V2 지표
+               'rsi', 'sma20_slope', 'trading_value_억', 'high_60d_pct',
+               # V4 지표
+               'v4_vcp', 'v4_obv_div', 'v4_stochrsi',
+               # V5 지표
+               'v5_pullback', 'v5_bb', 'v5_ma', 'v5_obv',
+               'signals']
 
     # 존재하는 컬럼만 선택 (이전 버전 호환)
     columns = [c for c in columns if c in df.columns]
