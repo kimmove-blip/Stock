@@ -1,0 +1,280 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Stock Analysis Output Schema",
+  "description": "주식 분석 에이전트 출력 표준 스키마",
+  "definitions": {
+    "scoring_output": {
+      "type": "object",
+      "properties": {
+        "stock_code": {"type": "string", "pattern": "^[0-9]{6}$"},
+        "stock_name": {"type": "string"},
+        "calculated_at": {"type": "string", "format": "date-time"},
+        "scores": {
+          "type": "object",
+          "properties": {
+            "v1": {"type": "integer", "minimum": 0, "maximum": 100},
+            "v2": {"type": "integer", "minimum": 0, "maximum": 100},
+            "v4": {"type": "integer", "minimum": 0, "maximum": 100},
+            "v5": {"type": "integer", "minimum": 0, "maximum": 100},
+            "v9_prob": {"type": "number", "minimum": 0, "maximum": 1},
+            "v10": {"type": ["integer", "null"], "minimum": 0, "maximum": 100}
+          }
+        },
+        "signals": {
+          "type": "array",
+          "items": {"type": "string"}
+        },
+        "recommendation": {
+          "type": "string",
+          "enum": ["STRONG_BUY", "BUY", "HOLD", "WEAK_SELL", "SELL"]
+        },
+        "confidence": {"type": "number", "minimum": 0, "maximum": 1}
+      },
+      "required": ["stock_code", "scores", "recommendation"]
+    },
+    "technical_output": {
+      "type": "object",
+      "properties": {
+        "stock_code": {"type": "string"},
+        "stock_name": {"type": "string"},
+        "price": {
+          "type": "object",
+          "properties": {
+            "current": {"type": "integer"},
+            "change_pct": {"type": "number"},
+            "high_52w": {"type": "integer"},
+            "low_52w": {"type": "integer"}
+          }
+        },
+        "moving_averages": {
+          "type": "object",
+          "properties": {
+            "sma5": {"type": "number"},
+            "sma20": {"type": "number"},
+            "sma60": {"type": "number"},
+            "status": {"type": "string", "enum": ["aligned", "reverse_aligned", "partial"]},
+            "sma20_slope": {"type": "number"},
+            "distance_to_sma20": {"type": "number"}
+          }
+        },
+        "momentum": {
+          "type": "object",
+          "properties": {
+            "rsi": {"type": "number"},
+            "rsi_zone": {"type": "string"},
+            "macd": {"type": "number"},
+            "macd_signal": {"type": "number"},
+            "macd_histogram": {"type": "number"}
+          }
+        },
+        "volatility": {
+          "type": "object",
+          "properties": {
+            "bb_position": {"type": "number"},
+            "bb_width": {"type": "number"},
+            "atr": {"type": "number"}
+          }
+        },
+        "volume": {
+          "type": "object",
+          "properties": {
+            "current": {"type": "integer"},
+            "vol_ratio": {"type": "number"},
+            "trading_value_억": {"type": "number"},
+            "level": {"type": "string"}
+          }
+        },
+        "signals": {
+          "type": "object",
+          "properties": {
+            "buy": {"type": "array", "items": {"type": "string"}},
+            "sell": {"type": "array", "items": {"type": "string"}},
+            "overall": {"type": "string", "enum": ["BULLISH", "BEARISH", "NEUTRAL"]}
+          }
+        }
+      },
+      "required": ["stock_code", "price", "momentum"]
+    },
+    "signal_output": {
+      "type": "object",
+      "properties": {
+        "stock_code": {"type": "string"},
+        "stock_name": {"type": "string"},
+        "generated_at": {"type": "string", "format": "date-time"},
+        "analysis": {
+          "type": "object",
+          "properties": {
+            "scoring": {
+              "type": "object",
+              "properties": {
+                "v2_score": {"type": "integer"},
+                "weight": {"type": "number"},
+                "weighted_score": {"type": "number"}
+              }
+            },
+            "technical": {
+              "type": "object",
+              "properties": {
+                "score": {"type": "integer"},
+                "weight": {"type": "number"},
+                "weighted_score": {"type": "number"}
+              }
+            },
+            "supply_demand": {
+              "type": "object",
+              "properties": {
+                "score": {"type": "integer"},
+                "weight": {"type": "number"},
+                "weighted_score": {"type": "number"}
+              }
+            },
+            "pattern": {
+              "type": "object",
+              "properties": {
+                "score": {"type": "integer"},
+                "weight": {"type": "number"},
+                "weighted_score": {"type": "number"}
+              }
+            }
+          }
+        },
+        "signal": {
+          "type": "object",
+          "properties": {
+            "total_score": {"type": "number"},
+            "decision": {"type": "string", "enum": ["STRONG_BUY", "BUY", "HOLD", "WEAK_SELL", "SELL"]},
+            "confidence": {"type": "number"},
+            "knockout": {"type": ["string", "null"]}
+          }
+        },
+        "action_plan": {
+          "type": "object",
+          "properties": {
+            "entry_price": {"type": ["integer", "null"]},
+            "target_price": {"type": ["integer", "null"]},
+            "stop_loss": {"type": ["integer", "null"]},
+            "position_size": {"type": ["integer", "null"]},
+            "holding_period": {"type": ["string", "null"]}
+          }
+        },
+        "reasons": {"type": "array", "items": {"type": "string"}},
+        "risks": {"type": "array", "items": {"type": "string"}}
+      },
+      "required": ["stock_code", "signal"]
+    },
+    "risk_output": {
+      "type": "object",
+      "properties": {
+        "stock_code": {"type": "string"},
+        "stock_name": {"type": "string"},
+        "analyzed_at": {"type": "string", "format": "date-time"},
+        "risk_metrics": {
+          "type": "object",
+          "properties": {
+            "volatility_20d": {"type": "number"},
+            "volatility_60d": {"type": "number"},
+            "mdd_60d": {"type": "number"},
+            "avg_trading_value_억": {"type": "number"},
+            "liquidity_risk": {"type": "string", "enum": ["LOW", "MEDIUM", "HIGH"]}
+          }
+        },
+        "risk_score": {"type": "integer", "minimum": 0, "maximum": 100},
+        "risk_level": {"type": "string", "enum": ["LOW", "MEDIUM", "HIGH", "CRITICAL"]},
+        "position_sizing": {
+          "type": "object",
+          "properties": {
+            "base_amount": {"type": "integer"},
+            "nasdaq_multiplier": {"type": "number"},
+            "adjusted_amount": {"type": "integer"},
+            "max_per_stock_pct": {"type": "number"},
+            "final_amount": {"type": "integer"}
+          }
+        },
+        "stop_loss": {
+          "type": "object",
+          "properties": {
+            "recommended": {"type": "integer"},
+            "recommended_pct": {"type": "number"}
+          }
+        }
+      },
+      "required": ["stock_code", "risk_score", "risk_level"]
+    },
+    "portfolio_output": {
+      "type": "object",
+      "properties": {
+        "analyzed_at": {"type": "string", "format": "date-time"},
+        "portfolio_summary": {
+          "type": "object",
+          "properties": {
+            "total_value": {"type": "integer"},
+            "cash": {"type": "integer"},
+            "invested": {"type": "integer"},
+            "cash_ratio": {"type": "number"},
+            "holdings_count": {"type": "integer"}
+          }
+        },
+        "holdings": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "code": {"type": "string"},
+              "name": {"type": "string"},
+              "quantity": {"type": "integer"},
+              "value": {"type": "integer"},
+              "weight": {"type": "number"},
+              "profit_pct": {"type": "number"},
+              "sector": {"type": "string"},
+              "v2_score": {"type": "integer"},
+              "action": {"type": "string", "enum": ["HOLD", "REVIEW", "SELL"]}
+            }
+          }
+        },
+        "sector_allocation": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "object",
+            "properties": {
+              "current": {"type": "number"},
+              "target": {"type": "number"},
+              "diff": {"type": "number"}
+            }
+          }
+        },
+        "rebalancing_actions": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "sector": {"type": "string"},
+              "action": {"type": "string", "enum": ["BUY", "SELL", "INCREASE", "DECREASE"]},
+              "amount": {"type": "integer"},
+              "reason": {"type": "string"}
+            }
+          }
+        },
+        "recommendations": {"type": "array", "items": {"type": "string"}}
+      },
+      "required": ["portfolio_summary", "holdings"]
+    },
+    "order_output": {
+      "type": "object",
+      "properties": {
+        "order_id": {"type": "string"},
+        "status": {"type": "string", "enum": ["SUBMITTED", "PARTIAL", "FILLED", "CANCELLED", "REJECTED"]},
+        "stock_code": {"type": "string"},
+        "stock_name": {"type": "string"},
+        "order_type": {"type": "string", "enum": ["BUY", "SELL"]},
+        "quantity": {"type": "integer"},
+        "price": {"type": "integer"},
+        "order_amount": {"type": "integer"},
+        "submitted_at": {"type": "string", "format": "date-time"},
+        "filled_quantity": {"type": "integer"},
+        "filled_price": {"type": "integer"},
+        "message": {"type": "string"}
+      },
+      "required": ["order_id", "status", "stock_code", "order_type"]
+    }
+  }
+}
