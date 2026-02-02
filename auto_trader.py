@@ -182,11 +182,9 @@ def should_buy_advanced(scores: dict, current_hour: int, use_time_filter: bool =
     """
     개선된 매수 조건 판단 함수 (분석 결과 기반)
 
-    조건:
-    - V2 >= 75 (기존 70에서 상향)
-    - V1 < 50 (역발상 - V1이 낮을수록 성과 좋음)
-    - V4_DELTA <= 0 (V4 상승 중인 종목 제외)
-    - 11시 이후 매수 (오전 매수 성과 나쁨)
+    시간대별 전략:
+    - 09~10시 (오전): 보수적 전략 - V2 >= 80 AND V4 >= 50
+    - 11시 이후: 기본 전략 - V2 >= 75, V1 < 50, V4Δ <= 0
 
     Args:
         scores: {'v1': x, 'v2': y, 'v4': z, 'v5': w, 'v4_delta': d, ...}
@@ -198,21 +196,28 @@ def should_buy_advanced(scores: dict, current_hour: int, use_time_filter: bool =
     """
     v2 = scores.get('v2', 0)
     v1 = scores.get('v1', 50)
+    v4 = scores.get('v4', 0)
     v4_delta = scores.get('v4_delta', 0)
 
+    # 오전 전략 (09~10시): 보수적 - V2 >= 80 AND V4 >= 50
+    if current_hour < 11:
+        if v2 >= 80 and v4 >= 50:
+            return True, f"[오전보수] V2={v2}>=80, V4={v4}>=50"
+        else:
+            if v2 < 80:
+                return False, f"V2={v2}<80 (오전)"
+            return False, f"V4={v4}<50 (오전)"
+
+    # 11시 이후 기본 전략
     # 1. V2 기본 조건 (75 이상)
     if v2 < 75:
         return False, f"V2={v2}<75"
 
-    # 2. 시간 필터 (11시 이전 매수 금지)
-    if use_time_filter and current_hour < 11:
-        return False, f"시간={current_hour}시<11시"
-
-    # 3. V1 역발상 조건 (V1 < 50)
+    # 2. V1 역발상 조건 (V1 < 50)
     if v1 >= 50:
         return False, f"V1={v1}>=50 (역발상조건 미충족)"
 
-    # 4. V4 안정/하락 확인 (V4_DELTA <= 0)
+    # 3. V4 안정/하락 확인 (V4_DELTA <= 0)
     if v4_delta > 0:
         return False, f"V4델타={v4_delta}>0 (급등중 제외)"
 
@@ -2449,7 +2454,10 @@ class AutoTrader:
         if self.buy_conditions:
             print(f"\n[4] 매수 후보 필터링 중 (커스텀 조건)...")
         elif use_advanced:
-            print(f"\n[4] 매수 후보 필터링 중 (개선조건: V2>=75, V1<50, V4델타<=0, 11시이후)...")
+            if hour < 11:
+                print(f"\n[4] 매수 후보 필터링 중 (오전보수: V2>=80, V4>=50)...")
+            else:
+                print(f"\n[4] 매수 후보 필터링 중 (기본: V2>=75, V1<50, V4델타<=0)...")
         else:
             print(f"\n[4] 매수 후보 필터링 중 ({score_version.upper()}>={min_score})...")
 
@@ -2466,8 +2474,10 @@ class AutoTrader:
             # 델타 병합
             if code in scores_with_delta:
                 delta = scores_with_delta[code]
-                scores['v4_delta'] = delta.get('v4_delta', 0)
                 scores['v1_delta'] = delta.get('v1_delta', 0)
+                scores['v2_delta'] = delta.get('v2_delta', 0)
+                scores['v4_delta'] = delta.get('v4_delta', 0)
+                scores['v5_delta'] = delta.get('v5_delta', 0)
                 scores['change_delta'] = delta.get('change_delta', 0)
 
             # 점수 조건

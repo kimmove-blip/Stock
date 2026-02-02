@@ -427,16 +427,23 @@ adjusted, multiplier, nasdaq_change = get_adjusted_investment_amount(200000)
 | `_execute_intraday_buys` | 70 | 매수 주문 실행 |
 | `_save_screening_json` | 40 | JSON 저장 |
 
-### 개선된 매매 전략 (2026-02-02 분석 기반)
+### 개선된 매매 전략 (2026-02-03 적용)
 
-> 분석 리포트: `output/score_validation_analysis_20260202.md`
+> 시간대별 전략 분리
 
 #### 매수 조건 (strategy='advanced')
+
+**오전 전략 (09:10~10:55) - 보수적**
 ```python
-# V2 >= 75 (기존 70에서 상향)
+# V2 >= 80 (고점수만)
+# V4 >= 50 (안정적 수급)
+```
+
+**기본 전략 (11:00~15:10)**
+```python
+# V2 >= 75
 # V1 < 50 (역발상 - V1이 낮을수록 성과 좋음)
 # V4_DELTA <= 0 (V4 상승 중인 종목 제외)
-# 11시 이후 매수 (오전 매수 성과 나쁨)
 ```
 
 #### 매도 조건 (V5 기반 홀딩)
@@ -453,12 +460,6 @@ adjusted, multiplier, nasdaq_change = get_adjusted_investment_amount(200000)
 # V5 >= 60 → 홀딩 유지 (강한 신호)
 # V5 < 60 → 정리매도
 ```
-
-#### 기대 효과
-| 구분 | 이전 | 개선 후 |
-|------|------|---------|
-| 매수 승률 | 23.7% | 50~57% |
-| 평균 수익률 | -1.75% | +0.5~2.0% |
 
 ---
 
