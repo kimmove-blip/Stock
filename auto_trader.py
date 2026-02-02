@@ -43,6 +43,10 @@ def parse_condition(condition_str: str) -> list:
     """
     조건 문자열을 파싱하여 조건 리스트로 변환
     예: "V1>=60 AND V5>=50 AND V4>40" -> [{'score': 'v1', 'op': '>=', 'value': 60, 'connector': 'AND'}, ...]
+
+    확장 지원:
+    - 델타 조건: V4_DELTA<=0, CHANGE_DELTA<0
+    - 음수 값: V4_DELTA>=-5
     """
     import re
     if not condition_str:
@@ -57,21 +61,34 @@ def parse_condition(condition_str: str) -> list:
         if part.upper() in ('AND', 'OR'):
             current_connector = part.upper()
         else:
-            match = re.match(r'^(V\d+)\s*(>=|<=|>|<|=)\s*(\d+)$', part, re.IGNORECASE)
-            if match:
+            # 델타 조건 (V4_DELTA<=0, CHANGE_DELTA<0 등)
+            delta_match = re.match(r'^(V\d+_DELTA|CHANGE_DELTA)\s*(>=|<=|>|<|=)\s*(-?\d+\.?\d*)$', part, re.IGNORECASE)
+            if delta_match:
                 conditions.append({
-                    'score': match.group(1).lower(),  # v1, v2, v4, v5
-                    'op': match.group(2),
-                    'value': int(match.group(3)),
+                    'score': delta_match.group(1).lower(),  # v4_delta, change_delta
+                    'op': delta_match.group(2),
+                    'value': float(delta_match.group(3)),
                     'connector': current_connector
                 })
+            else:
+                # 기존 스코어 조건 (V1>=60 등)
+                match = re.match(r'^(V\d+)\s*(>=|<=|>|<|=)\s*(\d+)$', part, re.IGNORECASE)
+                if match:
+                    conditions.append({
+                        'score': match.group(1).lower(),  # v1, v2, v4, v5
+                        'op': match.group(2),
+                        'value': int(match.group(3)),
+                        'connector': current_connector
+                    })
     return conditions
 
 
 def evaluate_conditions(conditions: list, scores: dict) -> bool:
     """
     조건 리스트를 스코어 딕셔너리로 평가
-    scores: {'v1': 70, 'v2': 60, 'v4': 45, 'v5': 55}
+    scores: {'v1': 70, 'v2': 60, 'v4': 45, 'v5': 55, 'v4_delta': -2, 'change_delta': -0.5}
+
+    델타 키 지원: v4_delta, v1_delta, v2_delta, v5_delta, change_delta
     """
     if not conditions:
         return False
@@ -115,6 +132,155 @@ def evaluate_conditions(conditions: list, scores: dict) -> bool:
             final = final or results[i + 1]
 
     return final
+
+
+def check_hold_condition(scores: dict, profit_rate: float, stop_loss_rate: float = 7.0) -> tuple:
+    """
+    개선된 매도/홀딩 판단 함수
+
+    Args:
+        scores: {'v1': x, 'v2': y, 'v4': z, 'v5': w, 'v4_delta': d, ...}
+        profit_rate: 현재 수익률 (%)
+        stop_loss_rate: 손절 기준 (%)
+
+    Returns:
+        (should_sell: bool, reason: str)
+    """
+    v5 = scores.get('v5', 50)
+    v4 = scores.get('v4', 50)
+    v2 = scores.get('v2', 50)
+
+    # 1. 강제 손절 (스코어 무관)
+    if profit_rate <= -stop_loss_rate:
+        return True, f"손절 ({profit_rate:.1f}% <= -{stop_loss_rate}%)"
+
+    # 2. V5 >= 60이면 홀딩 (추가 상승 가능)
+    if v5 >= 60:
+        return False, f"V5={v5}>=60 홀딩 (추가상승여력)"
+
+    # 3. V4 >= 55이면 홀딩
+    if v4 >= 55:
+        return False, f"V4={v4}>=55 홀딩"
+
+    # 4. V2 >= 60이면 홀딩
+    if v2 >= 60:
+        return False, f"V2={v2}>=60 홀딩"
+
+    # 5. 매도 조건: V4 < 40
+    if v4 < 40:
+        return True, f"V4={v4}<40 매도"
+
+    # 6. 매도 조건: V2 < 50 AND V4 < 45
+    if v2 < 50 and v4 < 45:
+        return True, f"V2={v2}<50 & V4={v4}<45 매도"
+
+    # 7. 기본 홀딩
+    return False, "조건미충족 홀딩"
+
+
+def should_buy_advanced(scores: dict, current_hour: int, use_time_filter: bool = True) -> tuple:
+    """
+    개선된 매수 조건 판단 함수 (분석 결과 기반)
+
+    조건:
+    - V2 >= 75 (기존 70에서 상향)
+    - V1 < 50 (역발상 - V1이 낮을수록 성과 좋음)
+    - V4_DELTA <= 0 (V4 상승 중인 종목 제외)
+    - 11시 이후 매수 (오전 매수 성과 나쁨)
+
+    Args:
+        scores: {'v1': x, 'v2': y, 'v4': z, 'v5': w, 'v4_delta': d, ...}
+        current_hour: 현재 시간 (9~15)
+        use_time_filter: 시간 필터 사용 여부
+
+    Returns:
+        (should_buy: bool, reason: str)
+    """
+    v2 = scores.get('v2', 0)
+    v1 = scores.get('v1', 50)
+    v4_delta = scores.get('v4_delta', 0)
+
+    # 1. V2 기본 조건 (75 이상)
+    if v2 < 75:
+        return False, f"V2={v2}<75"
+
+    # 2. 시간 필터 (11시 이전 매수 금지)
+    if use_time_filter and current_hour < 11:
+        return False, f"시간={current_hour}시<11시"
+
+    # 3. V1 역발상 조건 (V1 < 50)
+    if v1 >= 50:
+        return False, f"V1={v1}>=50 (역발상조건 미충족)"
+
+    # 4. V4 안정/하락 확인 (V4_DELTA <= 0)
+    if v4_delta > 0:
+        return False, f"V4델타={v4_delta}>0 (급등중 제외)"
+
+    # 모든 조건 충족
+    return True, f"V2={v2}, V1={v1}<50, V4델타={v4_delta}<=0"
+
+
+def load_scores_with_delta() -> dict:
+    """
+    최근 2개 CSV 파일을 로드하여 스코어와 델타를 계산
+
+    Returns:
+        {code: {'v1': x, 'v2': y, 'v4': z, 'v5': w,
+                'v1_delta': d1, 'v2_delta': d2, 'v4_delta': d4, 'v5_delta': d5,
+                'change_pct': c, 'change_delta': cd}}
+    """
+    import glob
+    import pandas as pd
+
+    scores_map = {}
+
+    try:
+        score_files = sorted(glob.glob(str(INTRADAY_SCORES_DIR / "*.csv")))
+        if not score_files:
+            return scores_map
+
+        # 최신 CSV
+        latest_csv = score_files[-1]
+        df_curr = pd.read_csv(latest_csv)
+        df_curr['code'] = df_curr['code'].astype(str).str.zfill(6)
+
+        # 이전 CSV (있으면)
+        df_prev = None
+        if len(score_files) >= 2:
+            prev_csv = score_files[-2]
+            df_prev = pd.read_csv(prev_csv)
+            df_prev['code'] = df_prev['code'].astype(str).str.zfill(6)
+            df_prev = df_prev.set_index('code')
+
+        # 스코어 및 델타 계산
+        for _, row in df_curr.iterrows():
+            code = row['code']
+            v1 = int(row.get('v1', 0))
+            v2 = int(row.get('v2', 0))
+            v4 = int(row.get('v4', 0))
+            v5 = int(row.get('v5', 0))
+            change_pct = float(row.get('change_pct', 0))
+
+            scores_map[code] = {
+                'v1': v1, 'v2': v2, 'v4': v4, 'v5': v5,
+                'change_pct': change_pct,
+                'v1_delta': 0, 'v2_delta': 0, 'v4_delta': 0, 'v5_delta': 0,
+                'change_delta': 0,
+            }
+
+            # 델타 계산
+            if df_prev is not None and code in df_prev.index:
+                prev = df_prev.loc[code]
+                scores_map[code]['v1_delta'] = v1 - int(prev.get('v1', v1))
+                scores_map[code]['v2_delta'] = v2 - int(prev.get('v2', v2))
+                scores_map[code]['v4_delta'] = v4 - int(prev.get('v4', v4))
+                scores_map[code]['v5_delta'] = v5 - int(prev.get('v5', v5))
+                scores_map[code]['change_delta'] = change_pct - float(prev.get('change_pct', change_pct))
+
+    except Exception as e:
+        print(f"  델타 스코어 로드 실패: {e}")
+
+    return scores_map
 
 
 def load_scores_from_csv(max_age_minutes: int = 15) -> Optional[Tuple[List[Dict], Dict]]:
@@ -1978,9 +2144,19 @@ class AutoTrader:
             screening_result: (top_stocks, stats) 튜플. 전달 시 스크리닝 건너뜀
             trade_mode: auto 또는 semi
             score_version: 스코어 버전 (v1, v2, v5)
-            strategy: 전략 (simple, v1_composite, custom)
+            strategy: 전략 유형
+                - simple: 단순 점수 기반 (score_version >= min_score)
+                - v1_composite: V1 복합 조건
+                - advanced: 개선된 조건 (V2>=75, V1<50, V4델타<=0, 11시 이후)
+                - custom: buy_conditions 사용
             buy_conditions: 매수 조건 문자열 (예: "V1>=60 AND V5>=50 AND V4>40")
+                - 델타 조건 지원: "V4_DELTA<=0 AND CHANGE_DELTA<0"
             sell_conditions: 매도 조건 문자열 (예: "V4<=30 OR V1<=40")
+                - 비어있으면 개선된 V5 기반 홀딩 로직 사용
+
+        개선된 매수/매도 로직 (2026-02-02 분석 기반):
+            매수: V2>=75 AND V1<50 AND V4델타<=0 AND 11시 이후
+            매도: V5>=60이면 홀딩, V4<40이면 매도
 
         cron 예시: */10 9-14 * * 1-5 /path/to/python auto_trader.py --intraday
         """
@@ -2054,27 +2230,29 @@ class AutoTrader:
             else:
                 print(f"\n[2] 보유 종목 매도 체크 중... (손절 -{stop_loss_rate}% 또는 {score_version.upper()} <= {sell_score}점)")
 
-            # CSV에서 점수 로드 (전체 스코어)
-            scores_map = {}  # {code: {'v1': x, 'v2': y, 'v4': z, 'v5': w}}
-            try:
-                import glob
-                import pandas as pd
-                score_files = sorted(glob.glob(str(INTRADAY_SCORES_DIR / "*.csv")))
-                if score_files:
-                    latest_csv = score_files[-1]
-                    df = pd.read_csv(latest_csv)
-                    df['code'] = df['code'].astype(str).str.zfill(6)
-                    for _, row in df.iterrows():
-                        scores_map[row['code']] = {
-                            'v1': int(row.get('v1', 0)),
-                            'v2': int(row.get('v2', 0)),
-                            'v4': int(row.get('v4', 0)),
-                            'v5': int(row.get('v5', 0)),
-                        }
-            except Exception as e:
-                print(f"  점수 로드 실패: {e}")
+            # CSV에서 점수 및 델타 로드
+            scores_map = load_scores_with_delta()
+            if not scores_map:
+                # 폴백: 기존 방식으로 로드
+                try:
+                    import glob
+                    score_files = sorted(glob.glob(str(INTRADAY_SCORES_DIR / "*.csv")))
+                    if score_files:
+                        latest_csv = score_files[-1]
+                        df = pd.read_csv(latest_csv)
+                        df['code'] = df['code'].astype(str).str.zfill(6)
+                        for _, row in df.iterrows():
+                            scores_map[row['code']] = {
+                                'v1': int(row.get('v1', 0)),
+                                'v2': int(row.get('v2', 0)),
+                                'v4': int(row.get('v4', 0)),
+                                'v5': int(row.get('v5', 0)),
+                            }
+                except Exception as e:
+                    print(f"  점수 로드 실패: {e}")
 
             sell_list = []
+            hold_list = []  # 홀딩 사유 출력용
             for h in holdings:
                 stock_code = h["stock_code"]
                 stock_name = h.get("stock_name", stock_code)
@@ -2090,30 +2268,43 @@ class AutoTrader:
                 current_score = stock_scores.get(score_version, 50)
                 sell_reasons = []
 
-                # 손절 체크 (사용자 설정 stop_loss_rate 사용)
-                if profit_rate <= -stop_loss_rate:
-                    sell_reasons.append(f"손절 ({profit_rate:.1f}% <= -{stop_loss_rate}%)")
-
-                # 15:00 장마감 정리: 매수조건 미충족시 매도
-                if is_closing_time:
-                    if self.buy_conditions:
-                        # 커스텀 매수조건 미충족시 매도
-                        if not evaluate_conditions(self.buy_conditions, stock_scores):
-                            cond_detail = f"V1={stock_scores['v1']}, V4={stock_scores['v4']}, V5={stock_scores['v5']}"
-                            sell_reasons.append(f"장마감정리 매수조건 미충족 ({cond_detail})")
+                # === 개선된 홀딩/매도 판단 (V5 기반) ===
+                # 커스텀 sell_conditions가 없으면 개선된 로직 사용
+                if not self.sell_conditions and not is_closing_time:
+                    should_sell, reason = check_hold_condition(stock_scores, profit_rate, stop_loss_rate)
+                    if should_sell:
+                        sell_reasons.append(reason)
                     else:
-                        # 기존 방식: 점수 <= (min_buy_score + 5)
-                        hold_score = min_buy_score + 5
-                        if current_score <= hold_score:
-                            sell_reasons.append(f"장마감정리 {score_version.upper()} {current_score}점 <= {hold_score}점")
-                # 커스텀 매도 조건 사용 (sell_conditions 설정 시)
-                elif self.sell_conditions:
-                    if evaluate_conditions(self.sell_conditions, stock_scores):
-                        cond_detail = f"V1={stock_scores['v1']}, V4={stock_scores['v4']}, V5={stock_scores['v5']}"
-                        sell_reasons.append(f"매도조건 충족 ({cond_detail})")
-                # 일반 점수 기반 매도 (sell_score 이하) - 폴백
-                elif current_score <= sell_score:
-                    sell_reasons.append(f"{score_version.upper()} {current_score}점 <= {sell_score}점")
+                        # 홀딩 사유 기록
+                        hold_list.append(f"{stock_name}: {reason}")
+                        continue  # 매도 안함
+                else:
+                    # === 기존 로직 (커스텀 조건 또는 장마감 시) ===
+                    # 손절 체크 (사용자 설정 stop_loss_rate 사용)
+                    if profit_rate <= -stop_loss_rate:
+                        sell_reasons.append(f"손절 ({profit_rate:.1f}% <= -{stop_loss_rate}%)")
+
+                    # 15:00 장마감 정리: 강한 신호가 아니면 매도
+                    if is_closing_time:
+                        v5 = stock_scores.get('v5', 0)
+                        v2 = stock_scores.get('v2', 0)
+
+                        # 아주 강한 신호: V5>=60 (분석 결과 +12.50% 추가 상승)
+                        if v5 >= 60:
+                            hold_list.append(f"{stock_name}: 장마감 V5={v5}>=60 강한신호 홀딩")
+                            continue  # 매도 안함
+
+                        # 그 외: 정리매도
+                        cond_detail = f"V2={v2}, V5={v5}"
+                        sell_reasons.append(f"장마감정리 ({cond_detail}, V5<60)")
+                    # 커스텀 매도 조건 사용 (sell_conditions 설정 시)
+                    elif self.sell_conditions:
+                        if evaluate_conditions(self.sell_conditions, stock_scores):
+                            cond_detail = f"V1={stock_scores['v1']}, V4={stock_scores['v4']}, V5={stock_scores['v5']}"
+                            sell_reasons.append(f"매도조건 충족 ({cond_detail})")
+                    # 일반 점수 기반 매도 (sell_score 이하) - 폴백
+                    elif current_score <= sell_score:
+                        sell_reasons.append(f"{score_version.upper()} {current_score}점 <= {sell_score}점")
 
                 if sell_reasons:
                     sell_list.append({
@@ -2138,6 +2329,14 @@ class AutoTrader:
                     print("  [DRY-RUN] 실제 매도 실행 안함")
             else:
                 print("  매도 대상 없음")
+
+            # 홀딩 종목 출력 (V5 기반 개선 로직 사용 시)
+            if hold_list:
+                print(f"  홀딩 유지: {len(hold_list)}개")
+                for hold_reason in hold_list[:5]:  # 최대 5개만 출력
+                    print(f"    - {hold_reason}")
+                if len(hold_list) > 5:
+                    print(f"    ... 외 {len(hold_list) - 5}개")
 
         # 보유 종목 수 체크 제거 - 슬롯 무제한
         remaining_slots = 9999  # 무제한
@@ -2267,15 +2466,28 @@ class AutoTrader:
         else:
             min_volume_ratio = 1.0  # 14시 이후: 100%
 
+        # 개선된 전략 사용 여부 (strategy='advanced' 또는 buy_conditions 비어있을 때)
+        use_advanced = (strategy == 'advanced') or (not self.buy_conditions and not buy_conditions)
+
+        # 델타 스코어 로드 (개선된 전략 사용 시)
+        scores_with_delta = {}
+        if use_advanced:
+            scores_with_delta = load_scores_with_delta()
+            if scores_with_delta:
+                print(f"  델타 스코어 로드: {len(scores_with_delta)}개 종목")
+
         # 전략별 필터링 조건 출력
         if self.buy_conditions:
             cond_str = buy_conditions if buy_conditions else f"{score_version.upper()}>={min_score}"
             print(f"\n[4] 매수 후보 필터링 중 (조건: {cond_str}, 거래량 >= {min_volume_ratio:.0%})...")
+        elif use_advanced:
+            print(f"\n[4] 매수 후보 필터링 중 (개선조건: V2>=75, V1<50, V4델타<=0, {hour}시>={11 if hour < 11 else hour}시)...")
         else:
             print(f"\n[4] 매수 후보 필터링 중 ({score_version.upper()} >= {min_score}, 거래량 >= {min_volume_ratio:.0%})...")
 
         candidates = []
         volume_filtered_count = 0
+        advanced_filtered_reasons = {}  # 개선조건 미충족 사유 통계
         for stock in top_stocks:
             # 사용자의 score_version에 따른 점수 사용
             scores = stock.get("scores", {})
@@ -2283,6 +2495,14 @@ class AutoTrader:
             code = stock.get("code")
             name = stock.get("name")
             volume_ratio = stock.get("volume_ratio", 0)
+
+            # 델타 값 병합 (있으면)
+            if code in scores_with_delta:
+                delta_data = scores_with_delta[code]
+                scores['v4_delta'] = delta_data.get('v4_delta', 0)
+                scores['v1_delta'] = delta_data.get('v1_delta', 0)
+                scores['v2_delta'] = delta_data.get('v2_delta', 0)
+                scores['change_delta'] = delta_data.get('change_delta', 0)
 
             # 전략별 점수 조건
             if self.buy_conditions:
@@ -2292,6 +2512,15 @@ class AutoTrader:
                 # 정렬용 점수는 첫 번째 조건의 스코어 사용
                 first_score_key = self.buy_conditions[0]['score'] if self.buy_conditions else 'v1'
                 score = scores.get(first_score_key, 0)
+            elif use_advanced:
+                # 개선된 매수 조건 사용
+                should_buy, reason = should_buy_advanced(scores, hour, use_time_filter=True)
+                if not should_buy:
+                    # 사유별 카운트
+                    key = reason.split('=')[0] if '=' in reason else reason
+                    advanced_filtered_reasons[key] = advanced_filtered_reasons.get(key, 0) + 1
+                    continue
+                score = scores.get('v2', 0)  # 정렬용 점수는 V2
             else:
                 # 단순 전략: score_version >= min_score
                 if score < min_score:
@@ -2317,10 +2546,19 @@ class AutoTrader:
 
         # 점수순 정렬 (동점 시 거래대금 많은 순)
         candidates.sort(key=lambda x: (x["score"], x.get("amount", 0)), reverse=True)
+
+        # 개선조건 미충족 사유 출력
+        if use_advanced and advanced_filtered_reasons:
+            print(f"  개선조건 미충족 사유:")
+            for reason_key, count in sorted(advanced_filtered_reasons.items(), key=lambda x: -x[1])[:5]:
+                print(f"    - {reason_key}: {count}개")
+
         if volume_filtered_count > 0:
             print(f"  거래량 부족으로 제외: {volume_filtered_count}개")
         if strategy == 'v1_composite':
             print(f"  최종 V1복합 매수조건 충족 후보: {len(candidates)}개")
+        elif use_advanced:
+            print(f"  최종 개선조건 충족 후보: {len(candidates)}개")
         else:
             print(f"  최종 {min_score}점 이상 후보: {len(candidates)}개")
 
