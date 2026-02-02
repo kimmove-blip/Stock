@@ -59,40 +59,83 @@ def main():
         is_mock=is_mock
     )
 
-    # 잔고 조회 API 직접 호출
+    # 잔고 조회 API 직접 호출 (페이지네이션 지원)
     token = client._get_access_token()
-    headers = {
-        "Content-Type": "application/json; charset=utf-8",
-        "authorization": f"Bearer {token}",
-        "appkey": client.app_key,
-        "appsecret": client.app_secret,
-        "tr_id": "VTTC8434R" if is_mock else "TTTC8434R",
-    }
 
-    params = {
-        "CANO": api_key_data.get('account_number'),
-        "ACNT_PRDT_CD": "01",
-        "AFHR_FLPR_YN": "N",
-        "OFL_YN": "",
-        "INQR_DVSN": "02",
-        "UNPR_DVSN": "01",
-        "FUND_STTL_ICLD_YN": "N",
-        "FNCG_AMT_AUTO_RDPT_YN": "N",
-        "PRCS_DVSN": "00",
-        "CTX_AREA_FK100": "",
-        "CTX_AREA_NK100": "",
-    }
+    all_holdings = []
+    ctx_area_fk100 = ""
+    ctx_area_nk100 = ""
+    page = 1
+    account_summary = None
 
-    resp = requests.get(
-        f"{client.BASE_URL}/uapi/domestic-stock/v1/trading/inquire-balance",
-        headers=headers,
-        params=params
-    )
-    data = resp.json()
+    import time
 
-    # output2: 계좌 요약
-    if data.get('output2'):
-        s = data['output2'][0] if isinstance(data['output2'], list) else data['output2']
+    while True:
+        headers = {
+            "Content-Type": "application/json; charset=utf-8",
+            "authorization": f"Bearer {token}",
+            "appkey": client.app_key,
+            "appsecret": client.app_secret,
+            "tr_id": "VTTC8434R" if is_mock else "TTTC8434R",
+            "tr_cont": "" if page == 1 else "N",  # 첫 요청은 빈값, 이후는 N
+        }
+
+        params = {
+            "CANO": api_key_data.get('account_number'),
+            "ACNT_PRDT_CD": "01",
+            "AFHR_FLPR_YN": "N",
+            "OFL_YN": "",
+            "INQR_DVSN": "02",
+            "UNPR_DVSN": "01",
+            "FUND_STTL_ICLD_YN": "N",
+            "FNCG_AMT_AUTO_RDPT_YN": "N",
+            "PRCS_DVSN": "00",
+            "CTX_AREA_FK100": ctx_area_fk100,
+            "CTX_AREA_NK100": ctx_area_nk100,
+        }
+
+        resp = requests.get(
+            f"{client.BASE_URL}/uapi/domestic-stock/v1/trading/inquire-balance",
+            headers=headers,
+            params=params
+        )
+        data = resp.json()
+
+        # 응답 헤더에서 연속조회 여부 확인
+        tr_cont = resp.headers.get('tr_cont', '')
+
+        # output1: 보유종목, output2: 계좌요약 (실전/모의 동일)
+        # 계좌 요약 (첫 페이지에서만 저장)
+        if page == 1 and data.get('output2'):
+            summary_data = data['output2']
+            account_summary = summary_data[0] if isinstance(summary_data, list) else summary_data
+
+        # 보유종목 추가
+        holdings = data.get('output1', [])
+        all_holdings.extend(holdings)
+
+        # 연속조회 키 업데이트
+        ctx_area_fk100 = data.get('ctx_area_fk100', '').strip()
+        ctx_area_nk100 = data.get('ctx_area_nk100', '').strip()
+
+        print(f"  페이지 {page}: {len(holdings)}건 조회 (tr_cont={tr_cont}, fk={ctx_area_fk100[:10] if ctx_area_fk100 else 'N/A'})")
+
+        # 연속조회 종료 조건
+        # tr_cont가 'M' 또는 'F'이고, ctx_area_fk100이 있으면 계속 조회
+        # tr_cont='D'는 Done (마지막 페이지)
+        if tr_cont not in ('M', 'F') or not ctx_area_fk100:
+            break
+
+        page += 1
+        if page > 10:  # 무한루프 방지
+            print("  경고: 최대 페이지 도달")
+            break
+
+        time.sleep(0.5)  # 속도 제한
+
+    # 계좌 요약 출력
+    if account_summary:
+        s = account_summary
         print(f"\n=== 계좌 요약 ===")
         print(f"D+2 예수금: {int(s.get('nxdy_excc_amt', 0)):,}원")
         print(f"출금가능금액: {int(s.get('prvs_rcdl_excc_amt', 0)):,}원")
@@ -104,9 +147,8 @@ def main():
     # 스코어 로드
     scores_map = load_scores()
 
-    # output1: 보유종목
-    holdings = data.get('output1', [])
-    active = [h for h in holdings if int(h.get('hldg_qty', 0)) > 0]
+    # 보유종목 필터 (수량 > 0)
+    active = [h for h in all_holdings if int(h.get('hldg_qty', 0)) > 0]
 
     if active:
         print(f"\n=== 보유종목 ({len(active)}개) ===")
