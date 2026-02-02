@@ -6,7 +6,7 @@ V2 점수 계산 로직 - 추세 추종 강화판
 점수 체계 (100점 만점, 스케일링 없음):
 - 추세 (30점): 정배열 +5, 20일선 기울기 최대 +15, MACD +3, Supertrend +7
 - 모멘텀 (35점): RSI 60~75 +15, 60일 신고가 돌파 +15
-- 수급 (35점): 거래량 5배 +20, 회전율(거래대금/시총) 5%+ +15
+- 수급 (35점): 거래량 5배 +20, 거래대금 500억 +15
 
 핵심 변경 (vs V1):
 - 과매도(RSI<30) → 감점 (떨어지는 칼날)
@@ -40,10 +40,10 @@ V2 점수 계산 로직 - 추세 추종 강화판
 │ 거래량 ≥ 5배                      │ +20  │
 │ 거래량 ≥ 3배                      │ +12  │
 │ 거래량 ≥ 2배                      │ +5   │
-│ 회전율 ≥ 5% (거래대금/시총)        │ +15  │
-│ 회전율 ≥ 2%                       │ +10  │
-│ 회전율 ≥ 1%                       │ +3   │
-│ 회전율 < 0.2%                     │ -5   │
+│ 거래대금 ≥ 500억                  │ +15  │
+│ 거래대금 ≥ 100억                  │ +10  │
+│ 거래대금 ≥ 30억                   │ +3   │
+│ 거래대금 < 10억                   │ -5   │
 └──────────────────────────────────┴──────┘
 """
 
@@ -73,14 +73,12 @@ def calculate_projected_volume(curr_vol: int) -> int:
     return int(curr_vol * projection_factor)
 
 
-def calculate_score_v2(df: pd.DataFrame, market_cap: float = None, prev_trading_value: float = None) -> Optional[Dict]:
+def calculate_score_v2(df: pd.DataFrame) -> Optional[Dict]:
     """
     V2 점수 계산 (추세 추종 강화판)
 
     Args:
         df: OHLCV 데이터프레임 (최소 60일)
-        market_cap: 시가총액 (원). 회전율 계산에 사용. None이면 거래대금 기반 점수 사용
-        prev_trading_value: 전일 거래대금 (원). 장 초반에 사용
 
     Returns:
         {
@@ -114,19 +112,8 @@ def calculate_score_v2(df: pd.DataFrame, market_cap: float = None, prev_trading_
         result['indicators']['change_pct'] = ((curr['Close'] - prev['Close']) / prev['Close']) * 100
         result['indicators']['volume'] = curr['Volume']
 
-        # 거래대금 (장 초반에는 예상 거래대금 또는 전일 거래대금 사용)
-        curr_trading_value = curr['Close'] * curr['Volume']
-        projected_trading_value = curr['Close'] * calculate_projected_volume(int(curr['Volume']))
-
-        # 장 초반(10시 전)이고 예상 거래대금이 전일 거래대금보다 작으면 전일 거래대금 사용
-        now = datetime.now()
-        if now.hour < 10 and prev_trading_value and projected_trading_value < prev_trading_value:
-            trading_value = prev_trading_value
-            result['indicators']['trading_value_source'] = 'prev_day'
-        else:
-            trading_value = projected_trading_value
-            result['indicators']['trading_value_source'] = 'projected'
-
+        # 거래대금
+        trading_value = curr['Close'] * curr['Volume']
         result['indicators']['trading_value'] = trading_value
         result['indicators']['trading_value_억'] = trading_value / 100_000_000
 
@@ -275,37 +262,19 @@ def calculate_score_v2(df: pd.DataFrame, market_cap: float = None, prev_trading_
             volume_score += 5
             result['signals'].append('VOLUME_HIGH')
 
-        # 회전율 기반 수급 점수 (거래대금/시총)
-        if market_cap and market_cap > 0:
-            turnover = (trading_value / market_cap) * 100  # 회전율 %
-            result['indicators']['turnover'] = turnover
-
-            if turnover >= 5.0:
-                volume_score += 15
-                result['signals'].append('TURNOVER_HIGH_5PCT')
-            elif turnover >= 2.0:
-                volume_score += 10
-                result['signals'].append('TURNOVER_MID_2PCT')
-            elif turnover >= 1.0:
-                volume_score += 3
-                result['signals'].append('TURNOVER_LOW_1PCT')
-            elif turnover < 0.2:
-                volume_score -= 5
-                result['signals'].append('TURNOVER_VERY_LOW')
-        else:
-            # 시총 정보 없으면 기존 거래대금 기준 (하위 호환)
-            if trading_value >= 50_000_000_000:
-                volume_score += 15
-                result['signals'].append('TRADING_VALUE_500B')
-            elif trading_value >= 10_000_000_000:
-                volume_score += 10
-                result['signals'].append('TRADING_VALUE_100B')
-            elif trading_value >= 3_000_000_000:
-                volume_score += 3
-                result['signals'].append('TRADING_VALUE_30B')
-            elif trading_value < 1_000_000_000:
-                volume_score -= 5
-                result['signals'].append('LOW_LIQUIDITY')
+        # 거래대금 필터 (잡주 필터링)
+        if trading_value >= 50_000_000_000:
+            volume_score += 15
+            result['signals'].append('TRADING_VALUE_500B')
+        elif trading_value >= 10_000_000_000:
+            volume_score += 10
+            result['signals'].append('TRADING_VALUE_100B')
+        elif trading_value >= 3_000_000_000:
+            volume_score += 3
+            result['signals'].append('TRADING_VALUE_30B')
+        elif trading_value < 1_000_000_000:
+            volume_score -= 5
+            result['signals'].append('LOW_LIQUIDITY')
 
         volume_score = min(35, max(-10, volume_score))
         result['volume_score'] = volume_score
