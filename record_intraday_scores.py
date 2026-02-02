@@ -206,7 +206,7 @@ def get_stock_data(code: str, days: int = 120) -> pd.DataFrame:
         return None
 
 
-def calculate_scores(df: pd.DataFrame, market_cap: float = None) -> dict:
+def calculate_scores(df: pd.DataFrame, market_cap: float = None, prev_trading_value: float = None) -> dict:
     """V1~V8 스코어 계산"""
     scores = {}
     signals = {}
@@ -215,9 +215,9 @@ def calculate_scores(df: pd.DataFrame, market_cap: float = None) -> dict:
         try:
             func = SCORING_FUNCTIONS.get(version)
             if func:
-                # v2는 market_cap 파라미터 지원 (회전율 계산)
+                # v2는 market_cap, prev_trading_value 파라미터 지원 (회전율 계산)
                 if version == 'v2' and market_cap:
-                    result = func(df, market_cap=market_cap)
+                    result = func(df, market_cap=market_cap, prev_trading_value=prev_trading_value)
                 else:
                     result = func(df)
                 if result:
@@ -271,7 +271,7 @@ def process_stock(stock_info: dict) -> dict:
         volume_ratio = round(current_volume / avg_volume_5d, 2) if avg_volume_5d > 0 else 1.0
 
         # V1~V8 스코어 계산 (같은 df 사용, v2는 시총 기반 회전율)
-        scores, signals = calculate_scores(df, market_cap=prev_marcap)
+        scores, signals = calculate_scores(df, market_cap=prev_marcap, prev_trading_value=prev_amount)
 
         result = {
             'code': code,

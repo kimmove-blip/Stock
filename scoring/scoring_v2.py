@@ -73,13 +73,14 @@ def calculate_projected_volume(curr_vol: int) -> int:
     return int(curr_vol * projection_factor)
 
 
-def calculate_score_v2(df: pd.DataFrame, market_cap: float = None) -> Optional[Dict]:
+def calculate_score_v2(df: pd.DataFrame, market_cap: float = None, prev_trading_value: float = None) -> Optional[Dict]:
     """
     V2 점수 계산 (추세 추종 강화판)
 
     Args:
         df: OHLCV 데이터프레임 (최소 60일)
         market_cap: 시가총액 (원). 회전율 계산에 사용. None이면 거래대금 기반 점수 사용
+        prev_trading_value: 전일 거래대금 (원). 장 초반에 사용
 
     Returns:
         {
@@ -113,8 +114,19 @@ def calculate_score_v2(df: pd.DataFrame, market_cap: float = None) -> Optional[D
         result['indicators']['change_pct'] = ((curr['Close'] - prev['Close']) / prev['Close']) * 100
         result['indicators']['volume'] = curr['Volume']
 
-        # 거래대금
-        trading_value = curr['Close'] * curr['Volume']
+        # 거래대금 (장 초반에는 예상 거래대금 또는 전일 거래대금 사용)
+        curr_trading_value = curr['Close'] * curr['Volume']
+        projected_trading_value = curr['Close'] * calculate_projected_volume(int(curr['Volume']))
+
+        # 장 초반(10시 전)이고 예상 거래대금이 전일 거래대금보다 작으면 전일 거래대금 사용
+        now = datetime.now()
+        if now.hour < 10 and prev_trading_value and projected_trading_value < prev_trading_value:
+            trading_value = prev_trading_value
+            result['indicators']['trading_value_source'] = 'prev_day'
+        else:
+            trading_value = projected_trading_value
+            result['indicators']['trading_value_source'] = 'projected'
+
         result['indicators']['trading_value'] = trading_value
         result['indicators']['trading_value_억'] = trading_value / 100_000_000
 
