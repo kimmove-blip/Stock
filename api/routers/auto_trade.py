@@ -623,10 +623,11 @@ async def get_performance(
         "max_profit": 0,
         "max_loss": 0,
         "realized_trades": [],
-        "initial_investment": 0,
+        "total_invested": 0,
         "current_total_asset": 0,
         "total_profit_from_initial": 0,
-        "total_profit_rate_from_initial": 0.0
+        "total_profit_rate_from_initial": 0.0,
+        "twr": 0.0
     }
 
     # API 키가 없으면 빈 데이터 반환
@@ -634,9 +635,9 @@ async def get_performance(
     if not api_key_data:
         return empty_response
 
-    # 초기투자금 조회
-    settings = logger.get_auto_trade_settings(user_id)
-    initial_investment = settings.get('initial_investment', 0) if settings else 0
+    # 총 투입금 조회 (입금 - 출금)
+    capital_summary = logger.get_capital_summary(user_id)
+    total_invested = capital_summary.get('net_capital', 0)
 
     try:
         from api.services.kis_client import KISClient
@@ -763,15 +764,19 @@ async def get_performance(
 
                 current_total_asset = total_evaluation + d2_cash_balance
 
-                # 초기투자금 기준 총수익 계산
-                if initial_investment > 0:
-                    total_profit_from_initial = current_total_asset - initial_investment
+                # 총 투입금 기준 수익 계산
+                if total_invested > 0:
+                    total_profit_from_initial = current_total_asset - total_invested
                     total_profit_rate_from_initial = round(
-                        ((current_total_asset / initial_investment) - 1) * 100, 2
+                        ((current_total_asset / total_invested) - 1) * 100, 2
                     )
 
         except Exception as e:
             print(f"[성과분석] 계좌잔고 조회 실패: {e}")
+
+        # 시간가중수익률(TWR) 계산
+        twr_data = logger.calculate_twr(user_id, current_total_asset)
+        twr = twr_data.get('twr', 0)
 
         return {
             "period_days": days,
@@ -786,10 +791,11 @@ async def get_performance(
             "max_profit": max_profit,
             "max_loss": max_loss,
             "realized_trades": realized_trades,
-            "initial_investment": initial_investment,
+            "total_invested": total_invested,
             "current_total_asset": current_total_asset,
             "total_profit_from_initial": total_profit_from_initial,
-            "total_profit_rate_from_initial": total_profit_rate_from_initial
+            "total_profit_rate_from_initial": total_profit_rate_from_initial,
+            "twr": twr
         }
 
     except Exception as e:
