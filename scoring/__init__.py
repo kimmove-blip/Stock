@@ -13,6 +13,10 @@
 - V8: Contrarian Bounce (역발상 반등) - 약세종목 모멘텀반전, 바닥확인
 - V9: Gap-Up Predictor (ML 기반) - 오버나잇 갭상승 확률 예측
 - V10: Leader-Follower (대장주-종속주) - 상관관계 기반 캐치업 전략
+
+공통 모듈:
+- indicators: 기술적 지표 일괄 계산 (LRU 캐시)
+- base_scorer: 스코어러 추상 베이스 클래스
 """
 
 from .scoring_v1 import calculate_score_v1
@@ -30,6 +34,26 @@ from .score_v10_leader_follower import (
     get_follower_opportunities,
     get_reference_info,
     load_reference,
+)
+
+# 공통 모듈
+from .indicators import (
+    calculate_base_indicators,
+    IndicatorCache,
+    check_ma_status,
+    check_rsi_status,
+    check_volume_status,
+    detect_obv_divergence,
+    detect_vcp_pattern,
+    get_global_cache,
+)
+from .base_scorer import (
+    BaseScorer,
+    ScoreResult,
+    TrendFollowScorer,
+    ContrarianScorer,
+    PatternScorer,
+    batch_score,
 )
 
 # 버전별 함수 매핑
@@ -127,6 +151,7 @@ def list_versions():
 
 
 __all__ = [
+    # 버전별 스코어링 함수
     'calculate_score_v1',
     'calculate_score_v2',
     'calculate_score_v3',
@@ -145,9 +170,26 @@ __all__ = [
     'get_follower_opportunities',
     'get_reference_info',
     'load_reference',
+    # 통합 함수
     'calculate_score',
     'compare_scores',
     'list_versions',
     'SCORING_FUNCTIONS',
     'DEFAULT_VERSION',
+    # 공통 지표 모듈
+    'calculate_base_indicators',
+    'IndicatorCache',
+    'check_ma_status',
+    'check_rsi_status',
+    'check_volume_status',
+    'detect_obv_divergence',
+    'detect_vcp_pattern',
+    'get_global_cache',
+    # 베이스 클래스
+    'BaseScorer',
+    'ScoreResult',
+    'TrendFollowScorer',
+    'ContrarianScorer',
+    'PatternScorer',
+    'batch_score',
 ]
