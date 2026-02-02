@@ -580,8 +580,7 @@ class TradeLogger:
         """
         당일 블랙리스트 종목 반환 (재매수 금지)
 
-        매수 후 아직 보유 중인 종목만 블랙리스트에 포함.
-        매수 후 매도한 종목은 재매수 허용.
+        당일 매수 또는 매도한 종목은 재매수 금지 (중복 매수/반복 매매 방지)
 
         Args:
             user_id: 사용자 ID
@@ -594,26 +593,18 @@ class TradeLogger:
 
         today = datetime.now().strftime("%Y-%m-%d")
 
-        # 오늘 매수한 종목 중 아직 매도 안 한 종목만 블랙리스트
+        # 오늘 거래한 모든 종목 블랙리스트 (매수+매도 모두, 중복매수 방지)
         query = """
-            SELECT stock_code
+            SELECT DISTINCT stock_code
             FROM trade_log
             WHERE user_id = ?
               AND trade_date = ?
               AND status = 'executed'
-              AND side = 'buy'
-            EXCEPT
-            SELECT stock_code
-            FROM trade_log
-            WHERE user_id = ?
-              AND trade_date = ?
-              AND status = 'executed'
-              AND side = 'sell'
         """
 
         with self._get_connection() as conn:
             cursor = conn.cursor()
-            cursor.execute(query, (user_id, today, user_id, today))
+            cursor.execute(query, (user_id, today))
             rows = cursor.fetchall()
             return {row['stock_code'] for row in rows}
 
@@ -1595,8 +1586,8 @@ class TradeLogger:
                     stop_loss_rate, min_buy_score, sell_score,
                     trading_enabled, initial_investment,
                     llm_provider, llm_api_key, llm_model,
-                    score_version, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    score_version, strategy, buy_conditions, sell_conditions, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, (
                 user_id,
                 settings.get('trade_mode', 'manual'),
@@ -1610,6 +1601,9 @@ class TradeLogger:
                 llm_api_key,
                 llm_model,
                 settings.get('score_version', 'v2'),
+                settings.get('strategy', 'simple'),
+                settings.get('buy_conditions', ''),
+                settings.get('sell_conditions', ''),
                 now.isoformat()
             ))
             return cursor.rowcount > 0

@@ -1329,6 +1329,9 @@ class AutoTradeSettingsRequest(BaseModel):
     trading_enabled: bool = True
     initial_investment: int = 0  # 초기 투자금
     score_version: str = "v2"  # 스코어 버전 (v1, v2, v5)
+    strategy: str = "simple"  # 전략: simple(단순 스코어), v1_composite(V1 복합)
+    buy_conditions: str = ""  # 매수 조건 (예: "V1>=60 AND V5>=50")
+    sell_conditions: str = ""  # 매도 조건 (예: "V4<=30 OR V1<=40")
 
 
 @router.get("/settings")
@@ -1350,7 +1353,8 @@ async def get_settings(
         "sell_score": 40,
         "trading_enabled": True,
         "initial_investment": 0,
-        "score_version": "v2"
+        "score_version": "v2",
+        "strategy": "simple"
     }
 
     if not settings:
@@ -1359,6 +1363,8 @@ async def get_settings(
     # 기존 설정에 없는 필드 기본값 추가
     if 'initial_investment' not in settings:
         settings['initial_investment'] = 0
+    if 'strategy' not in settings or settings['strategy'] is None:
+        settings['strategy'] = 'simple'
     if 'max_per_stock' not in settings:
         settings['max_per_stock'] = 200000
     if 'score_version' not in settings:
@@ -1401,6 +1407,208 @@ async def save_settings(
                 conn.commit()
 
     return {"message": "설정이 저장되었습니다"}
+
+
+class PreviewConditionsRequest(BaseModel):
+    """조건 미리보기 요청"""
+    buy_conditions: str = ""
+    sell_conditions: str = ""
+
+
+def parse_condition(condition_str: str) -> list:
+    """조건 문자열 파싱"""
+    import re
+    if not condition_str:
+        return []
+
+    parts = re.split(r'\s+(AND|OR)\s+', condition_str, flags=re.IGNORECASE)
+    conditions = []
+    current_connector = 'AND'
+
+    for part in parts:
+        part = part.strip()
+        if part.upper() in ('AND', 'OR'):
+            current_connector = part.upper()
+        else:
+            match = re.match(r'^(V\d+)\s*(>=|<=|>|<|=)\s*(\d+)$', part, re.IGNORECASE)
+            if match:
+                conditions.append({
+                    'score': match.group(1).lower(),
+                    'op': match.group(2),
+                    'value': int(match.group(3)),
+                    'connector': current_connector
+                })
+    return conditions
+
+
+def evaluate_conditions(conditions: list, scores: dict) -> bool:
+    """조건 평가"""
+    if not conditions:
+        return False
+
+    results = []
+    connectors = []
+
+    for cond in conditions:
+        score_key = cond['score']
+        score_value = scores.get(score_key, 0)
+        op = cond['op']
+        target = cond['value']
+
+        if op == '>=':
+            result = score_value >= target
+        elif op == '<=':
+            result = score_value <= target
+        elif op == '>':
+            result = score_value > target
+        elif op == '<':
+            result = score_value < target
+        elif op == '=':
+            result = score_value == target
+        else:
+            result = False
+
+        results.append(result)
+        if len(results) > 1:
+            connectors.append(cond['connector'])
+
+    if len(results) == 1:
+        return results[0]
+
+    final = results[0]
+    for i, connector in enumerate(connectors):
+        if connector == 'AND':
+            final = final and results[i + 1]
+        else:
+            final = final or results[i + 1]
+
+    return final
+
+
+@router.post("/preview-conditions")
+async def preview_conditions(
+    request: PreviewConditionsRequest,
+    current_user: dict = Depends(get_current_user_required)
+):
+    """매수/매도 조건 미리보기 - 최신 인트라데이 스코어 기준"""
+    check_auto_trade_permission(current_user)
+
+    import glob
+    from pathlib import Path
+
+    # 최신 인트라데이 스코어 CSV 로드
+    scores_dir = Path("/home/kimhc/Stock/output/intraday_scores")
+    csv_files = sorted(glob.glob(str(scores_dir / "*.csv")))
+
+    if not csv_files:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="인트라데이 스코어 데이터가 없습니다"
+        )
+
+    latest_csv = csv_files[-1]
+    csv_time = Path(latest_csv).stem  # 20260202_1130
+
+    try:
+        df = pd.read_csv(latest_csv)
+        df['code'] = df['code'].astype(str).str.zfill(6)
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"CSV 로드 실패: {e}"
+        )
+
+    # 매수 조건 평가
+    buy_conditions = parse_condition(request.buy_conditions)
+    buy_candidates = []
+
+    if buy_conditions:
+        for _, row in df.iterrows():
+            scores = {
+                'v1': int(row.get('v1', 0)),
+                'v2': int(row.get('v2', 0)),
+                'v4': int(row.get('v4', 0)),
+                'v5': int(row.get('v5', 0)),
+            }
+
+            if evaluate_conditions(buy_conditions, scores):
+                buy_candidates.append({
+                    'code': row['code'],
+                    'name': row.get('name', ''),
+                    'close': int(row.get('close', 0)),
+                    'change_pct': round(row.get('change_pct', 0), 2),
+                    'v1': scores['v1'],
+                    'v2': scores['v2'],
+                    'v4': scores['v4'],
+                    'v5': scores['v5'],
+                })
+
+        # V1 점수 순 정렬
+        buy_candidates.sort(key=lambda x: x['v1'], reverse=True)
+
+    # 매도 조건 평가 (보유 종목 대상)
+    sell_conditions = parse_condition(request.sell_conditions)
+    sell_candidates = []
+
+    if sell_conditions:
+        # 사용자 보유 종목 조회
+        logger = get_trade_logger()
+        api_key_data = logger.get_api_key_settings(current_user.get('id'))
+
+        if api_key_data:
+            try:
+                holdings = logger.get_real_account_balance(
+                    app_key=api_key_data.get('app_key'),
+                    app_secret=api_key_data.get('app_secret'),
+                    account_number=api_key_data.get('account_number'),
+                    account_product_code=api_key_data.get('account_product_code', '01'),
+                    is_mock=bool(api_key_data.get('is_mock', True))
+                ).get('holdings', [])
+
+                # 보유 종목 중 매도 조건 충족 확인
+                for h in holdings:
+                    if h.get('quantity', 0) <= 0:
+                        continue
+
+                    code = h.get('stock_code', '')
+                    row = df[df['code'] == code]
+
+                    if row.empty:
+                        continue
+
+                    row = row.iloc[0]
+                    scores = {
+                        'v1': int(row.get('v1', 0)),
+                        'v2': int(row.get('v2', 0)),
+                        'v4': int(row.get('v4', 0)),
+                        'v5': int(row.get('v5', 0)),
+                    }
+
+                    if evaluate_conditions(sell_conditions, scores):
+                        sell_candidates.append({
+                            'code': code,
+                            'name': h.get('stock_name', ''),
+                            'quantity': h.get('quantity', 0),
+                            'avg_price': h.get('avg_price', 0),
+                            'current_price': h.get('current_price', 0),
+                            'profit_rate': h.get('profit_rate', 0),
+                            'v1': scores['v1'],
+                            'v2': scores['v2'],
+                            'v4': scores['v4'],
+                            'v5': scores['v5'],
+                        })
+            except Exception as e:
+                print(f"보유종목 조회 실패: {e}")
+
+    return {
+        "csv_time": csv_time,
+        "buy_conditions": request.buy_conditions,
+        "sell_conditions": request.sell_conditions,
+        "buy_candidates": buy_candidates[:20],  # 상위 20개
+        "buy_total": len(buy_candidates),
+        "sell_candidates": sell_candidates,
+        "sell_total": len(sell_candidates),
+    }
 
 
 # ==================== 매수 제안 승인/거부 ====================

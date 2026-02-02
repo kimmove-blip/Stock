@@ -39,6 +39,84 @@ from config import AutoTraderConfig, TelegramConfig, OUTPUT_DIR, SIGNAL_NAMES_KR
 INTRADAY_SCORES_DIR = Path(__file__).parent / "output" / "intraday_scores"
 
 
+def parse_condition(condition_str: str) -> list:
+    """
+    조건 문자열을 파싱하여 조건 리스트로 변환
+    예: "V1>=60 AND V5>=50 AND V4>40" -> [{'score': 'v1', 'op': '>=', 'value': 60, 'connector': 'AND'}, ...]
+    """
+    import re
+    if not condition_str:
+        return []
+
+    parts = re.split(r'\s+(AND|OR)\s+', condition_str, flags=re.IGNORECASE)
+    conditions = []
+    current_connector = 'AND'
+
+    for part in parts:
+        part = part.strip()
+        if part.upper() in ('AND', 'OR'):
+            current_connector = part.upper()
+        else:
+            match = re.match(r'^(V\d+)\s*(>=|<=|>|<|=)\s*(\d+)$', part, re.IGNORECASE)
+            if match:
+                conditions.append({
+                    'score': match.group(1).lower(),  # v1, v2, v4, v5
+                    'op': match.group(2),
+                    'value': int(match.group(3)),
+                    'connector': current_connector
+                })
+    return conditions
+
+
+def evaluate_conditions(conditions: list, scores: dict) -> bool:
+    """
+    조건 리스트를 스코어 딕셔너리로 평가
+    scores: {'v1': 70, 'v2': 60, 'v4': 45, 'v5': 55}
+    """
+    if not conditions:
+        return False
+
+    results = []
+    connectors = []
+
+    for cond in conditions:
+        score_key = cond['score']
+        score_value = scores.get(score_key, 0)
+        op = cond['op']
+        target = cond['value']
+
+        if op == '>=':
+            result = score_value >= target
+        elif op == '<=':
+            result = score_value <= target
+        elif op == '>':
+            result = score_value > target
+        elif op == '<':
+            result = score_value < target
+        elif op == '=':
+            result = score_value == target
+        else:
+            result = False
+
+        results.append(result)
+        if len(results) > 1:
+            connectors.append(cond['connector'])
+
+    # 조건 평가 (AND/OR 처리)
+    if len(results) == 1:
+        return results[0]
+
+    # 순차적으로 평가
+    final = results[0]
+    for i, connector in enumerate(connectors):
+        if connector == 'AND':
+            final = final and results[i + 1]
+        else:  # OR
+            final = final or results[i + 1]
+
+    return final
+
+
 def load_scores_from_csv(max_age_minutes: int = 15) -> Optional[Tuple[List[Dict], Dict]]:
     """
     가장 최근 CSV 스코어 파일을 로드하여 MarketScreener 결과 형식으로 변환
@@ -1886,7 +1964,7 @@ class AutoTrader:
         report = self.logger.export_report(days=days)
         print(report)
 
-    def run_intraday(self, min_score: int = 75, screening_result: tuple = None, trade_mode: str = 'auto', score_version: str = 'v5') -> Dict:
+    def run_intraday(self, min_score: int = 75, screening_result: tuple = None, trade_mode: str = 'auto', score_version: str = 'v5', strategy: str = 'simple', buy_conditions: str = '', sell_conditions: str = '') -> Dict:
         """
         장중 10분 스크리닝 모드
 
@@ -1900,10 +1978,16 @@ class AutoTrader:
             screening_result: (top_stocks, stats) 튜플. 전달 시 스크리닝 건너뜀
             trade_mode: auto 또는 semi
             score_version: 스코어 버전 (v1, v2, v5)
+            strategy: 전략 (simple, v1_composite, custom)
+            buy_conditions: 매수 조건 문자열 (예: "V1>=60 AND V5>=50 AND V4>40")
+            sell_conditions: 매도 조건 문자열 (예: "V4<=30 OR V1<=40")
 
         cron 예시: */10 9-14 * * 1-5 /path/to/python auto_trader.py --intraday
         """
         self.score_version = score_version  # 인스턴스 변수로 저장
+        self.strategy = strategy  # 전략 저장
+        self.buy_conditions = parse_condition(buy_conditions) if buy_conditions else []
+        self.sell_conditions = parse_condition(sell_conditions) if sell_conditions else []
         print("\n" + "=" * 60)
         print(f"  장중 스크리닝 시작: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
         print("=" * 60)
@@ -2157,7 +2241,12 @@ class AutoTrader:
         else:
             min_volume_ratio = 1.0  # 14시 이후: 100%
 
-        print(f"\n[4] 매수 후보 필터링 중 ({score_version.upper()} >= {min_score}, 거래량 >= {min_volume_ratio:.0%})...")
+        # 전략별 필터링 조건 출력
+        if self.buy_conditions:
+            cond_str = buy_conditions if buy_conditions else f"{score_version.upper()}>={min_score}"
+            print(f"\n[4] 매수 후보 필터링 중 (조건: {cond_str}, 거래량 >= {min_volume_ratio:.0%})...")
+        else:
+            print(f"\n[4] 매수 후보 필터링 중 ({score_version.upper()} >= {min_score}, 거래량 >= {min_volume_ratio:.0%})...")
 
         candidates = []
         volume_filtered_count = 0
@@ -2169,9 +2258,18 @@ class AutoTrader:
             name = stock.get("name")
             volume_ratio = stock.get("volume_ratio", 0)
 
-            # 점수 조건
-            if score < min_score:
-                continue
+            # 전략별 점수 조건
+            if self.buy_conditions:
+                # 커스텀 조건 사용
+                if not evaluate_conditions(self.buy_conditions, scores):
+                    continue
+                # 정렬용 점수는 첫 번째 조건의 스코어 사용
+                first_score_key = self.buy_conditions[0]['score'] if self.buy_conditions else 'v1'
+                score = scores.get(first_score_key, 0)
+            else:
+                # 단순 전략: score_version >= min_score
+                if score < min_score:
+                    continue
 
             # 시간대별 거래량 조건
             if volume_ratio < min_volume_ratio:
@@ -2183,6 +2281,7 @@ class AutoTrader:
                 "stock_code": code,
                 "stock_name": name,
                 "score": score,
+                "scores": scores,  # 전체 스코어 저장 (매도 판단용)
                 "signals": stock.get("signals", []),
                 "current_price": int(stock.get("close", 0)),
                 "change_pct": stock.get("change_pct", 0),
@@ -2194,7 +2293,10 @@ class AutoTrader:
         candidates.sort(key=lambda x: (x["score"], x.get("amount", 0)), reverse=True)
         if volume_filtered_count > 0:
             print(f"  거래량 부족으로 제외: {volume_filtered_count}개")
-        print(f"  최종 {min_score}점 이상 후보: {len(candidates)}개")
+        if strategy == 'v1_composite':
+            print(f"  최종 V1복합 매수조건 충족 후보: {len(candidates)}개")
+        else:
+            print(f"  최종 {min_score}점 이상 후보: {len(candidates)}개")
 
         if not candidates:
             print("  매수 조건 충족 종목 없음")
@@ -2496,7 +2598,14 @@ def run_for_all_users(dry_run: bool = False, min_score: int = 75):
             user_min_score = user_settings.get('min_buy_score', min_score)
             user_sell_score = user_settings.get('sell_score', 40)
             user_score_version = user_settings.get('score_version', 'v2')
-            print(f"  설정: {user_score_version.upper()} min_buy={user_min_score}점, sell={user_sell_score}점")
+            user_strategy = user_settings.get('strategy', 'simple')
+            user_buy_conditions = user_settings.get('buy_conditions', '')
+            user_sell_conditions = user_settings.get('sell_conditions', '')
+
+            if user_buy_conditions:
+                print(f"  설정: 매수({user_buy_conditions}) / 매도({user_sell_conditions})")
+            else:
+                print(f"  설정: {user_score_version.upper()} min_buy={user_min_score}점, sell={user_sell_score}점")
 
             trader = AutoTrader(
                 dry_run=dry_run,
@@ -2512,7 +2621,10 @@ def run_for_all_users(dry_run: bool = False, min_score: int = 75):
                     min_score=user_min_score,
                     screening_result=screening_result,
                     trade_mode=trade_mode,
-                    score_version=user_score_version
+                    score_version=user_score_version,
+                    strategy=user_strategy,
+                    buy_conditions=user_buy_conditions,
+                    sell_conditions=user_sell_conditions
                 )
             else:
                 print(f"  지원하지 않는 모드: {trade_mode}")

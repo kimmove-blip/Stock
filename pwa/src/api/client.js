@@ -269,6 +269,8 @@ export const autoTradeAPI = {
   addCapitalEvent: (data) => api.post('/auto-trade/capital-events', data),
   // 자본 이벤트 삭제
   deleteCapitalEvent: (id) => api.delete(`/auto-trade/capital-events/${id}`),
+  // 조건 미리보기 (매수/매도 대상 종목 확인)
+  previewConditions: (data) => api.post('/auto-trade/preview-conditions', data),
 };
 
 export default api;
