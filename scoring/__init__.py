@@ -50,13 +50,14 @@ SCORING_FUNCTIONS = {
 DEFAULT_VERSION = 'v2'
 
 
-def calculate_score(df, version: str = None):
+def calculate_score(df, version: str = None, market_cap: float = None):
     """
     점수 계산 함수
 
     Args:
         df: OHLCV 데이터프레임
         version: 'v1', 'v2', 'v3', 'v3.5', 'v4' 중 하나 (기본값: v2)
+        market_cap: 시가총액 (원). v2에서 회전율 계산에 사용
 
     Returns:
         점수 계산 결과 딕셔너리
@@ -73,6 +74,10 @@ def calculate_score(df, version: str = None):
 
     if version not in SCORING_FUNCTIONS:
         raise ValueError(f"Unknown version: {version}. Available: {list(SCORING_FUNCTIONS.keys())}")
+
+    # v2는 market_cap 파라미터 지원
+    if version == 'v2' and market_cap is not None:
+        return SCORING_FUNCTIONS[version](df, market_cap=market_cap)
 
     return SCORING_FUNCTIONS[version](df)
 
