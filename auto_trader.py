@@ -2378,6 +2378,7 @@ class AutoTrader:
             stock_name = candidate["stock_name"]
             current_price = candidate["current_price"]
             score = candidate["score"]
+            candidate_scores = candidate.get("scores", {})
 
             # 실시간 가격 조회
             live_price = self.executor.get_current_price(stock_code)
@@ -2424,7 +2425,7 @@ class AutoTrader:
                         current_price=current_price,
                         quantity=quantity,
                         score=score,
-                        reason=f"장중스크리닝 {score}점 (가용현금 부족)",
+                        reason=f"V1={candidate_scores.get('v1',0)},V4={candidate_scores.get('v4',0)},V5={candidate_scores.get('v5',0)} (가용현금부족)" if self.buy_conditions else f"장중스크리닝 {score}점 (가용현금 부족)",
                         signals=candidate.get("signals", [])
                     )
                     if suggestion_id:
@@ -2449,7 +2450,7 @@ class AutoTrader:
                     current_price=current_price,
                     quantity=quantity,
                     score=score,
-                    reason=f"장중스크리닝 {score}점",
+                    reason=f"V1={candidate_scores.get('v1',0)},V4={candidate_scores.get('v4',0)},V5={candidate_scores.get('v5',0)}" if self.buy_conditions else f"장중스크리닝 {score}점",
                     signals=candidate.get("signals", [])
                 )
                 if suggestion_id:
@@ -2481,7 +2482,7 @@ class AutoTrader:
                     quantity=quantity,
                     price=current_price,
                     order_no=result.get("order_no"),
-                    trade_reason=f"장중스크리닝 {score}점",
+                    trade_reason=f"V1={candidate_scores.get('v1',0)},V4={candidate_scores.get('v4',0)},V5={candidate_scores.get('v5',0)}" if self.buy_conditions else f"장중스크리닝 {score}점",
                     status="executed" if not self.dry_run else "dry_run",
                     user_id=self.user_id
                 )
