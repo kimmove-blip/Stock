@@ -2043,11 +2043,15 @@ class AutoTrader:
             if is_closing_time:
                 hold_score = min_buy_score + 5
                 print(f"\n[2] 장마감 정리 매도 체크 중... (점수 <= {hold_score}점 또는 손절 -{stop_loss_rate}%)")
+            elif self.sell_conditions:
+                # 커스텀 매도 조건 사용
+                cond_str = ' '.join([f"{c['score'].upper()}{c['op']}{c['value']}" + (f" {c['connector']}" if i < len(self.sell_conditions)-1 else "") for i, c in enumerate(self.sell_conditions)])
+                print(f"\n[2] 보유 종목 매도 체크 중... (손절 -{stop_loss_rate}% 또는 {cond_str})")
             else:
                 print(f"\n[2] 보유 종목 매도 체크 중... (손절 -{stop_loss_rate}% 또는 {score_version.upper()} <= {sell_score}점)")
 
-            # CSV에서 점수 로드
-            scores_map = {}
+            # CSV에서 점수 로드 (전체 스코어)
+            scores_map = {}  # {code: {'v1': x, 'v2': y, 'v4': z, 'v5': w}}
             try:
                 import glob
                 import pandas as pd
@@ -2056,9 +2060,13 @@ class AutoTrader:
                     latest_csv = score_files[-1]
                     df = pd.read_csv(latest_csv)
                     df['code'] = df['code'].astype(str).str.zfill(6)
-                    if score_version in df.columns:
-                        for _, row in df.iterrows():
-                            scores_map[row['code']] = int(row.get(score_version, 0))
+                    for _, row in df.iterrows():
+                        scores_map[row['code']] = {
+                            'v1': int(row.get('v1', 0)),
+                            'v2': int(row.get('v2', 0)),
+                            'v4': int(row.get('v4', 0)),
+                            'v5': int(row.get('v5', 0)),
+                        }
             except Exception as e:
                 print(f"  점수 로드 실패: {e}")
 
@@ -2074,7 +2082,8 @@ class AutoTrader:
                     continue
 
                 profit_rate = (current_price - avg_price) / avg_price * 100
-                current_score = scores_map.get(stock_code, 50)
+                stock_scores = scores_map.get(stock_code, {'v1': 50, 'v2': 50, 'v4': 50, 'v5': 50})
+                current_score = stock_scores.get(score_version, 50)
                 sell_reasons = []
 
                 # 손절 체크 (사용자 설정 stop_loss_rate 사용)
@@ -2085,7 +2094,12 @@ class AutoTrader:
                 hold_score = min_buy_score + 5  # 보유 조건: 매수점수 + 5점 초과
                 if is_closing_time and current_score <= hold_score:
                     sell_reasons.append(f"장마감정리 {score_version.upper()} {current_score}점 <= {hold_score}점")
-                # 일반 점수 기반 매도 (sell_score 이하)
+                # 커스텀 매도 조건 사용 (sell_conditions 설정 시)
+                elif self.sell_conditions:
+                    if evaluate_conditions(self.sell_conditions, stock_scores):
+                        cond_detail = f"V1={stock_scores['v1']}, V4={stock_scores['v4']}, V5={stock_scores['v5']}"
+                        sell_reasons.append(f"매도조건 충족 ({cond_detail})")
+                # 일반 점수 기반 매도 (sell_score 이하) - 폴백
                 elif current_score <= sell_score:
                     sell_reasons.append(f"{score_version.upper()} {current_score}점 <= {sell_score}점")
 
