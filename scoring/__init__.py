@@ -55,6 +55,12 @@ from .base_scorer import (
     PatternScorer,
     batch_score,
 )
+from .batch_scorer import (
+    BatchScorer,
+    BatchResult,
+    score_stocks_batch,
+    get_top_scored_stocks,
+)
 
 # 버전별 함수 매핑
 SCORING_FUNCTIONS = {
@@ -192,4 +198,9 @@ __all__ = [
     'ContrarianScorer',
     'PatternScorer',
     'batch_score',
+    # 배치 스코어러
+    'BatchScorer',
+    'BatchResult',
+    'score_stocks_batch',
+    'get_top_scored_stocks',
 ]

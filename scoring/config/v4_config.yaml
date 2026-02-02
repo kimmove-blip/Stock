@@ -1,0 +1,209 @@
+# V4 스코어링 설정 - Hybrid Sniper (하이브리드 스나이퍼)
+#
+# 철학: 고급 기술적 분석으로 정밀 진입
+#       VCP 패턴, OBV 다이버전스 등 세력 축적 신호 탐지
+
+version: v4
+name: Hybrid Sniper
+description: |
+  VCP 패턴, OBV 다이버전스, 수급 데이터를 활용한 정밀 진입 전략
+
+min_data_days: 60
+max_score: 100
+
+# 과락 조건
+disqualifiers:
+  - name: 극단적 역배열
+    condition: "SMA_5 < SMA_60 * 0.95"
+    signal: EXTREME_REVERSE_ALIGNED
+
+# 점수 그룹 정의
+scoring_groups:
+  # === 추세 그룹 (최대 30점) ===
+  trend:
+    max_score: 30
+    rules:
+      - name: 정배열
+        condition: "SMA_5 > SMA_20 > SMA_60"
+        score: 5
+        signal: MA_ALIGNED
+
+      - name: 20일선 기울기 매우 가파름
+        condition: "SMA20_SLOPE >= 3.0"
+        score: 15
+        signal: MA_20_VERY_STEEP
+        exclusive_group: sma20_slope
+
+      - name: 20일선 기울기 가파름
+        condition: "SMA20_SLOPE >= 1.5"
+        score: 10
+        signal: MA_20_STEEP
+        exclusive_group: sma20_slope
+
+      - name: 20일선 기울기 상승
+        condition: "SMA20_SLOPE >= 0.5"
+        score: 5
+        signal: MA_20_RISING
+        exclusive_group: sma20_slope
+
+      - name: 일목 구름대 위
+        condition: "close > ICHIMOKU_CLOUD_TOP"
+        score: 5
+        signal: ABOVE_CLOUD
+
+      - name: MACD 양수 상승
+        condition: "MACD > 0 AND MACD > MACD_prev"
+        score: 5
+        signal: MACD_BULL_RISING
+
+      - name: MACD 하락 다이버전스
+        condition: "MACD < MACD_prev AND close > close_prev"
+        score: -5
+        signal: MACD_DIVERGENCE_DOWN
+
+  # === 수급 그룹 (최대 30점) ===
+  supply:
+    max_score: 30
+    min_score: -5
+    rules:
+      - name: 거래량 폭발
+        condition: "VOL_RATIO >= 5.0"
+        score: 12
+        signal: VOLUME_EXPLOSION
+        exclusive_group: volume_level
+
+      - name: 거래량 급증
+        condition: "VOL_RATIO >= 3.0"
+        score: 8
+        signal: VOLUME_SURGE
+        exclusive_group: volume_level
+
+      - name: 거래량 증가
+        condition: "VOL_RATIO >= 2.0"
+        score: 4
+        signal: VOLUME_HIGH
+        exclusive_group: volume_level
+
+      - name: 거래대금 500억 이상
+        condition: "TRADING_VALUE >= 50000000000"
+        score: 10
+        signal: TRADING_VALUE_500B
+        exclusive_group: trading_value
+
+      - name: 거래대금 100억 이상
+        condition: "TRADING_VALUE >= 10000000000"
+        score: 6
+        signal: TRADING_VALUE_100B
+        exclusive_group: trading_value
+
+      - name: 거래대금 30억 이상
+        condition: "TRADING_VALUE >= 3000000000"
+        score: 3
+        signal: TRADING_VALUE_30B
+        exclusive_group: trading_value
+
+      - name: 유동성 부족
+        condition: "TRADING_VALUE < 1000000000"
+        score: -5
+        signal: LOW_LIQUIDITY
+
+      - name: 기관+외국인 순매수
+        condition: "INST_FOREIGN_NET > 0"
+        score: 5
+        signal: INST_FOREIGN_BUY
+
+      - name: 외국인 연속 순매수
+        condition: "FOREIGN_CONSEC_BUY >= 3"
+        score: 3
+        signal: FOREIGN_CONSEC_BUY
+
+      - name: 기관+외국인 순매도
+        condition: "INST_FOREIGN_NET < 0"
+        score: -3
+        signal: INST_FOREIGN_SELL
+
+  # === 패턴 그룹 (최대 20점) ===
+  pattern:
+    max_score: 20
+    rules:
+      - name: VCP 패턴
+        condition: "VCP_DETECTED == 1"
+        score: 12
+        signal: VCP_PATTERN
+
+      - name: OBV 불리시 다이버전스
+        condition: "OBV_BULLISH_DIVERGENCE == 1"
+        score: 8
+        signal: OBV_BULLISH_DIV
+
+  # === 모멘텀 그룹 (최대 20점) ===
+  momentum:
+    max_score: 20
+    min_score: -5
+    rules:
+      - name: RSI 최적구간
+        condition: "60 <= RSI <= 75"
+        score: 8
+        signal: RSI_SWEET_SPOT
+        exclusive_group: rsi
+
+      - name: RSI 건강
+        condition: "50 <= RSI < 60"
+        score: 4
+        signal: RSI_HEALTHY
+        exclusive_group: rsi
+
+      - name: RSI 과열
+        condition: "RSI > 85"
+        score: -5
+        signal: RSI_OVERHEATED
+        exclusive_group: rsi
+
+      - name: StochRSI 골든크로스 과매도
+        condition: "STOCHRSI_K < 30 AND STOCHRSI_K > STOCHRSI_D AND STOCHRSI_K_prev <= STOCHRSI_D_prev"
+        score: 7
+        signal: STOCHRSI_GOLDEN_OVERSOLD
+
+      - name: StochRSI 상승 추세
+        condition: "STOCHRSI_K > STOCHRSI_K_prev AND STOCHRSI_D > STOCHRSI_D_prev"
+        score: 4
+        signal: STOCHRSI_RISING
+
+      - name: 60일 신고가 돌파
+        condition: "close >= high_60d"
+        score: 5
+        signal: BREAKOUT_60D_HIGH
+
+      - name: 유성형 캔들
+        condition: "SHOOTING_STAR == 1"
+        score: -5
+        signal: SHOOTING_STAR
+
+signal_names_kr:
+  EXTREME_REVERSE_ALIGNED: 극단적 역배열
+  MA_ALIGNED: 이평선 정배열
+  MA_20_VERY_STEEP: 20일선 급등
+  MA_20_STEEP: 20일선 상승
+  MA_20_RISING: 20일선 완만상승
+  ABOVE_CLOUD: 구름대 상단
+  MACD_BULL_RISING: MACD 상승
+  MACD_DIVERGENCE_DOWN: MACD 다이버전스
+  VOLUME_EXPLOSION: 거래량 폭발
+  VOLUME_SURGE: 거래량 급증
+  VOLUME_HIGH: 거래량 증가
+  TRADING_VALUE_500B: 거래대금 500억+
+  TRADING_VALUE_100B: 거래대금 100억+
+  TRADING_VALUE_30B: 거래대금 30억+
+  LOW_LIQUIDITY: 유동성 부족
+  INST_FOREIGN_BUY: 기관외국인 순매수
+  FOREIGN_CONSEC_BUY: 외국인 연속매수
+  INST_FOREIGN_SELL: 기관외국인 순매도
+  VCP_PATTERN: VCP 패턴
+  OBV_BULLISH_DIV: OBV 매집신호
+  RSI_SWEET_SPOT: RSI 최적구간
+  RSI_HEALTHY: RSI 건강
+  RSI_OVERHEATED: RSI 과열
+  STOCHRSI_GOLDEN_OVERSOLD: StochRSI 골든
+  STOCHRSI_RISING: StochRSI 상승
+  BREAKOUT_60D_HIGH: 60일 신고가
+  SHOOTING_STAR: 유성형 캔들

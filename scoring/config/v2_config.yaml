@@ -1,0 +1,181 @@
+# V2 스코어링 설정 - 추세 추종 강화판
+#
+# 철학: 추세를 따라가는 것이 핵심
+#       과매도 = 떨어지는 칼날 (역배열 = 과락)
+
+version: v2
+name: 추세 추종 강화
+description: |
+  역배열 과락, 20일선 기울기 중심의 추세 추종 전략
+
+min_data_days: 60
+max_score: 100
+
+# 과락 조건 (하나라도 해당 시 0점 반환)
+disqualifiers:
+  - name: 역배열
+    condition: "SMA_5 < SMA_20 < SMA_60"
+    signal: MA_REVERSE_ALIGNED
+
+# 점수 그룹 정의
+scoring_groups:
+  # === 추세 그룹 (최대 30점) ===
+  trend:
+    max_score: 30
+    rules:
+      - name: 정배열
+        condition: "SMA_5 > SMA_20 > SMA_60"
+        score: 5
+        signal: MA_ALIGNED
+
+      - name: 20일선 기울기 매우 가파름
+        condition: "SMA20_SLOPE >= 3.0"
+        score: 15
+        signal: MA_20_VERY_STEEP
+        exclusive_group: sma20_slope
+
+      - name: 20일선 기울기 가파름
+        condition: "SMA20_SLOPE >= 1.5"
+        score: 10
+        signal: MA_20_STEEP
+        exclusive_group: sma20_slope
+
+      - name: 20일선 기울기 상승
+        condition: "SMA20_SLOPE >= 0.5"
+        score: 3
+        signal: MA_20_RISING
+        exclusive_group: sma20_slope
+
+      - name: MACD 양수
+        condition: "MACD > 0"
+        score: 3
+        signal: MACD_BULL
+
+      - name: Supertrend 매수 전환
+        condition: "SUPERTRENDd_prev == -1 AND SUPERTRENDd == 1"
+        score: 7
+        signal: SUPERTREND_BUY
+
+  # === 모멘텀 그룹 (최대 35점) ===
+  momentum:
+    max_score: 35
+    min_score: -10
+    rules:
+      - name: RSI Sweet Spot
+        condition: "60 <= RSI <= 75"
+        score: 15
+        signal: RSI_SWEET_SPOT
+        exclusive_group: rsi
+
+      - name: RSI 건강
+        condition: "50 <= RSI < 60"
+        score: 5
+        signal: RSI_HEALTHY
+        exclusive_group: rsi
+
+      - name: RSI 파워 상승
+        condition: "RSI > 80 AND RSI > RSI_prev"
+        score: 10
+        signal: RSI_POWER_BULL
+        exclusive_group: rsi
+
+      - name: RSI 피크 아웃
+        condition: "RSI > 80 AND RSI <= RSI_prev"
+        score: -5
+        signal: RSI_PEAK_OUT
+        exclusive_group: rsi
+
+      - name: RSI 떨어지는 칼날
+        condition: "RSI < 30"
+        score: -10
+        signal: RSI_FALLING_KNIFE
+        exclusive_group: rsi
+
+      - name: 60일 신고가 돌파
+        condition: "close >= high_60d"
+        score: 15
+        signal: BREAKOUT_60D_HIGH
+        exclusive_group: high_proximity
+
+      - name: 60일 고가 근접
+        condition: "close >= high_60d * 0.97"
+        score: 7
+        signal: NEAR_60D_HIGH
+        exclusive_group: high_proximity
+
+      - name: 60일 고가 가까움
+        condition: "close >= high_60d * 0.95"
+        score: 3
+        signal: CLOSE_TO_60D_HIGH
+        exclusive_group: high_proximity
+
+  # === 수급 그룹 (최대 35점) ===
+  volume:
+    max_score: 35
+    min_score: -10
+    rules:
+      - name: 거래량 폭발
+        condition: "VOL_RATIO >= 5.0"
+        score: 20
+        signal: VOLUME_EXPLOSION
+        exclusive_group: volume_level
+
+      - name: 거래량 급증 3배
+        condition: "VOL_RATIO >= 3.0"
+        score: 12
+        signal: VOLUME_SURGE_3X
+        exclusive_group: volume_level
+
+      - name: 거래량 높음
+        condition: "VOL_RATIO >= 2.0"
+        score: 5
+        signal: VOLUME_HIGH
+        exclusive_group: volume_level
+
+      - name: 거래대금 500억 이상
+        condition: "TRADING_VALUE >= 50000000000"
+        score: 15
+        signal: TRADING_VALUE_500B
+        exclusive_group: trading_value
+
+      - name: 거래대금 100억 이상
+        condition: "TRADING_VALUE >= 10000000000"
+        score: 10
+        signal: TRADING_VALUE_100B
+        exclusive_group: trading_value
+
+      - name: 거래대금 30억 이상
+        condition: "TRADING_VALUE >= 3000000000"
+        score: 3
+        signal: TRADING_VALUE_30B
+        exclusive_group: trading_value
+
+      - name: 유동성 부족
+        condition: "TRADING_VALUE < 1000000000"
+        score: -5
+        signal: LOW_LIQUIDITY
+
+# 신호 한글 매핑
+signal_names_kr:
+  MA_REVERSE_ALIGNED: 이평선 역배열
+  MA_ALIGNED: 이평선 정배열
+  MA_20_VERY_STEEP: 20일선 급등
+  MA_20_STEEP: 20일선 상승
+  MA_20_RISING: 20일선 완만 상승
+  MACD_BULL: MACD 양수
+  SUPERTREND_BUY: 슈퍼트렌드 매수전환
+  RSI_SWEET_SPOT: RSI 최적구간
+  RSI_HEALTHY: RSI 건강
+  RSI_POWER_BULL: RSI 강세
+  RSI_PEAK_OUT: RSI 피크
+  RSI_FALLING_KNIFE: RSI 급락
+  BREAKOUT_60D_HIGH: 60일 신고가
+  NEAR_60D_HIGH: 60일 고가 근접
+  CLOSE_TO_60D_HIGH: 60일 고가 부근
+  VOLUME_EXPLOSION: 거래량 폭발
+  VOLUME_SURGE_3X: 거래량 3배
+  VOLUME_HIGH: 거래량 증가
+  TRADING_VALUE_500B: 거래대금 500억+
+  TRADING_VALUE_100B: 거래대금 100억+
+  TRADING_VALUE_30B: 거래대금 30억+
+  LOW_LIQUIDITY: 유동성 부족
