@@ -1953,11 +1953,12 @@ class AutoTrader:
             stop_loss_rate = abs(user_settings.get('stop_loss_rate', 7.0))  # 절대값 사용
             min_buy_score = user_settings.get('min_buy_score', 70)
 
-            # 15:13 장마감 정리 매도 체크
-            is_closing_time = now.hour == 15 and now.minute >= 10
+            # 15:00 장마감 정리 매도 체크
+            is_closing_time = now.hour == 15 and now.minute >= 0
 
             if is_closing_time:
-                print(f"\n[2] 장마감 정리 매도 체크 중... (점수 < {min_buy_score}점 또는 손절 -{stop_loss_rate}%)")
+                hold_score = min_buy_score + 5
+                print(f"\n[2] 장마감 정리 매도 체크 중... (점수 <= {hold_score}점 또는 손절 -{stop_loss_rate}%)")
             else:
                 print(f"\n[2] 보유 종목 매도 체크 중... (손절 -{stop_loss_rate}% 또는 {score_version.upper()} <= {sell_score}점)")
 
@@ -1996,10 +1997,10 @@ class AutoTrader:
                 if profit_rate <= -stop_loss_rate:
                     sell_reasons.append(f"손절 ({profit_rate:.1f}% <= -{stop_loss_rate}%)")
 
-                # 15:13 장마감 정리: 점수 < (min_buy_score + 5)면 매도
-                hold_score = min_buy_score + 5  # 보유 조건: 매수점수 + 5점
-                if is_closing_time and current_score < hold_score:
-                    sell_reasons.append(f"장마감정리 {score_version.upper()} {current_score}점 < {hold_score}점")
+                # 15:00 장마감 정리: 점수 <= (min_buy_score + 5)면 매도 후 매수 중지
+                hold_score = min_buy_score + 5  # 보유 조건: 매수점수 + 5점 초과
+                if is_closing_time and current_score <= hold_score:
+                    sell_reasons.append(f"장마감정리 {score_version.upper()} {current_score}점 <= {hold_score}점")
                 # 일반 점수 기반 매도 (sell_score 이하)
                 elif current_score <= sell_score:
                     sell_reasons.append(f"{score_version.upper()} {current_score}점 <= {sell_score}점")
@@ -2132,11 +2133,17 @@ class AutoTrader:
         now = datetime.now()
         hour = now.hour
 
-        # 15:10 이후 장마감 시간에는 신규 매수 금지 (매도만 실행)
-        is_closing_time = hour == 15 and now.minute >= 10
+        # 15:00 이후 장마감 시간에는 신규 매수 금지 (매도만 실행)
+        is_closing_time = hour == 15 and now.minute >= 0
         if is_closing_time:
             print(f"\n[4] 장마감 시간 ({now.strftime('%H:%M')}) - 신규 매수 없음")
             return {"status": "completed", "buy_count": 0}
+
+        # 14:50 이후에는 매수 조건 강화 (+5점)
+        is_pre_closing = hour == 14 and now.minute >= 50
+        if is_pre_closing:
+            min_score = min_score + 5
+            print(f"  14:50 이후 매수 조건 강화: {min_score}점 이상")
 
         # 시간대별 volume_ratio 기준 (장 초반은 거래량 적어도 허용)
         if hour < 10:

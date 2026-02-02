@@ -5,9 +5,35 @@
 """
 
 import sys
+import glob
+import pandas as pd
 import requests
+from pathlib import Path
 from trading.trade_logger import TradeLogger
 from api.services.kis_client import KISClient
+
+INTRADAY_SCORES_DIR = Path("/home/kimhc/Stock/output/intraday_scores")
+
+def load_scores():
+    """최신 스코어 CSV에서 점수 로드"""
+    scores_map = {}
+    try:
+        score_files = sorted(glob.glob(str(INTRADAY_SCORES_DIR / "*.csv")))
+        if score_files:
+            latest_csv = score_files[-1]
+            df = pd.read_csv(latest_csv)
+            df['code'] = df['code'].astype(str).str.zfill(6)
+            for _, row in df.iterrows():
+                scores_map[row['code']] = {
+                    'v1': int(row.get('v1', 0)),
+                    'v2': int(row.get('v2', 0)),
+                    'v4': int(row.get('v4', 0)),
+                    'v5': int(row.get('v5', 0)),
+                }
+            print(f"스코어 로드: {Path(latest_csv).name}")
+    except Exception as e:
+        print(f"스코어 로드 실패: {e}")
+    return scores_map
 
 def main():
     user_id = int(sys.argv[1]) if len(sys.argv) > 1 else 17
@@ -75,6 +101,9 @@ def main():
         print(f"총 매입금액: {int(s.get('pchs_amt_smtl_amt', 0)):,}원")
         print(f"총 손익: {int(s.get('evlu_pfls_smtl_amt', 0)):+,}원")
 
+    # 스코어 로드
+    scores_map = load_scores()
+
     # output1: 보유종목
     holdings = data.get('output1', [])
     active = [h for h in holdings if int(h.get('hldg_qty', 0)) > 0]
@@ -89,7 +118,12 @@ def main():
             current_price = int(h.get('prpr', 0))
             profit_rate = float(h.get('evlu_pfls_rt', 0))
             eval_amt = int(h.get('evlu_amt', 0))
-            print(f"  {code} {name}: {qty}주 @{avg_price:,}원 → {current_price:,}원 ({profit_rate:+.2f}%) 평가금액: {eval_amt:,}원")
+
+            # 스코어 조회
+            score_info = scores_map.get(code, {})
+            v2_score = score_info.get('v2', '-')
+
+            print(f"  {code} {name}: {qty}주 @{avg_price:,}원 → {current_price:,}원 ({profit_rate:+.2f}%) V2:{v2_score}")
     else:
         print("\n보유종목 없음")
 
