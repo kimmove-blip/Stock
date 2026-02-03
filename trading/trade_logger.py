@@ -7,7 +7,10 @@ import sqlite3
 import json
 import os
 import base64
+import logging
 from datetime import datetime, timedelta
+
+logger = logging.getLogger(__name__)
 from pathlib import Path
 from typing import Dict, List, Optional
 from contextlib import contextmanager
@@ -259,8 +262,11 @@ class TradeLogger:
             for col_name, col_type in new_columns:
                 try:
                     cursor.execute(f"ALTER TABLE auto_trade_settings ADD COLUMN {col_name} {col_type}")
-                except:
-                    pass  # 이미 존재하는 컬럼
+                    logger.debug(f"컬럼 추가됨: {col_name}")
+                except sqlite3.OperationalError:
+                    pass  # 이미 존재하는 컬럼 (정상)
+                except Exception as e:
+                    logger.warning(f"컬럼 추가 실패 ({col_name}): {e}")
 
             # Green Light AI 결정 이력 테이블
             cursor.execute("""
@@ -328,8 +334,11 @@ class TradeLogger:
             for table in user_id_tables:
                 try:
                     cursor.execute(f"ALTER TABLE {table} ADD COLUMN user_id INTEGER")
-                except:
-                    pass  # 이미 존재하는 컬럼
+                    logger.debug(f"user_id 컬럼 추가됨: {table}")
+                except sqlite3.OperationalError:
+                    pass  # 이미 존재하는 컬럼 (정상)
+                except Exception as e:
+                    logger.warning(f"user_id 컬럼 추가 실패 ({table}): {e}")
 
             # 인덱스 생성
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_trade_log_date ON trade_log(trade_date)")
