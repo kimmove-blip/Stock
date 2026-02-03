@@ -178,12 +178,27 @@ def check_hold_condition(scores: dict, profit_rate: float, stop_loss_rate: float
     return False, "조건미충족 홀딩"
 
 
+def get_change_limit_by_marcap(marcap: float) -> float:
+    """시총별 상승률 제한 반환
+
+    - 대형주 (1조+): 5%
+    - 중형주 (3000억~1조): 10%
+    - 소형주 (3000억 미만): 15%
+    """
+    if marcap >= 1_000_000_000_000:  # 1조 이상
+        return 5.0
+    elif marcap >= 300_000_000_000:  # 3000억 이상
+        return 10.0
+    else:
+        return 15.0
+
+
 def should_buy_advanced(scores: dict, current_hour: int, use_time_filter: bool = True) -> tuple:
     """
     개선된 매수 조건 판단 함수 (분석 결과 기반)
 
     시간대별 전략:
-    - 09~10시 (오전): 보수적 전략 - V2 >= 80 AND V4 >= 50
+    - 09~10시 (오전): V2 >= 65, V1 < 50, V4 >= 50
     - 11시 이후: 기본 전략 - V2 >= 75, V1 < 50, V4Δ <= 0
 
     Args:
@@ -199,13 +214,15 @@ def should_buy_advanced(scores: dict, current_hour: int, use_time_filter: bool =
     v4 = scores.get('v4', 0)
     v4_delta = scores.get('v4_delta', 0)
 
-    # 오전 전략 (09~10시): 보수적 - V2 >= 80 AND V4 >= 50
+    # 오전 전략 (09~10시): V2 >= 65, V1 < 50, V4 >= 50
     if current_hour < 11:
-        if v2 >= 80 and v4 >= 50:
-            return True, f"[오전보수] V2={v2}>=80, V4={v4}>=50"
+        if v2 >= 65 and v1 < 50 and v4 >= 50:
+            return True, f"[오전] V2={v2}>=65, V1={v1}<50, V4={v4}>=50"
         else:
-            if v2 < 80:
-                return False, f"V2={v2}<80 (오전)"
+            if v2 < 65:
+                return False, f"V2={v2}<65 (오전)"
+            if v1 >= 50:
+                return False, f"V1={v1}>=50 (오전)"
             return False, f"V4={v4}<50 (오전)"
 
     # 11시 이후 기본 전략
@@ -711,9 +728,11 @@ class AutoTrader:
             if volume_ratio < self.config.MIN_VOLUME_RATIO:
                 continue
 
-            # 15% 이상 상승 종목 제외 (V5 전략)
+            # 시총별 상승률 제한 (대형 5%, 중형 10%, 소형 15%)
             change_pct = stock.get("change_pct", 0)
-            if change_pct >= 15:
+            marcap = stock.get("prev_marcap", 0)
+            change_limit = get_change_limit_by_marcap(marcap)
+            if change_pct >= change_limit:
                 continue
 
             # 신뢰도 높은 신호 포함 여부
@@ -1104,19 +1123,20 @@ class AutoTrader:
                 print(f"  {stock_name}: 가격 조회 실패")
                 continue
 
-            # === 급등주 제외 (15% 이상 상승 종목) ===
-            # 스크리닝 결과의 change_pct 사용 (전일 대비 등락률)
+            # === 급등주 제외 (시총별 상승률 제한: 대형 5%, 중형 10%, 소형 15%) ===
+            marcap = item.get("prev_marcap", 0)
+            change_limit = get_change_limit_by_marcap(marcap)
             screening_change_pct = item.get("change_pct", 0)
-            if screening_change_pct >= 15:
-                print(f"  {stock_name}: 급등주 제외 ({screening_change_pct:+.1f}%)")
+            if screening_change_pct >= change_limit:
+                print(f"  {stock_name}: 급등주 제외 ({screening_change_pct:+.1f}% >= {change_limit}%)")
                 continue
 
             # 실시간 가격으로도 재확인 (전일종가 기준)
             prev_close = item.get("current_price", 0)
             if prev_close > 0 and current_price > 0:
                 realtime_change_pct = (current_price - prev_close) / prev_close * 100
-                if realtime_change_pct >= 15:
-                    print(f"  {stock_name}: 실시간 급등주 제외 ({realtime_change_pct:+.1f}%)")
+                if realtime_change_pct >= change_limit:
+                    print(f"  {stock_name}: 실시간 급등주 제외 ({realtime_change_pct:+.1f}% >= {change_limit}%)")
                     continue
 
             # === 시초가 갭 전략 평가 ===

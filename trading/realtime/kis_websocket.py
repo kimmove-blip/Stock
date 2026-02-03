@@ -369,26 +369,37 @@ class KISWebSocket:
             return
 
         try:
+            # float 값이 올 수 있으므로 int(float(...)) 사용
+            def safe_int(val):
+                try:
+                    return int(float(val)) if val else 0
+                except (ValueError, TypeError):
+                    return 0
+
+            # 필드 매핑 (한투 API H0STCNT0 실시간 체결)
+            # fields[0]: 종목코드, [1]: 체결시간, [2]: 현재가, [3]: 부호, [4]: 전일대비
+            # fields[5]: 등락률, [6]: 가중평균가, [7]: 시가, [8]: 고가, [9]: 저가
+            # fields[12]: 체결수량, [13]: 누적거래량, [14]: 누적거래대금
             data = ExecutionData(
                 stock_code=fields[0],
-                stock_name=fields[1] if len(fields) > 1 else "",
-                exec_time=fields[2],
-                price=int(fields[3] or 0),
-                change=int(fields[5] or 0),
-                change_rate=float(fields[6] or 0),
-                change_sign=fields[4],
-                exec_volume=int(fields[8] or 0),
-                cumulative_volume=int(fields[9] or 0),
-                cumulative_amount=int(fields[10] or 0),
-                weighted_avg_price=int(fields[11] or 0),
-                open_price=int(fields[12] or 0),
-                high_price=int(fields[13] or 0),
-                low_price=int(fields[14] or 0),
-                ask_price1=int(fields[16] or 0),
-                bid_price1=int(fields[17] or 0),
-                exec_strength=float(fields[19] or 0),
-                total_ask_qty=int(fields[28] or 0),
-                total_bid_qty=int(fields[29] or 0),
+                stock_name="",  # 종목명은 별도 관리
+                exec_time=fields[1],
+                price=safe_int(fields[2]),
+                change_sign=fields[3],
+                change=safe_int(fields[4]),
+                change_rate=float(fields[5] or 0),
+                weighted_avg_price=safe_int(fields[6]),
+                open_price=safe_int(fields[7]),
+                high_price=safe_int(fields[8]),
+                low_price=safe_int(fields[9]),
+                exec_volume=safe_int(fields[12]),
+                cumulative_volume=safe_int(fields[13]),
+                cumulative_amount=safe_int(fields[14]),
+                ask_price1=safe_int(fields[16]) if len(fields) > 16 else 0,
+                bid_price1=safe_int(fields[17]) if len(fields) > 17 else 0,
+                exec_strength=float(fields[19] or 0) if len(fields) > 19 else 0.0,
+                total_ask_qty=safe_int(fields[28]) if len(fields) > 28 else 0,
+                total_bid_qty=safe_int(fields[29]) if len(fields) > 29 else 0,
             )
 
             # 버퍼에 저장

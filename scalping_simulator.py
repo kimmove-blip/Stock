@@ -325,15 +325,24 @@ class ScalpingSimulator:
                 del self.active_positions['scalping'][stock_code]
                 print(f"[SCALPING] 익절: {trade.stock_name} @ {current_price:,}원 ({profit_pct:+.2f}%)")
 
-        # 변동성 돌파 포지션 (손절만, 익절은 장마감)
+        # 변동성 돌파 포지션 (익절 +2%, 손절 -1%, 10분 시간청산)
         if stock_code in self.active_positions['breakout']:
             trade = self.active_positions['breakout'][stock_code]
             profit_pct = ((current_price - trade.entry_price) / trade.entry_price) * 100
+            holding_minutes = (datetime.now() - trade.entry_time).total_seconds() / 60
 
-            if profit_pct <= self.breakout_stop_loss:
+            if profit_pct <= -1.0:  # 손절 -1%
                 trade.close(current_price, "stop_loss")
                 del self.active_positions['breakout'][stock_code]
                 print(f"[BREAKOUT] 손절: {trade.stock_name} @ {current_price:,}원 ({profit_pct:+.2f}%)")
+            elif profit_pct >= 2.0:  # 익절 +2%
+                trade.close(current_price, "take_profit")
+                del self.active_positions['breakout'][stock_code]
+                print(f"[BREAKOUT] 익절: {trade.stock_name} @ {current_price:,}원 ({profit_pct:+.2f}%)")
+            elif holding_minutes >= 10:  # 10분 시간청산
+                trade.close(current_price, "time_exit")
+                del self.active_positions['breakout'][stock_code]
+                print(f"[BREAKOUT] 시간청산: {trade.stock_name} @ {current_price:,}원 ({profit_pct:+.2f}%, {holding_minutes:.0f}분)")
 
     def close_all_positions(self, prices: Dict[str, int]):
         """모든 포지션 청산 (장마감)"""
@@ -487,6 +496,8 @@ async def run_polling_simulation(simulator: ScalpingSimulator):
 
                     # 시가 업데이트 (최초 1회)
                     if code not in simulator.today_data:
+                        # open_price가 비정상적이면 현재가 사용
+                        open_price = open_price if open_price >= 100 else current_price
                         simulator.update_today_open(code, open_price, name)
                         target = simulator.breakout_targets.get(code, 0)
                         print(f"  {name}: 시가 {open_price:,}원, 목표가 {target:,}원")
@@ -634,9 +645,11 @@ class WebSocketSimulator:
 
         # 시가 업데이트 (최초 1회)
         if code not in self.simulator.today_data:
-            self.simulator.update_today_open(code, data.open_price, data.stock_name)
+            # open_price가 비정상적이면 (100원 미만) 현재가 사용
+            open_price = data.open_price if data.open_price >= 100 else data.price
+            self.simulator.update_today_open(code, open_price, data.stock_name)
             target = self.simulator.breakout_targets.get(code, 0)
-            print(f"  [{data.stock_name}] 시가 {data.open_price:,}원, 목표가 {target:,}원")
+            print(f"  [{data.stock_name}] 시가 {open_price:,}원, 목표가 {target:,}원")
 
         # 체결강도 히스토리 저장
         self._strength_history[code].append({
