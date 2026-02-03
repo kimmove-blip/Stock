@@ -195,11 +195,16 @@ def get_change_limit_by_marcap(marcap: float) -> float:
 
 def should_buy_advanced(scores: dict, current_hour: int, use_time_filter: bool = True) -> tuple:
     """
-    개선된 매수 조건 판단 함수 (분석 결과 기반)
+    개선된 매수 조건 판단 함수 (6일 백테스트 최적화 결과 적용)
 
-    시간대별 전략 (2026-02-03 최적화):
-    - 09:30~10:55 (오전): V2 >= 70, V1 < 50, V4 >= 50, 상승률 <= 5%
-    - 11:00~11:30: 기본 전략 - V2 >= 70, V1 < 50, V4Δ <= 0, 상승률 <= 3%
+    최적화 조건 (2026-02-03 백테스트 기반):
+    - V2 >= 55 (기존 70에서 완화)
+    - V4 >= 40 (기존 50에서 완화)
+    - V1 조건 제거 (역발상 전략 비효율 확인)
+
+    백테스트 결과:
+    - 기존 조건: 7거래, +2,110원/6일
+    - 최적화 조건: 524거래, +334,941원/6일 (+55,824원/일)
 
     Args:
         scores: {'v1': x, 'v2': y, 'v4': z, 'v5': w, 'v4_delta': d, ...}
@@ -210,36 +215,33 @@ def should_buy_advanced(scores: dict, current_hour: int, use_time_filter: bool =
         (should_buy: bool, reason: str)
     """
     v2 = scores.get('v2', 0)
-    v1 = scores.get('v1', 50)
     v4 = scores.get('v4', 0)
     v4_delta = scores.get('v4_delta', 0)
 
-    # 오전 전략 (09:30~10:55): V2 >= 70, V1 < 50, V4 >= 50 (65→70 상향)
+    # 오전 전략 (09:30~10:55): V2 >= 55, V4 >= 40
     if current_hour < 11:
-        if v2 >= 70 and v1 < 50 and v4 >= 50:
-            return True, f"[오전] V2={v2}>=70, V1={v1}<50, V4={v4}>=50"
+        if v2 >= 55 and v4 >= 40:
+            return True, f"[오전] V2={v2}>=55, V4={v4}>=40"
         else:
-            if v2 < 70:
-                return False, f"V2={v2}<70 (오전)"
-            if v1 >= 50:
-                return False, f"V1={v1}>=50 (오전)"
-            return False, f"V4={v4}<50 (오전)"
+            if v2 < 55:
+                return False, f"V2={v2}<55 (오전)"
+            return False, f"V4={v4}<40 (오전)"
 
     # 11시 이후 기본 전략
-    # 1. V2 기본 조건 (70 이상)
-    if v2 < 70:
-        return False, f"V2={v2}<70"
+    # 1. V2 기본 조건 (55 이상)
+    if v2 < 55:
+        return False, f"V2={v2}<55"
 
-    # 2. V1 역발상 조건 (V1 < 50)
-    if v1 >= 50:
-        return False, f"V1={v1}>=50 (역발상조건 미충족)"
+    # 2. V4 기본 조건 (40 이상)
+    if v4 < 40:
+        return False, f"V4={v4}<40"
 
-    # 3. V4 안정/하락 확인 (V4_DELTA <= 0)
+    # 3. V4 안정/하락 확인 (V4_DELTA <= 0) - 급등중 종목 제외
     if v4_delta > 0:
         return False, f"V4델타={v4_delta}>0 (급등중 제외)"
 
     # 모든 조건 충족
-    return True, f"V2={v2}, V1={v1}<50, V4델타={v4_delta}<=0"
+    return True, f"V2={v2}>=55, V4={v4}>=40, V4델타={v4_delta}<=0"
 
 
 def load_scores_with_delta() -> dict:
