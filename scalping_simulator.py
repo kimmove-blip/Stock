@@ -460,77 +460,111 @@ class ScalpingSimulator:
 # 실시간 시뮬레이션 (WebSocket 없이 폴링)
 # ============================================================
 
-async def run_polling_simulation(simulator: ScalpingSimulator):
-    """폴링 방식 시뮬레이션 (1분 간격)"""
-    print("\n실시간 시뮬레이션 시작 (1분 간격 폴링)")
+async def run_polling_simulation(simulator: ScalpingSimulator, poll_interval: float = 2.0, kis_client=None):
+    """폴링 방식 시뮬레이션 (KIS REST API, 2초 간격)"""
+    print(f"\n실시간 시뮬레이션 시작 ({poll_interval}초 간격 폴링)")
     print("종료: Ctrl+C\n")
 
     # 전일 데이터 로드
     simulator.load_prev_day_data()
 
+    # 종목명 캐시
+    stock_names = {}
+    for code in simulator.stock_codes:
+        stock_names[code] = stock.get_market_ticker_name(code)
+
+    last_prices = {}
+    update_count = 0
+
     while True:
         now = datetime.now()
 
-        # 장 시간 체크
-        # 시뮬레이션 시간: 09:30 ~ 15:00
-        if now.hour < 9 or (now.hour == 9 and now.minute < 30) or now.hour >= 15:
-            print(f"[{now.strftime('%H:%M')}] 시뮬레이션 시간이 아닙니다 (09:30~15:00)")
-            await asyncio.sleep(60)
+        # 장 시간 체크: 09:00 ~ 15:30
+        if now.hour < 9 or (now.hour == 15 and now.minute >= 30) or now.hour >= 16:
+            print(f"[{now.strftime('%H:%M:%S')}] 시뮬레이션 시간이 아닙니다 (09:00~15:30)")
+            await asyncio.sleep(10)
             continue
 
-        # 현재가 조회
+        # 현재가 조회 (KIS REST API 사용)
         try:
-            today_str = now.strftime("%Y%m%d")
-
             for code in simulator.stock_codes:
                 try:
-                    # pykrx로 현재가 조회
-                    df = stock.get_market_ohlcv(today_str, today_str, code)
-                    if df.empty:
-                        continue
+                    name = stock_names.get(code, code)
 
-                    row = df.iloc[0]
-                    current_price = int(row['종가'])  # 최근가
-                    open_price = int(row['시가'])
-                    name = stock.get_market_ticker_name(code)
+                    # KIS API로 현재가 조회
+                    if kis_client:
+                        price_data = kis_client.get_current_price(code)
+                        if price_data:
+                            current_price = price_data.get('current_price', 0)
+                            open_price = price_data.get('open_price', 0)
+                            volume = price_data.get('volume', 0)
+                        else:
+                            continue
+                    else:
+                        # fallback: pykrx
+                        today_str = now.strftime("%Y%m%d")
+                        df = stock.get_market_ohlcv(today_str, today_str, code)
+                        if df.empty:
+                            continue
+                        row = df.iloc[0]
+                        current_price = int(row['종가'])
+                        open_price = int(row['시가'])
+
+                    if current_price <= 0:
+                        continue
 
                     # 시가 업데이트 (최초 1회)
                     if code not in simulator.today_data:
-                        # open_price가 비정상적이면 현재가 사용
                         open_price = open_price if open_price >= 100 else current_price
                         simulator.update_today_open(code, open_price, name)
                         target = simulator.breakout_targets.get(code, 0)
                         print(f"  {name}: 시가 {open_price:,}원, 목표가 {target:,}원")
 
-                    # 가격 업데이트 (현재 전략용 데이터는 더미값 - 실제로는 WebSocket 필요)
+                    # 가격 변동 감지
+                    prev_price = last_prices.get(code, 0)
+                    if prev_price != current_price:
+                        change_pct = ((current_price - prev_price) / prev_price * 100) if prev_price > 0 else 0
+                        if abs(change_pct) >= 0.1:  # 0.1% 이상 변동 시 출력
+                            print(f"  [{now.strftime('%H:%M:%S')}] {name}: {current_price:,}원 ({change_pct:+.2f}%)")
+                        last_prices[code] = current_price
+
+                    # 가격 업데이트 (전략 처리)
                     simulator.process_price_update(
                         stock_code=code,
                         stock_name=name,
                         current_price=current_price,
-                        ask_bid_ratio=0.0,   # WebSocket 없이는 계산 불가
-                        strength_accel=0.0,  # WebSocket 없이는 계산 불가
-                        ma_distance_pct=0.0, # 계산 필요
+                        ask_bid_ratio=0.0,
+                        strength_accel=0.0,
+                        ma_distance_pct=0.0,
                     )
 
                 except Exception as e:
                     pass
 
-            print(f"[{now.strftime('%H:%M')}] 가격 업데이트 완료")
+            update_count += 1
+            if update_count % 30 == 0:  # 1분마다 상태 출력
+                print(f"[{now.strftime('%H:%M:%S')}] 폴링 {update_count}회 완료")
 
         except Exception as e:
-            print(f"[{now.strftime('%H:%M')}] 오류: {e}")
+            print(f"[{now.strftime('%H:%M:%S')}] 오류: {e}")
 
-        # 15:00 자동청산
-        if now.hour >= 15:
-            print("\n[15:00] 자동청산 시작...")
+        # 15:20 자동청산
+        if now.hour >= 15 and now.minute >= 20:
+            print("\n[15:20] 자동청산 시작...")
 
             # 종가 조회
             closing_prices = {}
             for code in simulator.stock_codes:
                 try:
-                    df = stock.get_market_ohlcv(today_str, today_str, code)
-                    if not df.empty:
-                        closing_prices[code] = int(df.iloc[0]['종가'])
+                    if kis_client:
+                        price_data = kis_client.get_current_price(code)
+                        if price_data:
+                            closing_prices[code] = price_data.get('current_price', 0)
+                    else:
+                        today_str = now.strftime("%Y%m%d")
+                        df = stock.get_market_ohlcv(today_str, today_str, code)
+                        if not df.empty:
+                            closing_prices[code] = int(df.iloc[0]['종가'])
                 except:
                     pass
 
@@ -539,7 +573,7 @@ async def run_polling_simulation(simulator: ScalpingSimulator):
             simulator.save_results()
             break
 
-        await asyncio.sleep(60)  # 1분 대기
+        await asyncio.sleep(poll_interval)  # 2초 대기
 
 
 # ============================================================
@@ -750,7 +784,7 @@ async def run_websocket_simulation(
     if not WEBSOCKET_AVAILABLE:
         print("[오류] WebSocket 모듈을 사용할 수 없습니다.")
         print("폴링 모드로 전환합니다.")
-        await run_polling_simulation(simulator)
+        await run_polling_simulation(simulator, poll_interval=2.0, kis_client=None)
         return
 
     # API 키 조회
@@ -1049,13 +1083,31 @@ async def main():
     signal.signal(signal.SIGINT, shutdown)
     signal.signal(signal.SIGTERM, shutdown)
 
+    # KIS 클라이언트 생성 (폴링용)
+    kis_client = None
+    try:
+        from api.services.kis_client import KISClient
+        logger = TradeLogger()
+        api_data = logger.get_api_key_settings(args.user_id)
+        if api_data and api_data.get('app_key'):
+            kis_client = KISClient(
+                app_key=api_data['app_key'],
+                app_secret=api_data['app_secret'],
+                account_number=api_data.get('account_number', ''),
+                account_product_code=api_data.get('account_product_code', '01'),
+                is_virtual=bool(api_data.get('is_mock', False))
+            )
+            print(f"[KIS] API 클라이언트 초기화 완료 (user_id={args.user_id})")
+    except Exception as e:
+        print(f"[KIS] 클라이언트 초기화 실패: {e}")
+
     # 실행 모드 선택
     if args.websocket:
         print("[모드] WebSocket 실시간")
         await run_websocket_simulation(simulator, user_id=args.user_id)
     else:
-        print("[모드] 폴링 (1분 간격)")
-        await run_polling_simulation(simulator)
+        print("[모드] 폴링 (2초 간격, KIS REST API)")
+        await run_polling_simulation(simulator, poll_interval=2.0, kis_client=kis_client)
 
 
 if __name__ == "__main__":

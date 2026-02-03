@@ -273,11 +273,17 @@ result = calculate_score_v4_with_investor(df, investor_data)
 | 로그 | `/tmp/intraday_scores.log` |
 
 #### 크론 스케줄
+
+> **중요: 크론은 반드시 `sudo crontab -e` (root)로 설정!**
+> - kimhc 크론 사용 금지 (로그 파일 권한 문제 발생)
+> - `/tmp/intraday_scores.log`가 root 소유이므로 kimhc 크론이 쓰기 불가
+
 | 시간 | 스코어 기록 | auto_trader |
 |------|-------------|-------------|
 | 09:00, 09:05 | ✓ | ✗ (장 초반 노이즈) |
 | 09:10 ~ 15:10 | ✓ | ✓ (5분 간격) |
-| 15:15 ~ 15:45 | ✓ | ✗ (마감 구간) |
+| 15:15 ~ 15:40 | ✓ | ✗ (마감 구간) |
+| 15:45 | ✓ | ✗ (장 마감 후) |
 
 ```bash
 # 기본 실행 (V1, V2, V4, V5)

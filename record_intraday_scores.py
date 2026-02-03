@@ -8,6 +8,7 @@
 - V4: Hybrid Sniper 전략
 - V5: 장대양봉 전략
 - 한투 API 연동 시 체결강도, 외국인/기관 수급, 시장지수 추가
+- **V2/V4/V5 Delta 자동 계산** (이전 CSV 대비 스코어 변화량)
 
 사용법:
     python record_intraday_scores.py              # 기본 실행 (FDR만 사용)
@@ -47,6 +48,9 @@ VERSIONS = ['v1', 'v2', 'v4', 'v5']  # V1, V2, V4, V5만 사용
 KIS_CLIENT = None
 USE_KIS_API = False
 MARKET_INDEX = {'kospi': 0.0, 'kosdaq': 0.0}  # 시장 지수 변화율
+
+# Delta 계산용 이전 스코어 (전역)
+PREV_SCORES = {}  # {code: {'v2': score, 'v4': score, 'v5': score}}
 
 # 출력 즉시 플러시
 import functools
@@ -120,6 +124,49 @@ def get_kis_extra_data(code: str) -> dict:
         pass
 
     return result
+
+
+def load_previous_scores() -> dict:
+    """이전 CSV 파일에서 스코어 로드 (Delta 계산용)"""
+    global PREV_SCORES
+
+    try:
+        # 오늘 날짜의 CSV 파일 목록
+        today_str = datetime.now().strftime('%Y%m%d')
+        csv_files = sorted(OUTPUT_DIR.glob(f"{today_str}_*.csv"))
+
+        if not csv_files:
+            # 오늘 파일 없으면 어제 마지막 파일
+            from datetime import timedelta
+            yesterday_str = (datetime.now() - timedelta(days=1)).strftime('%Y%m%d')
+            csv_files = sorted(OUTPUT_DIR.glob(f"{yesterday_str}_*.csv"))
+
+        if not csv_files:
+            print("    이전 스코어 파일 없음 (Delta 계산 불가)")
+            return {}
+
+        # 가장 최근 파일 로드
+        latest_file = csv_files[-1]
+        df = pd.read_csv(latest_file)
+        df['code'] = df['code'].astype(str).str.zfill(6)
+
+        # 스코어 딕셔너리 구성
+        prev_scores = {}
+        for _, row in df.iterrows():
+            code = row['code']
+            prev_scores[code] = {
+                'v2': row.get('v2', 0),
+                'v4': row.get('v4', 0),
+                'v5': row.get('v5', 0),
+            }
+
+        PREV_SCORES = prev_scores
+        print(f"    이전 스코어 로드: {latest_file.name} ({len(prev_scores)}개)")
+        return prev_scores
+
+    except Exception as e:
+        print(f"    이전 스코어 로드 실패: {e}")
+        return {}
 
 
 def get_filtered_stocks_path(date_str: str = None) -> Path:
@@ -253,7 +300,7 @@ def calculate_scores(df: pd.DataFrame) -> dict:
 
 def process_stock(stock_info: dict) -> dict:
     """단일 종목 처리 - 데이터 1회 로드 후 V1~V5 모두 계산"""
-    global USE_KIS_API, MARKET_INDEX
+    global USE_KIS_API, MARKET_INDEX, PREV_SCORES
 
     code = stock_info['Code']
     name = stock_info.get('Name', '')
@@ -290,6 +337,12 @@ def process_stock(stock_info: dict) -> dict:
         # V1~V5 스코어 계산 (같은 df 사용)
         scores, signals, indicators = calculate_scores(df)
 
+        # Delta 계산 (이전 스코어 대비 변화량)
+        prev = PREV_SCORES.get(code, {})
+        v2_delta = scores.get('v2', 0) - prev.get('v2', scores.get('v2', 0))
+        v4_delta = scores.get('v4', 0) - prev.get('v4', scores.get('v4', 0))
+        v5_delta = scores.get('v5', 0) - prev.get('v5', scores.get('v5', 0))
+
         result = {
             'code': code,
             'name': name,
@@ -309,6 +362,10 @@ def process_stock(stock_info: dict) -> dict:
             'v2': scores.get('v2', 0),
             'v4': scores.get('v4', 0),
             'v5': scores.get('v5', 0),
+            # Delta (스코어 변화량)
+            'v2_delta': v2_delta,
+            'v4_delta': v4_delta,
+            'v5_delta': v5_delta,
             # V2 지표
             'rsi': indicators.get('rsi', 0),
             'sma20_slope': indicators.get('sma20_slope', 0),
@@ -361,11 +418,13 @@ def save_to_csv(records: list, recorded_at: datetime) -> str:
 
     df = pd.DataFrame(records)
 
-    # 컬럼 순서 정리 (체결강도, 수급, 상대강도, volume_ratio, 지표 추가)
+    # 컬럼 순서 정리 (체결강도, 수급, 상대강도, volume_ratio, 지표, Delta 추가)
     columns = ['code', 'name', 'market', 'open', 'high', 'low', 'close', 'prev_close',
                'change_pct', 'volume', 'volume_ratio', 'prev_amount', 'prev_marcap',
                'buy_strength', 'foreign_net', 'inst_net', 'rel_strength',
                'v1', 'v2', 'v4', 'v5',
+               # Delta (스코어 변화량) - 연구결과 핵심 지표
+               'v2_delta', 'v4_delta', 'v5_delta',
                # V2 지표
                'rsi', 'sma20_slope', 'trading_value_억', 'high_60d_pct',
                # V4 지표
@@ -477,8 +536,12 @@ def main():
         return
     print(f"    {len(stocks_df)}개 종목")
 
+    # 이전 스코어 로드 (Delta 계산용)
+    print("\n[1.5] 이전 스코어 로드 (Delta 계산용)...")
+    load_previous_scores()
+
     # 병렬 처리
-    print(f"\n[2] 스코어 계산 (V1, V2, V4, V5)...")
+    print(f"\n[2] 스코어 계산 (V1, V2, V4, V5 + Delta)...")
     stocks = stocks_df.to_dict('records')
     records = []
 
@@ -504,7 +567,15 @@ def main():
         top10_v2 = sorted(records, key=lambda x: x['v2'], reverse=True)[:10]
         print("\n    V2 스코어 상위 10:")
         for r in top10_v2:
-            print(f"      {r['code']} {r['name']}: V2={r['v2']}, V4={r['v4']}, V5={r['v5']}")
+            delta_str = f"Δ{r.get('v2_delta', 0):+d}" if r.get('v2_delta', 0) != 0 else ""
+            print(f"      {r['code']} {r['name']}: V2={r['v2']}{delta_str}, V4={r['v4']}, V5={r['v5']}")
+
+        # V2 Delta 상위 10개 출력 (급등 후보)
+        top10_delta = sorted(records, key=lambda x: x.get('v2_delta', 0), reverse=True)[:10]
+        print("\n    V2 Delta 상위 10 (급등 후보):")
+        for r in top10_delta:
+            if r.get('v2_delta', 0) > 0:
+                print(f"      {r['code']} {r['name']}: V2Δ={r['v2_delta']:+d}, V2={r['v2']}, V4={r['v4']}, chg={r['change_pct']:+.1f}%")
     else:
         print("\n[3] CSV 저장...")
         filepath = save_to_csv(records, recorded_at)
