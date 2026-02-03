@@ -199,7 +199,7 @@ def should_buy_advanced(scores: dict, current_hour: int, use_time_filter: bool =
 
     시간대별 전략:
     - 09~10시 (오전): V2 >= 65, V1 < 50, V4 >= 50
-    - 11시 이후: 기본 전략 - V2 >= 75, V1 < 50, V4Δ <= 0
+    - 11시 이후: 기본 전략 - V2 >= 70, V1 < 50, V4Δ <= 0
 
     Args:
         scores: {'v1': x, 'v2': y, 'v4': z, 'v5': w, 'v4_delta': d, ...}
@@ -226,9 +226,9 @@ def should_buy_advanced(scores: dict, current_hour: int, use_time_filter: bool =
             return False, f"V4={v4}<50 (오전)"
 
     # 11시 이후 기본 전략
-    # 1. V2 기본 조건 (75 이상)
-    if v2 < 75:
-        return False, f"V2={v2}<75"
+    # 1. V2 기본 조건 (70 이상)
+    if v2 < 70:
+        return False, f"V2={v2}<70"
 
     # 2. V1 역발상 조건 (V1 < 50)
     if v1 >= 50:
