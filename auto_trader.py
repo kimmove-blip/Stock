@@ -40,6 +40,32 @@ from config import AutoTraderConfig, TelegramConfig, OUTPUT_DIR, SIGNAL_NAMES_KR
 INTRADAY_SCORES_DIR = Path(__file__).parent / "output" / "intraday_scores"
 
 
+def _load_csv_files(today_only: bool = False, max_files: int = 2) -> list:
+    """
+    CSV 스코어 파일 목록 로드 (공통 헬퍼)
+
+    Args:
+        today_only: True면 오늘 날짜 파일만, False면 전체
+        max_files: 반환할 최대 파일 수 (최신순)
+
+    Returns:
+        [Path, ...] 최신순 정렬된 파일 목록
+    """
+    import glob
+
+    if not INTRADAY_SCORES_DIR.exists():
+        return []
+
+    if today_only:
+        today_str = datetime.now().strftime('%Y%m%d')
+        pattern = str(INTRADAY_SCORES_DIR / f"{today_str}_*.csv")
+    else:
+        pattern = str(INTRADAY_SCORES_DIR / "*.csv")
+
+    files = sorted(glob.glob(pattern), reverse=True)
+    return [Path(f) for f in files[:max_files]]
+
+
 def parse_condition(condition_str: str) -> list:
     """
     조건 문자열을 파싱하여 조건 리스트로 변환
@@ -254,25 +280,25 @@ def load_scores_with_delta() -> dict:
                 'v1_delta': d1, 'v2_delta': d2, 'v4_delta': d4, 'v5_delta': d5,
                 'change_pct': c, 'change_delta': cd}}
     """
-    import glob
     import pandas as pd
 
     scores_map = {}
 
     try:
-        score_files = sorted(glob.glob(str(INTRADAY_SCORES_DIR / "*.csv")))
-        if not score_files:
+        # 공통 헬퍼로 최신 2개 파일 로드
+        csv_files = _load_csv_files(today_only=False, max_files=2)
+        if not csv_files:
             return scores_map
 
-        # 최신 CSV
-        latest_csv = score_files[-1]
+        # 최신 CSV (리스트는 최신순 정렬됨)
+        latest_csv = csv_files[0]
         df_curr = pd.read_csv(latest_csv)
         df_curr['code'] = df_curr['code'].astype(str).str.zfill(6)
 
         # 이전 CSV (있으면)
         df_prev = None
-        if len(score_files) >= 2:
-            prev_csv = score_files[-2]
+        if len(csv_files) >= 2:
+            prev_csv = csv_files[1]  # 두 번째로 최신 파일
             df_prev = pd.read_csv(prev_csv)
             df_prev['code'] = df_prev['code'].astype(str).str.zfill(6)
             df_prev = df_prev.set_index('code')
@@ -319,16 +345,8 @@ def load_scores_from_csv(max_age_minutes: int = 15) -> Optional[Tuple[List[Dict]
     Returns:
         (top_stocks, stats) 튜플 또는 None
     """
-    if not INTRADAY_SCORES_DIR.exists():
-        print(f"  [CSV] 스코어 디렉토리 없음: {INTRADAY_SCORES_DIR}")
-        return None
-
-    # 오늘 날짜의 CSV 파일 찾기 (최신순 정렬)
-    today_str = datetime.now().strftime('%Y%m%d')
-    csv_files = sorted(
-        INTRADAY_SCORES_DIR.glob(f"{today_str}_*.csv"),
-        reverse=True
-    )
+    # 공통 헬퍼로 오늘 날짜 파일 로드
+    csv_files = _load_csv_files(today_only=True, max_files=1)
 
     if not csv_files:
         print(f"  [CSV] 오늘 날짜 CSV 파일 없음")
