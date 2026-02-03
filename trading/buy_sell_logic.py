@@ -2,10 +2,13 @@
 매매 전략 함수 모듈
 
 auto_trader.py에서 분리된 매수/매도 전략 함수들
+임계값은 config.StrategyConfig에서 중앙 관리
 """
 
 import re
 from typing import Dict, List, Tuple
+
+from config import StrategyConfig as SC
 
 
 def parse_condition(condition_str: str) -> list:
@@ -102,18 +105,22 @@ def evaluate_conditions(conditions: list, scores: dict) -> bool:
     return final
 
 
-def check_hold_condition(scores: dict, profit_rate: float, stop_loss_rate: float = 3.0) -> Tuple[bool, str]:
+def check_hold_condition(scores: dict, profit_rate: float, stop_loss_rate: float = None) -> Tuple[bool, str]:
     """
     개선된 매도/홀딩 판단 함수
 
     Args:
         scores: {'v1': x, 'v2': y, 'v4': z, 'v5': w, 'v4_delta': d, ...}
         profit_rate: 현재 수익률 (%)
-        stop_loss_rate: 손절 기준 (%)
+        stop_loss_rate: 손절 기준 (%), None이면 config 사용
 
     Returns:
         (should_sell: bool, reason: str)
     """
+    # config에서 기본값 로드
+    if stop_loss_rate is None:
+        stop_loss_rate = SC.STOP_LOSS_RATE
+
     v5 = scores.get('v5', 50)
     v4 = scores.get('v4', 50)
     v2 = scores.get('v2', 50)
@@ -122,25 +129,25 @@ def check_hold_condition(scores: dict, profit_rate: float, stop_loss_rate: float
     if profit_rate <= -stop_loss_rate:
         return True, f"손절 ({profit_rate:.1f}% <= -{stop_loss_rate}%)"
 
-    # 2. V5 >= 70이면 홀딩 (추가 상승 가능, 60→70 상향)
-    if v5 >= 70:
-        return False, f"V5={v5}>=70 홀딩 (추가상승여력)"
+    # 2. V5 >= HOLD_V5_MIN 이면 홀딩 (추가 상승 가능)
+    if v5 >= SC.HOLD_V5_MIN:
+        return False, f"V5={v5}>={SC.HOLD_V5_MIN} 홀딩 (추가상승여력)"
 
-    # 3. V4 >= 55이면 홀딩
-    if v4 >= 55:
-        return False, f"V4={v4}>=55 홀딩"
+    # 3. V4 >= HOLD_V4_MIN 이면 홀딩
+    if v4 >= SC.HOLD_V4_MIN:
+        return False, f"V4={v4}>={SC.HOLD_V4_MIN} 홀딩"
 
-    # 4. V2 >= 60이면 홀딩
-    if v2 >= 60:
-        return False, f"V2={v2}>=60 홀딩"
+    # 4. V2 >= HOLD_V2_MIN 이면 홀딩
+    if v2 >= SC.HOLD_V2_MIN:
+        return False, f"V2={v2}>={SC.HOLD_V2_MIN} 홀딩"
 
-    # 5. 매도 조건: V4 < 40
-    if v4 < 40:
-        return True, f"V4={v4}<40 매도"
+    # 5. 매도 조건: V4 < SELL_V4_MAX
+    if v4 < SC.SELL_V4_MAX:
+        return True, f"V4={v4}<{SC.SELL_V4_MAX} 매도"
 
-    # 6. 매도 조건: V2 < 50 AND V4 < 45
-    if v2 < 50 and v4 < 45:
-        return True, f"V2={v2}<50 & V4={v4}<45 매도"
+    # 6. 매도 조건: V2 < SELL_V2_MAX AND V4 < SELL_V4_COMBINED
+    if v2 < SC.SELL_V2_MAX and v4 < SC.SELL_V4_COMBINED:
+        return True, f"V2={v2}<{SC.SELL_V2_MAX} & V4={v4}<{SC.SELL_V4_COMBINED} 매도"
 
     # 7. 기본 홀딩
     return False, "조건미충족 홀딩"
@@ -149,30 +156,27 @@ def check_hold_condition(scores: dict, profit_rate: float, stop_loss_rate: float
 def get_change_limit_by_marcap(marcap: float) -> float:
     """시총별 상승률 제한 반환
 
-    - 대형주 (1조+): 5%
-    - 중형주 (3000억~1조): 10%
-    - 소형주 (3000억 미만): 15%
+    - 대형주 (1조+): CHANGE_LIMIT_LARGE
+    - 중형주 (3000억~1조): CHANGE_LIMIT_MID
+    - 소형주 (3000억 미만): CHANGE_LIMIT_SMALL
     """
     if marcap >= 1_000_000_000_000:  # 1조 이상
-        return 5.0
+        return SC.CHANGE_LIMIT_LARGE
     elif marcap >= 300_000_000_000:  # 3000억 이상
-        return 10.0
+        return SC.CHANGE_LIMIT_MID
     else:
-        return 15.0
+        return SC.CHANGE_LIMIT_SMALL
 
 
 def should_buy_advanced(scores: dict, current_hour: int, use_time_filter: bool = True) -> Tuple[bool, str]:
     """
     개선된 매수 조건 판단 함수 (6일 백테스트 최적화 결과 적용)
 
-    최적화 조건 (2026-02-03 백테스트 기반):
-    - V2 >= 55 (기존 70에서 완화)
-    - V4 >= 40 (기존 50에서 완화)
+    임계값은 config.StrategyConfig에서 중앙 관리:
+    - V2 >= BUY_V2_MIN (기본 55)
+    - V4 >= BUY_V4_MIN (기본 40)
+    - V4_DELTA <= BUY_V4_DELTA_MAX (기본 0)
     - V1 조건 제거 (역발상 전략 비효율 확인)
-
-    백테스트 결과:
-    - 기존 조건: 7거래, +2,110원/6일
-    - 최적화 조건: 524거래, +334,941원/6일 (+55,824원/일)
 
     Args:
         scores: {'v1': x, 'v2': y, 'v4': z, 'v5': w, 'v4_delta': d, ...}
@@ -186,27 +190,27 @@ def should_buy_advanced(scores: dict, current_hour: int, use_time_filter: bool =
     v4 = scores.get('v4', 0)
     v4_delta = scores.get('v4_delta', 0)
 
-    # 오전 전략 (09:30~10:55): V2 >= 55, V4 >= 40
+    # 오전 전략 (09:30~10:55)
     if current_hour < 11:
-        if v2 >= 55 and v4 >= 40:
-            return True, f"[오전] V2={v2}>=55, V4={v4}>=40"
+        if v2 >= SC.BUY_V2_MIN and v4 >= SC.BUY_V4_MIN:
+            return True, f"[오전] V2={v2}>={SC.BUY_V2_MIN}, V4={v4}>={SC.BUY_V4_MIN}"
         else:
-            if v2 < 55:
-                return False, f"V2={v2}<55 (오전)"
-            return False, f"V4={v4}<40 (오전)"
+            if v2 < SC.BUY_V2_MIN:
+                return False, f"V2={v2}<{SC.BUY_V2_MIN} (오전)"
+            return False, f"V4={v4}<{SC.BUY_V4_MIN} (오전)"
 
     # 11시 이후 기본 전략
-    # 1. V2 기본 조건 (55 이상)
-    if v2 < 55:
-        return False, f"V2={v2}<55"
+    # 1. V2 기본 조건
+    if v2 < SC.BUY_V2_MIN:
+        return False, f"V2={v2}<{SC.BUY_V2_MIN}"
 
-    # 2. V4 기본 조건 (40 이상)
-    if v4 < 40:
-        return False, f"V4={v4}<40"
+    # 2. V4 기본 조건
+    if v4 < SC.BUY_V4_MIN:
+        return False, f"V4={v4}<{SC.BUY_V4_MIN}"
 
-    # 3. V4 안정/하락 확인 (V4_DELTA <= 0) - 급등중 종목 제외
-    if v4_delta > 0:
-        return False, f"V4델타={v4_delta}>0 (급등중 제외)"
+    # 3. V4 안정/하락 확인 - 급등중 종목 제외
+    if v4_delta > SC.BUY_V4_DELTA_MAX:
+        return False, f"V4델타={v4_delta}>{SC.BUY_V4_DELTA_MAX} (급등중 제외)"
 
     # 모든 조건 충족
-    return True, f"V2={v2}>=55, V4={v4}>=40, V4델타={v4_delta}<=0"
+    return True, f"V2={v2}>={SC.BUY_V2_MIN}, V4={v4}>={SC.BUY_V4_MIN}, V4델타={v4_delta}<={SC.BUY_V4_DELTA_MAX}"

@@ -99,6 +99,40 @@ class ScheduleConfig:
     RUN_ON_WEEKEND = False  # 주말 실행 여부
 
 
+class StrategyConfig:
+    """
+    매매 전략 임계값 설정
+
+    이 값들은 백테스트 결과를 기반으로 최적화됨 (2026-02-03 기준)
+    """
+
+    # === 매수 조건 (should_buy_advanced) ===
+    # 오전/오후 공통
+    BUY_V2_MIN = 55          # V2 최소 점수 (기존 70에서 완화)
+    BUY_V4_MIN = 40          # V4 최소 점수 (기존 50에서 완화)
+
+    # 오후 추가 조건
+    BUY_V4_DELTA_MAX = 0     # V4 델타 최대값 (급등중 제외)
+
+    # === 홀딩 조건 (check_hold_condition) ===
+    HOLD_V5_MIN = 70         # V5 이상이면 홀딩 (추가상승 여력)
+    HOLD_V4_MIN = 55         # V4 이상이면 홀딩
+    HOLD_V2_MIN = 60         # V2 이상이면 홀딩
+
+    # === 매도 조건 ===
+    SELL_V4_MAX = 40         # V4 미만이면 매도
+    SELL_V2_MAX = 50         # V2 미만 AND V4 < 45 이면 매도
+    SELL_V4_COMBINED = 45    # V2/V4 복합 조건용
+
+    # === 손절 ===
+    STOP_LOSS_RATE = 7.0     # 손절 기준 (%)
+
+    # === 시총별 상승률 제한 ===
+    CHANGE_LIMIT_LARGE = 5.0   # 대형주 (1조+): 5%
+    CHANGE_LIMIT_MID = 10.0    # 중형주 (3000억~1조): 10%
+    CHANGE_LIMIT_SMALL = 15.0  # 소형주 (3000억 미만): 15%
+
+
 class TelegramConfig:
     """텔레그램 봇 설정"""
     BOT_TOKEN = "8524957427:AAFnkZJACCJWm_pm0TXp-aXbsoZtnhJWjhM"
