@@ -26,7 +26,7 @@ import pandas as pd
 # 프로젝트 루트 추가
 sys.path.insert(0, str(Path(__file__).parent))
 
-from api.services.kis_client import KISClient
+from services.kis_client import KISClient
 from trading.order_executor import OrderExecutor
 from trading.risk_manager import RiskManager, TradingLimits
 from trading.trade_logger import TradeLogger, BuySuggestionManager

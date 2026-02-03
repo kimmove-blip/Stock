@@ -1245,7 +1245,7 @@ class TradeLogger:
         import sys
         import os
         sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-        from api.services.kis_client import KISClient
+        from services.kis_client import KISClient
 
         last_error = None
 
@@ -1331,7 +1331,7 @@ class TradeLogger:
             import sys
             import os
             sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-            from api.services.kis_client import KISClient
+            from services.kis_client import KISClient
 
             client = KISClient(
                 app_key=app_key,
@@ -1390,7 +1390,7 @@ class TradeLogger:
             import sys
             import os
             sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-            from api.services.kis_client import KISClient
+            from services.kis_client import KISClient
 
             client = KISClient(
                 app_key=app_key,
@@ -1440,7 +1440,7 @@ class TradeLogger:
             import sys
             import os
             sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-            from api.services.kis_client import KISClient
+            from services.kis_client import KISClient
 
             client = KISClient(
                 app_key=app_key,
@@ -1500,7 +1500,7 @@ class TradeLogger:
             import sys
             import os
             sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-            from api.services.kis_client import KISClient
+            from services.kis_client import KISClient
 
             client = KISClient(
                 app_key=app_key,

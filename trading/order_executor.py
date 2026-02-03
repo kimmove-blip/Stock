@@ -6,7 +6,7 @@
 import time
 from datetime import datetime
 from typing import Dict, List, Optional, Tuple
-from api.services.kis_client import KISClient
+from services.kis_client import KISClient
 
 
 class OrderExecutor:
