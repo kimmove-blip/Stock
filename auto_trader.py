@@ -134,7 +134,7 @@ def evaluate_conditions(conditions: list, scores: dict) -> bool:
     return final
 
 
-def check_hold_condition(scores: dict, profit_rate: float, stop_loss_rate: float = 7.0) -> tuple:
+def check_hold_condition(scores: dict, profit_rate: float, stop_loss_rate: float = 3.0) -> tuple:
     """
     개선된 매도/홀딩 판단 함수
 
@@ -154,9 +154,9 @@ def check_hold_condition(scores: dict, profit_rate: float, stop_loss_rate: float
     if profit_rate <= -stop_loss_rate:
         return True, f"손절 ({profit_rate:.1f}% <= -{stop_loss_rate}%)"
 
-    # 2. V5 >= 60이면 홀딩 (추가 상승 가능)
-    if v5 >= 60:
-        return False, f"V5={v5}>=60 홀딩 (추가상승여력)"
+    # 2. V5 >= 70이면 홀딩 (추가 상승 가능, 60→70 상향)
+    if v5 >= 70:
+        return False, f"V5={v5}>=70 홀딩 (추가상승여력)"
 
     # 3. V4 >= 55이면 홀딩
     if v4 >= 55:
@@ -197,9 +197,9 @@ def should_buy_advanced(scores: dict, current_hour: int, use_time_filter: bool =
     """
     개선된 매수 조건 판단 함수 (분석 결과 기반)
 
-    시간대별 전략:
-    - 09~10시 (오전): V2 >= 65, V1 < 50, V4 >= 50
-    - 11시 이후: 기본 전략 - V2 >= 70, V1 < 50, V4Δ <= 0
+    시간대별 전략 (2026-02-03 최적화):
+    - 09:30~10:55 (오전): V2 >= 70, V1 < 50, V4 >= 50, 상승률 <= 5%
+    - 11:00~11:30: 기본 전략 - V2 >= 70, V1 < 50, V4Δ <= 0, 상승률 <= 3%
 
     Args:
         scores: {'v1': x, 'v2': y, 'v4': z, 'v5': w, 'v4_delta': d, ...}
@@ -214,13 +214,13 @@ def should_buy_advanced(scores: dict, current_hour: int, use_time_filter: bool =
     v4 = scores.get('v4', 0)
     v4_delta = scores.get('v4_delta', 0)
 
-    # 오전 전략 (09~10시): V2 >= 65, V1 < 50, V4 >= 50
+    # 오전 전략 (09:30~10:55): V2 >= 70, V1 < 50, V4 >= 50 (65→70 상향)
     if current_hour < 11:
-        if v2 >= 65 and v1 < 50 and v4 >= 50:
-            return True, f"[오전] V2={v2}>=65, V1={v1}<50, V4={v4}>=50"
+        if v2 >= 70 and v1 < 50 and v4 >= 50:
+            return True, f"[오전] V2={v2}>=70, V1={v1}<50, V4={v4}>=50"
         else:
-            if v2 < 65:
-                return False, f"V2={v2}<65 (오전)"
+            if v2 < 70:
+                return False, f"V2={v2}<70 (오전)"
             if v1 >= 50:
                 return False, f"V1={v1}>=50 (오전)"
             return False, f"V4={v4}<50 (오전)"
@@ -2349,13 +2349,13 @@ class AutoTrader:
                 if profit_rate <= -stop_loss_rate:
                     sell_reasons.append(f"손절 ({profit_rate:.1f}% <= -{stop_loss_rate}%)")
 
-                # 장마감 정리매도
+                # 장마감 정리매도 (V5>=70만 홀딩, 60→70 상향)
                 if is_closing_time:
                     v5 = stock_scores.get('v5', 0)
-                    if v5 >= 60:
-                        hold_list.append(f"{stock_name}: 장마감 V5={v5}>=60 강한신호 홀딩")
+                    if v5 >= 70:
+                        hold_list.append(f"{stock_name}: 장마감 V5={v5}>=70 강한신호 홀딩")
                         continue
-                    sell_reasons.append(f"장마감정리 (V5={v5}<60)")
+                    sell_reasons.append(f"장마감정리 (V5={v5}<70)")
                 elif self.sell_conditions:
                     if evaluate_conditions(self.sell_conditions, stock_scores):
                         sell_reasons.append(f"매도조건 충족")
@@ -2475,9 +2475,9 @@ class AutoTrader:
             print(f"\n[4] 매수 후보 필터링 중 (커스텀 조건)...")
         elif use_advanced:
             if hour < 11:
-                print(f"\n[4] 매수 후보 필터링 중 (오전보수: V2>=80, V4>=50)...")
+                print(f"\n[4] 매수 후보 필터링 중 (오전: V2>=70, V1<50, V4>=50, 상승률<=5%)...")
             else:
-                print(f"\n[4] 매수 후보 필터링 중 (기본: V2>=75, V1<50, V4델타<=0)...")
+                print(f"\n[4] 매수 후보 필터링 중 (기본: V2>=70, V1<50, V4델타<=0, 상승률<=3%)...")
         else:
             print(f"\n[4] 매수 후보 필터링 중 ({score_version.upper()}>={min_score})...")
 
@@ -2506,6 +2506,13 @@ class AutoTrader:
                     continue
                 score = scores.get(self.buy_conditions[0]['score'], 0)
             elif use_advanced:
+                # 상승률 필터 (2026-02-03 최적화: 오전 5%, 11시이후 3%)
+                change_pct = stock.get("change_pct", 0)
+                max_change = 5.0 if hour < 11 else 3.0
+                if change_pct > max_change:
+                    advanced_reasons[f"상승률>{max_change}%"] = advanced_reasons.get(f"상승률>{max_change}%", 0) + 1
+                    continue
+
                 should_buy, reason = should_buy_advanced(scores, hour, use_time_filter=True)
                 if not should_buy:
                     key = reason.split('=')[0] if '=' in reason else reason

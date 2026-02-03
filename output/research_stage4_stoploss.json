@@ -1,0 +1,187 @@
+{
+  "metadata": {
+    "analysis_date": "2026-02-03 14:23:45",
+    "data_period": {
+      "start": "2026-01-19 00:06:46",
+      "end": "2026-02-03 01:56:18"
+    },
+    "total_trades": 437,
+    "matched_pairs": 119,
+    "sell_trades": 203
+  },
+  "current_performance": {
+    "total_pl": 136932.0,
+    "avg_pl_per_trade": 1150.689075630252,
+    "avg_pl_rate": -1.4416376954004562,
+    "win_rate": 27.73109243697479,
+    "avg_holding_hours": 10.690461378359009,
+    "median_holding_hours": 2.6755555555555555
+  },
+  "stoploss_analysis": {
+    "current_stoploss_trades": {
+      "count": 9,
+      "rate": 4.433497536945813,
+      "avg_loss_rate": -5.416696419438124,
+      "total_loss": -389754.0
+    },
+    "threshold_simulation": [
+      {
+        "threshold": -3,
+        "triggered_count": 43,
+        "triggered_rate": 36.134453781512605,
+        "total_pl_with_stop": 355680.56000000006,
+        "improvement_vs_current": 218748.56000000006,
+        "improvement_pct": 159.74977361025915
+      },
+      {
+        "threshold": -5,
+        "triggered_count": 15,
+        "triggered_rate": 12.605042016806722,
+        "total_pl_with_stop": 228005.4,
+        "improvement_vs_current": 91073.4,
+        "improvement_pct": 66.50994654280956
+      },
+      {
+        "threshold": -7,
+        "triggered_count": 5,
+        "triggered_rate": 4.201680672268908,
+        "total_pl_with_stop": 148221.9,
+        "improvement_vs_current": 11289.899999999994,
+        "improvement_pct": 8.244895276487597
+      },
+      {
+        "threshold": -10,
+        "triggered_count": 0,
+        "triggered_rate": 0.0,
+        "total_pl_with_stop": 136932.0,
+        "improvement_vs_current": 0.0,
+        "improvement_pct": 0.0
+      }
+    ]
+  },
+  "profit_target_analysis": {
+    "strategies": [
+      {
+        "target": 3,
+        "strategy": "+3% Target",
+        "total_pl": 47874.350000000035,
+        "avg_per_trade": 402.3054621848742,
+        "early_exit_count": 8,
+        "missed_profit": 89057.65
+      },
+      {
+        "target": 5,
+        "strategy": "+5% Target",
+        "total_pl": 84541.25,
+        "avg_per_trade": 710.4306722689075,
+        "early_exit_count": 8,
+        "missed_profit": 52390.75
+      },
+      {
+        "target": 7,
+        "strategy": "+7% Target",
+        "total_pl": 106931.35,
+        "avg_per_trade": 898.5827731092437,
+        "early_exit_count": 4,
+        "missed_profit": 30000.649999999994
+      },
+      {
+        "target": null,
+        "strategy": "No Target (Current)",
+        "total_pl": 136932.0,
+        "avg_per_trade": 1150.689075630252,
+        "early_exit_count": 0,
+        "missed_profit": 0.0
+      }
+    ]
+  },
+  "trailing_stop_analysis": {
+    "strategies": [
+      {
+        "trail_pct": 2,
+        "triggered_count": 11,
+        "total_pl": 98173.87180553284,
+        "difference_vs_current": -38758.128194467165
+      },
+      {
+        "trail_pct": 3,
+        "triggered_count": 8,
+        "total_pl": 88554.76577744121,
+        "difference_vs_current": -48377.23422255879
+      },
+      {
+        "trail_pct": 5,
+        "triggered_count": 8,
+        "total_pl": 51887.865777441126,
+        "difference_vs_current": -85044.13422255887
+      }
+    ]
+  },
+  "combined_strategies": [
+    {
+      "name": "-3% Stop-loss Only",
+      "stoploss": -3,
+      "profit_target": null,
+      "total_pl": 355680.56000000006,
+      "stop_triggered": 43,
+      "profit_exits": 0,
+      "avg_per_trade": 2988.9122689075634
+    },
+    {
+      "name": "-3% Stop / +3% Target",
+      "stoploss": -3,
+      "profit_target": 3,
+      "total_pl": 266622.91000000003,
+      "stop_triggered": 43,
+      "profit_exits": 8,
+      "avg_per_trade": 2240.5286554621853
+    },
+    {
+      "name": "-3% Stop / +5% Target",
+      "stoploss": -3,
+      "profit_target": 5,
+      "total_pl": 303289.81,
+      "stop_triggered": 43,
+      "profit_exits": 8,
+      "avg_per_trade": 2548.6538655462186
+    },
+    {
+      "name": "-3% Stop / +7% Target",
+      "stoploss": -3,
+      "profit_target": 7,
+      "total_pl": 325679.91,
+      "stop_triggered": 43,
+      "profit_exits": 4,
+      "avg_per_trade": 2736.8059663865542
+    },
+    {
+      "name": "Current Strategy (No Fixed Targets)",
+      "stoploss": null,
+      "profit_target": null,
+      "total_pl": 136932.0,
+      "stop_triggered": 0,
+      "profit_exits": 0,
+      "avg_per_trade": 1150.689075630252
+    }
+  ],
+  "recommendations": {
+    "optimal_stoploss": -3,
+    "optimal_profit_target": null,
+    "use_trailing_stop": false,
+    "reasoning": [
+      "-3% 손절선 적용 시 수익 218,749원 개선 (+160%)",
+      "익절 목표는 설정하지 않는 것이 최적 (조기 익절로 수익 감소)",
+      "트레일링 스탑도 수익 감소 효과 (-38,758원 ~ -85,044원)",
+      "단순 -3% 손절만 적용하는 것이 가장 효과적"
+    ]
+  },
+  "key_findings": {
+    "best_strategy": "-3% Stop-loss Only",
+    "current_pl": 136932.0,
+    "optimal_pl": 355681.0,
+    "improvement_amount": 218749.0,
+    "improvement_rate": 159.7,
+    "stop_triggered_count": 43,
+    "stop_triggered_rate": 36.1
+  }
+}

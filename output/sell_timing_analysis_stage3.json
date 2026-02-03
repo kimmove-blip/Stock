@@ -1,0 +1,215 @@
+{
+  "stage": 3,
+  "topic": "매도시기",
+  "analysis_period": "2026-01-19 ~ 2026-02-03",
+  "sample_size": {
+    "total_trades": 366,
+    "sell_trades": 162,
+    "intraday_score_days": 6,
+    "intraday_score_samples": 4833
+  },
+  "findings": [
+    {
+      "id": "F1",
+      "title": "V5>=60 홀딩 효과 제한적",
+      "hypothesis": "V5>=60일 때 +12.50% 추가상승",
+      "actual_result": "V5>=60 장중 수익률 +0.87%, V5<60은 +0.34%, 차이 0.53%p",
+      "statistical_test": {
+        "method": "Welch's t-test",
+        "t_statistic": 2.087,
+        "cohens_d": 0.101,
+        "interpretation": "효과 크기 작음 (small effect)"
+      },
+      "evidence_strength": "moderate",
+      "verdict": "효과 있으나 +12.50% 주장은 과장됨"
+    },
+    {
+      "id": "F2",
+      "title": "V5>=70이 강력한 홀딩 신호",
+      "result": {
+        "intraday_return": {
+          "v5_70_plus": {
+            "mean": 2.41,
+            "n": 80
+          },
+          "v5_below_70": {
+            "mean": 0.37,
+            "n": 4753
+          }
+        },
+        "overnight_gap": {
+          "v5_70_plus": {
+            "mean": 2.22,
+            "n": 27
+          },
+          "v5_60_70": {
+            "mean": -8.51,
+            "n": 79
+          },
+          "v5_below_60": {
+            "mean": -3.54,
+            "n": 3531
+          }
+        }
+      },
+      "evidence_strength": "strong",
+      "verdict": "V5>=70에서만 오버나잇 홀딩이 유리"
+    },
+    {
+      "id": "F3",
+      "title": "V4<40 매도 조건 유효",
+      "result": {
+        "v4_below_40": {
+          "mean": 0.32,
+          "n": 4380
+        },
+        "v4_40_plus": {
+          "mean": 1.21,
+          "n": 453
+        }
+      },
+      "difference": "0.89%p",
+      "evidence_strength": "strong",
+      "verdict": "V4<40 매도 조건 유지 권장"
+    },
+    {
+      "id": "F4",
+      "title": "장중매도가 장마감매도보다 효율적",
+      "result": {
+        "intraday_sell": {
+          "mean": -0.92,
+          "n": 119,
+          "total_pnl": 159475
+        },
+        "closing_sell": {
+          "mean": -1.81,
+          "n": 41,
+          "total_pnl": -101837
+        }
+      },
+      "difference": "0.89%p",
+      "evidence_strength": "strong",
+      "verdict": "조건 충족 시 장중 즉시 매도 권장"
+    },
+    {
+      "id": "F5",
+      "title": "오전 매도가 수익률 최고",
+      "result": {
+        "9시대": {
+          "mean": -0.19,
+          "n": 54,
+          "total_pnl": 536963
+        },
+        "10시대": {
+          "mean": -0.95,
+          "n": 24
+        },
+        "11시대": {
+          "mean": -2.3,
+          "n": 25
+        },
+        "15시대": {
+          "mean": -1.81,
+          "n": 41
+        }
+      },
+      "evidence_strength": "moderate",
+      "verdict": "매도 조건 충족 시 오전에 신속히 매도"
+    },
+    {
+      "id": "F6",
+      "title": "점수 50점 하락 매도는 오히려 손실",
+      "result": {
+        "50점_drop": {
+          "mean": 1.56,
+          "n": 25
+        },
+        "40점_이하_drop": {
+          "mean": -0.73,
+          "n": 18
+        }
+      },
+      "evidence_strength": "moderate",
+      "verdict": "50점 하락 매도 임계값이 너무 높음, 40점으로 하향 검토"
+    },
+    {
+      "id": "F7",
+      "title": "손절 -7% 적정",
+      "result": {
+        "stop_loss_count": 11,
+        "avg_loss": -5.42,
+        "total_loss": -389754,
+        "ratio_of_sells": "6.8%"
+      },
+      "evidence_strength": "moderate",
+      "verdict": "-7% 손절선 유지 권장"
+    }
+  ],
+  "recommendations": [
+    {
+      "priority": 1,
+      "category": "홀딩 조건",
+      "action": "V5>=70 홀딩 임계값 상향",
+      "current": "V5>=60",
+      "proposed": "V5>=70",
+      "rationale": "V5 60-70 오버나잇 갭 -8.51%, V5>=70만 +2.22%",
+      "expected_impact": "오버나잇 손실 회피"
+    },
+    {
+      "priority": 2,
+      "category": "매도 시점",
+      "action": "장중 조기 매도 우선",
+      "current": "장마감정리",
+      "proposed": "10시 전 매도 실행",
+      "rationale": "9시대 매도 -0.19%, 11시 이후 -2%대",
+      "expected_impact": "+0.89%p 수익률 개선"
+    },
+    {
+      "priority": 3,
+      "category": "매도 조건",
+      "action": "점수 하락 매도 임계값 하향",
+      "current": "50점 이하로 하락 시 매도",
+      "proposed": "40점 이하로 하락 시 매도",
+      "rationale": "50점 하락 매도 평균 +1.56% (불필요한 매도)",
+      "expected_impact": "수익 기회 유지"
+    },
+    {
+      "priority": 4,
+      "category": "오버나잇",
+      "action": "익일 홀딩 조건 강화",
+      "current": "V5>=60",
+      "proposed": "V5>=70 AND V4>=50",
+      "rationale": "V5 60-70 갭 -8.51%",
+      "expected_impact": "오버나잇 갭 손실 방지"
+    }
+  ],
+  "evidence": {
+    "data_sources": [
+      {
+        "type": "trade_log",
+        "records": 366,
+        "period": "2026-01-19 ~ 2026-02-03"
+      },
+      {
+        "type": "intraday_scores",
+        "files": 279,
+        "days": 6,
+        "samples": 4833
+      },
+      {
+        "type": "overnight_gap",
+        "samples": 3649
+      }
+    ],
+    "statistical_methods": [
+      "Welch's t-test",
+      "Cohen's d",
+      "Group comparison"
+    ],
+    "limitations": [
+      "분석 기간 6일로 제한적",
+      "시장 상황별 세분화 미실시",
+      "거래비용(0.203%) 미반영"
+    ]
+  }
+}
