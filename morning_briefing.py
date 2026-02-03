@@ -358,34 +358,46 @@ def generate_json_output(data: dict, stance: str, multiplier: float,
 # ============================================================
 
 def send_email(briefing: str, stance: str):
-    """이메일 발송"""
+    """이메일 발송 (email_sender 모듈 사용)"""
     try:
-        # 기존 이메일 설정 사용
-        from config import GMAIL_USER, GMAIL_APP_PASSWORD, REPORT_RECIPIENTS
-        import smtplib
-        from email.mime.text import MIMEText
-        from email.mime.multipart import MIMEMultipart
+        from email_sender import EmailSender
+
+        sender = EmailSender(use_db_subscribers=True)
+
+        if not sender.is_configured():
+            print("[ERROR] 이메일 설정이 필요합니다. .env 파일을 확인하세요.")
+            return False
 
         now = datetime.now()
         subject = f"[시황브리핑] {now.strftime('%m/%d')} 투자스탠스: {stance}"
 
-        msg = MIMEMultipart()
-        msg['Subject'] = subject
-        msg['From'] = GMAIL_USER
-        msg['To'] = ', '.join(REPORT_RECIPIENTS)
+        # 텍스트를 HTML로 변환 (줄바꿈 및 고정폭 폰트)
+        html_body = f"""
+        <html>
+        <head>
+            <style>
+                body {{ font-family: 'Malgun Gothic', monospace; }}
+                pre {{
+                    background-color: #1a1a2e;
+                    color: #eaeaea;
+                    padding: 20px;
+                    border-radius: 10px;
+                    font-size: 14px;
+                    line-height: 1.4;
+                    white-space: pre-wrap;
+                }}
+            </style>
+        </head>
+        <body>
+            <pre>{briefing}</pre>
+        </body>
+        </html>
+        """
 
-        # 텍스트 본문
-        msg.attach(MIMEText(briefing, 'plain', 'utf-8'))
+        return sender.send_report(subject, html_body)
 
-        with smtplib.SMTP_SSL('smtp.gmail.com', 465) as server:
-            server.login(GMAIL_USER, GMAIL_APP_PASSWORD)
-            server.sendmail(GMAIL_USER, REPORT_RECIPIENTS, msg.as_string())
-
-        print(f"[OK] 이메일 발송 완료: {REPORT_RECIPIENTS}")
-        return True
-
-    except ImportError:
-        print("[ERROR] config.py에 이메일 설정이 없습니다.")
+    except ImportError as e:
+        print(f"[ERROR] email_sender 모듈 로드 실패: {e}")
         return False
     except Exception as e:
         print(f"[ERROR] 이메일 발송 실패: {e}")
