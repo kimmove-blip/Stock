@@ -497,10 +497,17 @@ async def get_trade_history(
                     profit_loss = int((sell_price - avg_buy_price) * sell_qty)
                     profit_rate = round(((sell_price / avg_buy_price) - 1) * 100, 2)
 
+            # 시간 형식 변환 (HHMMSS -> HH:MM:SS)
+            raw_time = h.get('order_time', '')
+            if len(raw_time) == 6:
+                order_time = f"{raw_time[:2]}:{raw_time[2:4]}:{raw_time[4:6]}"
+            else:
+                order_time = raw_time
+
             result.append(TradeLogResponse(
                 id=idx + 1,
                 trade_date=order_date,
-                trade_time="",
+                trade_time=order_time,
                 stock_code=h.get('stock_code', ''),
                 stock_name=h.get('stock_name'),
                 side=h.get('side', 'buy'),

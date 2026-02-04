@@ -137,6 +137,9 @@ class ScalpingSimulator:
         breakout_stop_loss: float = -2.0,  # 변동성 돌파는 더 넓은 손절
         # 공통 설정
         investment_per_stock: int = 500_000,
+        # 실제 주문 설정
+        execute_mode: bool = False,
+        kis_client=None,
     ):
         self.stock_codes = stock_codes
         self.investment = investment_per_stock
@@ -146,6 +149,11 @@ class ScalpingSimulator:
         self.scalping_take_profit = scalping_take_profit
         self.breakout_k = breakout_k
         self.breakout_stop_loss = breakout_stop_loss
+
+        # 실제 주문 모드
+        self.execute_mode = execute_mode
+        self.kis_client = kis_client
+        self.real_positions: Dict[str, Dict] = {}  # 실제 보유 포지션
 
         # 상태
         self.trades: List[SimulatedTrade] = []
@@ -165,6 +173,72 @@ class ScalpingSimulator:
         # 결과 저장 경로
         self.output_dir = Path(__file__).parent / "output" / "scalping_simulation"
         self.output_dir.mkdir(parents=True, exist_ok=True)
+
+    def calculate_quantity(self, price: int) -> int:
+        """투자금액 기준 수량 계산 (10만원 이상 종목은 1주)"""
+        if price >= 100_000:
+            return 1
+        return max(1, self.investment // price)
+
+    def execute_buy(self, stock_code: str, stock_name: str, price: int, strategy: str) -> bool:
+        """실제 매수 주문 실행"""
+        if not self.execute_mode or not self.kis_client:
+            return True  # 시뮬레이션 모드
+
+        quantity = self.calculate_quantity(price)
+        try:
+            result = self.kis_client.place_order(
+                stock_code=stock_code,
+                side='buy',
+                quantity=quantity,
+                price=0,  # 시장가
+                order_type='01'
+            )
+            if result and result.get('success'):
+                self.real_positions[stock_code] = {
+                    'quantity': quantity,
+                    'entry_price': price,
+                    'strategy': strategy,
+                    'stock_name': stock_name,
+                }
+                print(f"[실제주문] 매수: {stock_name} {quantity}주 @ 시장가 (투자: {price * quantity:,}원)")
+                return True
+            else:
+                msg = result.get('message', '알 수 없는 오류') if result else '응답 없음'
+                print(f"[실제주문] 매수 실패: {stock_name} - {msg}")
+                return False
+        except Exception as e:
+            print(f"[실제주문] 매수 에러: {stock_name} - {e}")
+            return False
+
+    def execute_sell(self, stock_code: str, stock_name: str, reason: str) -> bool:
+        """실제 매도 주문 실행"""
+        if not self.execute_mode or not self.kis_client:
+            return True  # 시뮬레이션 모드
+
+        position = self.real_positions.get(stock_code)
+        if not position:
+            return True  # 포지션 없음
+
+        try:
+            result = self.kis_client.place_order(
+                stock_code=stock_code,
+                side='sell',
+                quantity=position['quantity'],
+                price=0,  # 시장가
+                order_type='01'
+            )
+            if result and result.get('success'):
+                del self.real_positions[stock_code]
+                print(f"[실제주문] 매도: {stock_name} {position['quantity']}주 ({reason})")
+                return True
+            else:
+                msg = result.get('message', '알 수 없는 오류') if result else '응답 없음'
+                print(f"[실제주문] 매도 실패: {stock_name} - {msg}")
+                return False
+        except Exception as e:
+            print(f"[실제주문] 매도 에러: {stock_name} - {e}")
+            return False
 
     def load_prev_day_data(self):
         """전일 데이터 로드"""
@@ -273,6 +347,11 @@ class ScalpingSimulator:
         # 2. 현재 전략 신호 체크
         if stock_code not in self.active_positions['scalping']:
             if self.check_scalping_signal(stock_code, current_price, ask_bid_ratio, strength_accel, ma_distance_pct):
+                # 실제 주문 실행
+                if self.execute_mode:
+                    if not self.execute_buy(stock_code, stock_name, current_price, 'scalping'):
+                        return  # 주문 실패시 포지션 등록 안함
+
                 trade = SimulatedTrade(
                     strategy='scalping',
                     stock_code=stock_code,
@@ -292,6 +371,11 @@ class ScalpingSimulator:
         # 3. 변동성 돌파 신호 체크
         if stock_code not in self.active_positions['breakout']:
             if self.check_breakout_signal(stock_code, current_price):
+                # 실제 주문 실행
+                if self.execute_mode:
+                    if not self.execute_buy(stock_code, stock_name, current_price, 'breakout'):
+                        return  # 주문 실패시 포지션 등록 안함
+
                 target = self.breakout_targets.get(stock_code, 0)
                 trade = SimulatedTrade(
                     strategy='breakout',
@@ -317,10 +401,14 @@ class ScalpingSimulator:
             profit_pct = ((current_price - trade.entry_price) / trade.entry_price) * 100
 
             if profit_pct <= self.scalping_stop_loss:
+                if self.execute_mode:
+                    self.execute_sell(stock_code, trade.stock_name, "손절")
                 trade.close(current_price, "stop_loss")
                 del self.active_positions['scalping'][stock_code]
                 print(f"[SCALPING] 손절: {trade.stock_name} @ {current_price:,}원 ({profit_pct:+.2f}%)")
             elif profit_pct >= self.scalping_take_profit:
+                if self.execute_mode:
+                    self.execute_sell(stock_code, trade.stock_name, "익절")
                 trade.close(current_price, "take_profit")
                 del self.active_positions['scalping'][stock_code]
                 print(f"[SCALPING] 익절: {trade.stock_name} @ {current_price:,}원 ({profit_pct:+.2f}%)")
@@ -332,14 +420,20 @@ class ScalpingSimulator:
             holding_minutes = (datetime.now() - trade.entry_time).total_seconds() / 60
 
             if profit_pct <= -1.0:  # 손절 -1%
+                if self.execute_mode:
+                    self.execute_sell(stock_code, trade.stock_name, "손절")
                 trade.close(current_price, "stop_loss")
                 del self.active_positions['breakout'][stock_code]
                 print(f"[BREAKOUT] 손절: {trade.stock_name} @ {current_price:,}원 ({profit_pct:+.2f}%)")
             elif profit_pct >= 2.0:  # 익절 +2%
+                if self.execute_mode:
+                    self.execute_sell(stock_code, trade.stock_name, "익절")
                 trade.close(current_price, "take_profit")
                 del self.active_positions['breakout'][stock_code]
                 print(f"[BREAKOUT] 익절: {trade.stock_name} @ {current_price:,}원 ({profit_pct:+.2f}%)")
             elif holding_minutes >= 10:  # 10분 시간청산
+                if self.execute_mode:
+                    self.execute_sell(stock_code, trade.stock_name, "시간청산")
                 trade.close(current_price, "time_exit")
                 del self.active_positions['breakout'][stock_code]
                 print(f"[BREAKOUT] 시간청산: {trade.stock_name} @ {current_price:,}원 ({profit_pct:+.2f}%, {holding_minutes:.0f}분)")
@@ -1092,6 +1186,12 @@ async def main():
     parser.add_argument('--min-cap', type=int, default=500,
                         help='최소 시총 (억원, 기본: 500)')
 
+    # 실제 주문 설정
+    parser.add_argument('--execute', '-e', action='store_true',
+                        help='실제 주문 실행 (모의투자 권장)')
+    parser.add_argument('--investment', '-i', type=int, default=100000,
+                        help='종목당 투자금액 (기본: 100,000원)')
+
     args = parser.parse_args()
 
     # 리포트 모드
@@ -1127,26 +1227,7 @@ async def main():
     stock_codes = list(set(stock_codes))  # 중복 제거
     print(f"대상 종목: {len(stock_codes)}개")
 
-    # 시뮬레이터 생성
-    simulator = ScalpingSimulator(
-        stock_codes=stock_codes,
-        scalping_stop_loss=args.scalping_sl,
-        scalping_take_profit=args.scalping_tp,
-        breakout_k=args.breakout_k,
-        breakout_stop_loss=args.breakout_sl,
-    )
-
-    # 시그널 핸들러
-    def shutdown(sig, frame):
-        print("\n종료 신호 수신...")
-        simulator.print_comparison()
-        simulator.save_results()
-        sys.exit(0)
-
-    signal.signal(signal.SIGINT, shutdown)
-    signal.signal(signal.SIGTERM, shutdown)
-
-    # KIS 클라이언트 생성 (폴링용)
+    # KIS 클라이언트 생성 (폴링/실제주문용)
     kis_client = None
     try:
         from api.services.kis_client import KISClient
@@ -1163,6 +1244,36 @@ async def main():
             print(f"[KIS] API 클라이언트 초기화 완료 (user_id={args.user_id})")
     except Exception as e:
         print(f"[KIS] 클라이언트 초기화 실패: {e}")
+
+    # 실제 주문 모드 확인
+    if args.execute:
+        if not kis_client:
+            print("[오류] 실제 주문 모드에는 KIS 클라이언트가 필요합니다.")
+            return
+        print(f"[실제주문] 모드 활성화 - 종목당 {args.investment:,}원")
+        print(f"[실제주문] 주가 10만원 이상 종목은 1주만 매매")
+
+    # 시뮬레이터 생성
+    simulator = ScalpingSimulator(
+        stock_codes=stock_codes,
+        scalping_stop_loss=args.scalping_sl,
+        scalping_take_profit=args.scalping_tp,
+        breakout_k=args.breakout_k,
+        breakout_stop_loss=args.breakout_sl,
+        investment_per_stock=args.investment,
+        execute_mode=args.execute,
+        kis_client=kis_client,
+    )
+
+    # 시그널 핸들러
+    def shutdown(sig, frame):
+        print("\n종료 신호 수신...")
+        simulator.print_comparison()
+        simulator.save_results()
+        sys.exit(0)
+
+    signal.signal(signal.SIGINT, shutdown)
+    signal.signal(signal.SIGTERM, shutdown)
 
     # 실행 모드 선택
     volatile_count = args.volatile if args.volatile > 0 else 0
