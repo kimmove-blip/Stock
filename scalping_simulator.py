@@ -509,7 +509,7 @@ async def run_polling_simulation(simulator: ScalpingSimulator, poll_interval: fl
 
                         # 현재 보유 종목 (포지션 있는 종목은 유지)
                         holding_codes = set()
-                        for trade in simulator.scalping_trades + simulator.breakout_trades:
+                        for trade in simulator.trades:
                             if not trade.is_closed:
                                 holding_codes.add(trade.stock_code)
 
