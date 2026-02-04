@@ -2152,6 +2152,31 @@ class AutoTrader:
         sell_list = []
         hold_list = []
 
+        # 오늘 매수 내역 조회 (최소 보유 시간 체크용)
+        today_str = now.strftime('%Y-%m-%d')
+        today_trades = self.logger.get_trade_history(
+            user_id=self.user_id,
+            start_date=today_str,
+            end_date=today_str,
+            trade_type='매수'
+        ) or []
+
+        # 종목별 매수 시간 매핑
+        buy_times = {}
+        for trade in today_trades:
+            code = trade.get('stock_code', '')
+            trade_time_str = trade.get('trade_time', '')
+            if code and trade_time_str:
+                try:
+                    buy_time = datetime.strptime(f"{today_str} {trade_time_str}", '%Y-%m-%d %H:%M:%S')
+                    # 동일 종목 여러 번 매수 시 가장 최근 시간 사용
+                    if code not in buy_times or buy_time > buy_times[code]:
+                        buy_times[code] = buy_time
+                except:
+                    pass
+
+        MIN_HOLD_MINUTES = 30  # 최소 보유 시간 (분)
+
         for h in holdings:
             stock_code = h["stock_code"]
             stock_name = h.get("stock_name", stock_code)
@@ -2166,6 +2191,14 @@ class AutoTrader:
             stock_scores = scores_map.get(stock_code, {'v1': 50, 'v2': 50, 'v4': 50, 'v5': 50})
             current_score = stock_scores.get(score_version, 50)
             sell_reasons = []
+
+            # 최소 보유 시간 체크 (손절 제외)
+            buy_time = buy_times.get(stock_code)
+            if buy_time and profit_rate > -stop_loss_rate:
+                hold_minutes = (now - buy_time).total_seconds() / 60
+                if hold_minutes < MIN_HOLD_MINUTES:
+                    hold_list.append(f"{stock_name}: 매수 후 {hold_minutes:.0f}분 (최소 {MIN_HOLD_MINUTES}분 보유)")
+                    continue
 
             # 개선된 홀딩/매도 판단 (V5 기반)
             if not self.sell_conditions and not is_closing_time:
