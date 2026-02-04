@@ -1288,6 +1288,7 @@ class KISClient:
 
                     all_orders.append({
                         "order_date": item.get("ord_dt", ""),
+                        "order_time": item.get("ord_tmd", ""),
                         "order_no": order_no,
                         "stock_code": item.get("pdno", ""),
                         "stock_name": item.get("prdt_name", ""),

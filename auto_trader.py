@@ -899,16 +899,17 @@ class AutoTrader:
 
                     self.logger.remove_holding(stock_code)
 
-                # 알림
+                # 알림 (실제 계산된 수익률 사용)
                 reason_str = sell_reasons[0] if sell_reasons else "조건 충족"
+                actual_profit_rate = realized_rate / 100  # notify 함수는 비율로 받음 (0.05 = 5%)
                 if "손절" in reason_str:
                     self.notifier.notify_stop_loss(
-                        stock_name, item.get("current_price", 0), profit_rate, stock_code
+                        stock_name, item.get("current_price", 0), actual_profit_rate, stock_code
                     )
                 else:
                     self.notifier.notify_sell(
                         stock_name, item.get("current_price", 0),
-                        quantity, profit_rate, reason_str, stock_code
+                        quantity, actual_profit_rate, reason_str, stock_code
                     )
 
                 self.stats["sell_orders"].append(result)
@@ -2066,8 +2067,8 @@ class AutoTrader:
         # JSON 저장
         self._save_screening_json(top_stocks, stats, now)
 
-        # 15:00 이후 장마감 시간 - 신규 매수 금지
-        if now.hour == 15:
+        # 14:55 이후 장마감 시간 - 신규 매수 금지
+        if now.hour == 15 or (now.hour == 14 and now.minute >= 55):
             print(f"\n[4] 장마감 시간 - 신규 매수 없음")
             return {"status": "completed", "buy_count": 0, "sell_count": sell_count}
 
@@ -2117,7 +2118,7 @@ class AutoTrader:
         stop_loss_rate = abs(user_settings.get('stop_loss_rate', 7.0))
         min_buy_score = user_settings.get('min_buy_score', 70)
 
-        is_closing_time = now.hour == 15 and now.minute >= 0
+        is_closing_time = now.hour == 15 or (now.hour == 14 and now.minute >= 55)
 
         # 로그 출력
         if is_closing_time:
@@ -2339,8 +2340,10 @@ class AutoTrader:
         if self.buy_conditions:
             print(f"\n[4] 매수 후보 필터링 중 (커스텀 조건)...")
         elif use_advanced:
-            if hour < 11:
-                print(f"\n[4] 매수 후보 필터링 중 (오전: V2>=70, V1<50, V4>=50, 상승률<=5%)...")
+            if hour == 9:
+                print(f"\n[4] 매수 후보 필터링 중 (EarlySurge: MACD+MA+등락률0~8% / 오전: V2,V4조건)...")
+            elif hour < 11:
+                print(f"\n[4] 매수 후보 필터링 중 (오전: V2>=70, V4>=50, 상승률<=5%)...")
             else:
                 print(f"\n[4] 매수 후보 필터링 중 (기본: V2>=70, V1<50, V4델타<=0, 상승률<=3%)...")
         else:
@@ -2371,14 +2374,26 @@ class AutoTrader:
                     continue
                 score = scores.get(self.buy_conditions[0]['score'], 0)
             elif use_advanced:
-                # 상승률 필터 (2026-02-03 최적화: 오전 5%, 11시이후 3%)
                 change_pct = stock.get("change_pct", 0)
-                max_change = 5.0 if hour < 11 else 3.0
+                signals = stock.get("signals", [])
+                minute = datetime.now().minute
+
+                # 상승률 필터 (Early Surge는 0~8%, 오전 ~5%, 11시 이후 ~3%)
+                if hour == 9 and minute <= 30:
+                    max_change = 8.0  # Early Surge: 0~8%
+                elif hour < 11:
+                    max_change = 5.0
+                else:
+                    max_change = 3.0
+
                 if change_pct > max_change:
                     advanced_reasons[f"상승률>{max_change}%"] = advanced_reasons.get(f"상승률>{max_change}%", 0) + 1
                     continue
 
-                should_buy, reason = should_buy_advanced(scores, hour, use_time_filter=True)
+                should_buy, reason = should_buy_advanced(
+                    scores, hour, use_time_filter=True,
+                    signals=signals, change_pct=change_pct, current_minute=minute
+                )
                 if not should_buy:
                     key = reason.split('=')[0] if '=' in reason else reason
                     advanced_reasons[key] = advanced_reasons.get(key, 0) + 1

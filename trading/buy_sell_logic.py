@@ -168,20 +168,28 @@ def get_change_limit_by_marcap(marcap: float) -> float:
         return SC.CHANGE_LIMIT_SMALL
 
 
-def should_buy_advanced(scores: dict, current_hour: int, use_time_filter: bool = True) -> Tuple[bool, str]:
+def should_buy_advanced(scores: dict, current_hour: int, use_time_filter: bool = True,
+                        signals: list = None, change_pct: float = 0, current_minute: int = 30) -> Tuple[bool, str]:
     """
-    개선된 매수 조건 판단 함수 (6일 백테스트 최적화 결과 적용)
+    개선된 매수 조건 판단 함수 (7일 백테스트 최적화 결과 적용)
 
     임계값은 config.StrategyConfig에서 중앙 관리:
     - V2 >= BUY_V2_MIN (기본 55)
     - V4 >= BUY_V4_MIN (기본 40)
     - V4_DELTA <= BUY_V4_DELTA_MAX (기본 0)
-    - V1 조건 제거 (역발상 전략 비효율 확인)
+
+    Early Surge Detection (09:05~09:30):
+    - MACD_BULL 필수
+    - MA_ALIGNED 또는 MA_STEEP 필수
+    - 등락률 0% ~ 8%
 
     Args:
         scores: {'v1': x, 'v2': y, 'v4': z, 'v5': w, 'v4_delta': d, ...}
         current_hour: 현재 시간 (9~15)
         use_time_filter: 시간 필터 사용 여부
+        signals: 시그널 리스트 (예: ['MACD_BULL', 'MA_ALIGNED'])
+        change_pct: 등락률
+        current_minute: 현재 분 (0~59)
 
     Returns:
         (should_buy: bool, reason: str)
@@ -189,12 +197,25 @@ def should_buy_advanced(scores: dict, current_hour: int, use_time_filter: bool =
     v2 = scores.get('v2', 0)
     v4 = scores.get('v4', 0)
     v4_delta = scores.get('v4_delta', 0)
+    signals = signals or []
 
-    # 오전 전략 (09:30~10:55)
+    # === Early Surge Detection (09:05~09:30) ===
+    if current_hour == 9 and 5 <= current_minute <= 30:
+        has_macd_bull = 'MACD_BULL' in signals
+        has_ma_signal = any(s in signals for s in ['MA_ALIGNED', 'MA_STEEP', 'MA_20_STEEP', 'MA_20_VERY_STEEP'])
+        has_volume_signal = any(s in signals for s in ['VOLUME_EXPLOSION', 'VOLUME_SURGE', 'VOLUME_SURGE_3X', 'VOLUME_HIGH'])
+        change_ok = 0 <= change_pct <= 8
+
+        if has_macd_bull and has_ma_signal and change_ok:
+            vol_note = "+VOL" if has_volume_signal else ""
+            return True, f"[EarlySurge] MACD_BULL+MA{vol_note}, Chg={change_pct:.1f}%"
+
+    # === 오전 전략 (09:30~10:55) ===
     if current_hour < 11:
         if v2 >= SC.BUY_V2_MIN and v4 >= SC.BUY_V4_MIN:
             return True, f"[오전] V2={v2}>={SC.BUY_V2_MIN}, V4={v4}>={SC.BUY_V4_MIN}"
         else:
+            # Early Surge 조건 미충족 + 기존 조건 미충족
             if v2 < SC.BUY_V2_MIN:
                 return False, f"V2={v2}<{SC.BUY_V2_MIN} (오전)"
             return False, f"V4={v4}<{SC.BUY_V4_MIN} (오전)"

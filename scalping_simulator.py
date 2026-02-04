@@ -140,6 +140,7 @@ class ScalpingSimulator:
         # 실제 주문 설정
         execute_mode: bool = False,
         kis_client=None,
+        user_id: int = None,
     ):
         self.stock_codes = stock_codes
         self.investment = investment_per_stock
@@ -153,6 +154,8 @@ class ScalpingSimulator:
         # 실제 주문 모드
         self.execute_mode = execute_mode
         self.kis_client = kis_client
+        self.user_id = user_id
+        self.trade_logger = TradeLogger() if execute_mode and user_id else None
         self.real_positions: Dict[str, Dict] = {}  # 실제 보유 포지션
 
         # 상태
@@ -227,6 +230,19 @@ class ScalpingSimulator:
                     'stock_name': stock_name,
                 }
                 print(f"[실제주문] 매수: {stock_name} {quantity}주 @ 시장가 (투자: {price * quantity:,}원)")
+                # 거래 사유 기록
+                if self.trade_logger and self.user_id:
+                    self.trade_logger.log_trade(
+                        user_id=self.user_id,
+                        stock_code=stock_code,
+                        stock_name=stock_name,
+                        side='buy',
+                        quantity=quantity,
+                        price=price,
+                        order_no=result.get('order_no', ''),
+                        trade_reason=f"[스캘핑-{strategy}] 변동성돌파",
+                        status='executed'
+                    )
                 return True
             else:
                 msg = result.get('message', '알 수 없는 오류') if result else '응답 없음'
@@ -254,6 +270,28 @@ class ScalpingSimulator:
                 order_type='01'
             )
             if result and result.get('success'):
+                # 손익 계산
+                entry_price = position.get('entry_price', 0)
+                sell_price = result.get('executed_price', 0) or entry_price  # 시장가라 정확한 체결가는 나중에
+                profit_loss = (sell_price - entry_price) * position['quantity'] if entry_price > 0 else None
+                profit_rate = ((sell_price / entry_price) - 1) * 100 if entry_price > 0 else None
+
+                # 거래 사유 기록
+                if self.trade_logger and self.user_id:
+                    self.trade_logger.log_trade(
+                        user_id=self.user_id,
+                        stock_code=stock_code,
+                        stock_name=stock_name,
+                        side='sell',
+                        quantity=position['quantity'],
+                        price=sell_price or entry_price,
+                        order_no=result.get('order_no', ''),
+                        trade_reason=f"[스캘핑] {reason}",
+                        status='executed',
+                        profit_loss=profit_loss,
+                        profit_rate=profit_rate
+                    )
+
                 del self.real_positions[stock_code]
                 print(f"[실제주문] 매도: {stock_name} {position['quantity']}주 ({reason})")
                 return True
@@ -1352,6 +1390,7 @@ async def main():
         investment_per_stock=args.investment,
         execute_mode=args.execute,
         kis_client=kis_client,
+        user_id=args.user_id,
     )
 
     # 실제 주문 모드일 때 기존 보유종목 로드
