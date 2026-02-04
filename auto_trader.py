@@ -17,6 +17,7 @@ import argparse
 import json
 import os
 import sys
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
@@ -2158,7 +2159,7 @@ class AutoTrader:
             user_id=self.user_id,
             start_date=today_str,
             end_date=today_str,
-            trade_type='매수'
+            side='매수'
         ) or []
 
         # 종목별 매수 시간 매핑
@@ -2590,15 +2591,11 @@ def run_for_all_users(dry_run: bool = False, min_score: int = 75):
             print(f"  record_intraday_scores.py가 실행 중인지 확인하세요.")
             return
 
-    results = []
-
-    for user in users:
+    # 병렬 실행을 위한 헬퍼 함수
+    def _run_for_user(user: dict, screening_result: tuple, dry_run: bool, min_score: int) -> dict:
+        """단일 사용자에 대해 자동매매 실행 (병렬 실행용)"""
         user_id = user['user_id']
         trade_mode = user['trade_mode']
-
-        print(f"\n{'='*60}")
-        print(f"[USER {user_id}] 처리 시작 (mode={trade_mode})")
-        print(f"{'='*60}")
 
         try:
             # 사용자별 설정 로드
@@ -2606,8 +2603,11 @@ def run_for_all_users(dry_run: bool = False, min_score: int = 75):
             api_key_data = logger.get_api_key_settings(user_id)
 
             if not api_key_data:
-                print(f"  API 키 없음 - 건너뜀")
-                continue
+                return {
+                    'user_id': user_id,
+                    'trade_mode': trade_mode,
+                    'result': {'status': 'skipped', 'message': 'API 키 없음'}
+                }
 
             user_config = {
                 'app_key': api_key_data.get('app_key'),
@@ -2620,16 +2620,10 @@ def run_for_all_users(dry_run: bool = False, min_score: int = 75):
             # 사용자별 자동매매 설정 조회
             user_settings = logger.get_auto_trade_settings(user_id) or {}
             user_min_score = user_settings.get('min_buy_score', min_score)
-            user_sell_score = user_settings.get('sell_score', 40)
             user_score_version = user_settings.get('score_version', 'v2')
             user_strategy = user_settings.get('strategy', 'simple')
             user_buy_conditions = user_settings.get('buy_conditions', '')
             user_sell_conditions = user_settings.get('sell_conditions', '')
-
-            if user_buy_conditions:
-                print(f"  설정: 매수({user_buy_conditions}) / 매도({user_sell_conditions})")
-            else:
-                print(f"  설정: {user_score_version.upper()} min_buy={user_min_score}점, sell={user_sell_score}점")
 
             trader = AutoTrader(
                 dry_run=dry_run,
@@ -2651,24 +2645,45 @@ def run_for_all_users(dry_run: bool = False, min_score: int = 75):
                     sell_conditions=user_sell_conditions
                 )
             else:
-                print(f"  지원하지 않는 모드: {trade_mode}")
-                continue
+                return {
+                    'user_id': user_id,
+                    'trade_mode': trade_mode,
+                    'result': {'status': 'skipped', 'message': f'지원하지 않는 모드: {trade_mode}'}
+                }
 
-            results.append({
+            return {
                 'user_id': user_id,
                 'trade_mode': trade_mode,
                 'result': result
-            })
+            }
 
         except Exception as e:
-            print(f"  [ERROR] {e}")
             import traceback
             traceback.print_exc()
-            results.append({
+            return {
                 'user_id': user_id,
                 'trade_mode': trade_mode,
                 'result': {'status': 'error', 'message': str(e)}
-            })
+            }
+
+    # 병렬 실행 (동시 주문)
+    print(f"\n[3] 병렬 주문 실행 ({len(users)}명 동시)")
+    results = []
+
+    with ThreadPoolExecutor(max_workers=len(users)) as executor:
+        futures = {
+            executor.submit(_run_for_user, user, screening_result, dry_run, min_score): user
+            for user in users
+        }
+
+        for future in as_completed(futures):
+            user = futures[future]
+            result = future.result()
+            results.append(result)
+            status = result['result'].get('status', 'unknown')
+            buy = result['result'].get('buy_count', 0)
+            sell = result['result'].get('sell_count', 0)
+            print(f"  [USER {result['user_id']}] 완료: {status} (매수:{buy}, 매도:{sell})")
 
     # 결과 요약
     print("\n" + "=" * 70)
