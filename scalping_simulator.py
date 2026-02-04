@@ -476,19 +476,19 @@ class ScalpingSimulator:
                 del self.active_positions['scalping'][stock_code]
                 print(f"[SCALPING] 익절: {trade.stock_name} @ {current_price:,}원 ({profit_pct:+.2f}%)")
 
-        # 변동성 돌파 포지션 (익절 +2%, 손절 -1%, 10분 시간청산)
+        # 변동성 돌파 포지션 (익절 +1.5%, 손절 -1.5%, 10분 시간청산)
         if stock_code in self.active_positions['breakout']:
             trade = self.active_positions['breakout'][stock_code]
             profit_pct = ((current_price - trade.entry_price) / trade.entry_price) * 100
             holding_minutes = (datetime.now() - trade.entry_time).total_seconds() / 60
 
-            if profit_pct <= -1.0:  # 손절 -1%
+            if profit_pct <= -1.5:  # 손절 -1.5% (완화)
                 if self.execute_mode:
                     self.execute_sell(stock_code, trade.stock_name, "손절")
                 trade.close(current_price, "stop_loss")
                 del self.active_positions['breakout'][stock_code]
                 print(f"[BREAKOUT] 손절: {trade.stock_name} @ {current_price:,}원 ({profit_pct:+.2f}%)")
-            elif profit_pct >= 2.0:  # 익절 +2%
+            elif profit_pct >= 1.5:  # 익절 +1.5% (조기 익절)
                 if self.execute_mode:
                     self.execute_sell(stock_code, trade.stock_name, "익절")
                 trade.close(current_price, "take_profit")
