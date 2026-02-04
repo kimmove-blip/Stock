@@ -996,63 +996,82 @@ def get_volatile_stocks(
     min_market_cap: int = 500,     # 억원
 ) -> List[str]:
     """
-    변동성 큰 종목 필터링 (인트라데이 스코어 CSV 활용)
+    변동성 큰 종목 필터링 (직전 CSV 대비 델타 기준)
 
     조건:
-    - 전일 변동폭 >= min_volatility_pct%
-    - 등락률 < max_change_pct% (상한가/하한가 제외)
+    - 직전 CSV 대비 등락률 변화(델타)가 큰 종목 (상승/하락 모두 포함)
     - 거래대금 >= min_trading_value억
     - 시총 >= min_market_cap억 (작전주 제외)
     """
     try:
         # 최신 인트라데이 스코어 CSV 찾기
         scores_dir = Path(__file__).parent / "output" / "intraday_scores"
-        csv_files = sorted(scores_dir.glob("*.csv"), reverse=True)
+        today = datetime.now().strftime("%Y%m%d")
+        csv_files = sorted(scores_dir.glob(f"{today}_*.csv"), reverse=True)
 
-        if not csv_files:
-            print("인트라데이 스코어 파일이 없습니다.")
-            return _get_volatile_stocks_pykrx(count, min_volatility_pct, min_trading_value, min_market_cap)
+        if len(csv_files) < 2:
+            print(f"CSV 파일이 2개 미만 ({len(csv_files)}개) - 기존 방식 사용")
+            return _get_volatile_stocks_fallback(count, min_volatility_pct, max_change_pct, min_trading_value, min_market_cap)
 
-        # 가장 최근 파일 사용
+        # 최근 2개 파일 로드
         latest_file = csv_files[0]
-        df = pd.read_csv(latest_file, encoding='utf-8-sig')
+        prev_file = csv_files[1]
 
-        print(f"\n[변동성 필터] {latest_file.name} 기준")
+        df_now = pd.read_csv(latest_file, encoding='utf-8-sig')
+        df_prev = pd.read_csv(prev_file, encoding='utf-8-sig')
 
-        # 변동폭 계산 (고가-저가)/종가 × 100
-        df['변동폭'] = ((df['high'] - df['low']) / df['close'] * 100).round(2)
+        print(f"\n[델타 변동성] {prev_file.name} → {latest_file.name}")
+
+        # 코드를 문자열로 변환 (6자리)
+        df_now['code'] = df_now['code'].astype(str).str.zfill(6)
+        df_prev['code'] = df_prev['code'].astype(str).str.zfill(6)
+
+        # 병합 (공통 종목만)
+        merged = df_now.merge(
+            df_prev[['code', 'change_pct', 'close']],
+            on='code',
+            suffixes=('', '_prev')
+        )
+
+        # 델타 계산 (등락률 변화)
+        merged['delta_change'] = merged['change_pct'] - merged['change_pct_prev']
+        merged['abs_delta'] = merged['delta_change'].abs()
+
+        # 가격 변화율 계산 (직전 대비)
+        merged['price_delta_pct'] = ((merged['close'] - merged['close_prev']) / merged['close_prev'] * 100).round(2)
+        merged['abs_price_delta'] = merged['price_delta_pct'].abs()
 
         # trading_value_억 컬럼 사용
-        if 'trading_value_억' not in df.columns:
-            df['trading_value_억'] = 0
+        if 'trading_value_억' not in merged.columns:
+            merged['trading_value_억'] = 0
 
         # 시총 (prev_marcap)
-        if 'prev_marcap' not in df.columns:
-            df['prev_marcap'] = 0
+        if 'prev_marcap' not in merged.columns:
+            merged['prev_marcap'] = 0
 
         # 필터링
-        filtered = df[
-            (df['변동폭'] >= min_volatility_pct) &
-            (df['change_pct'].abs() < max_change_pct) &  # 상한가/하한가 제외
-            (df['trading_value_억'] >= min_trading_value) &
-            (df['prev_marcap'] >= min_market_cap * 100_000_000)  # 억원 → 원
+        filtered = merged[
+            (merged['change_pct'].abs() < max_change_pct) &  # 상한가/하한가 제외
+            (merged['trading_value_억'] >= min_trading_value) &
+            (merged['prev_marcap'] >= min_market_cap * 100_000_000)  # 억원 → 원
         ].copy()
 
-        # 변동폭 기준 정렬
-        filtered = filtered.sort_values('변동폭', ascending=False)
+        # 가격 델타 기준 정렬 (상승/하락 모두 포함)
+        filtered = filtered.sort_values('abs_price_delta', ascending=False)
 
-        result = filtered.head(count)['code'].astype(str).str.zfill(6).tolist()
+        result = filtered.head(count)['code'].tolist()
 
-        print(f"  조건: 변동폭 {min_volatility_pct}%+, 등락률 ±{max_change_pct}% 미만, 거래대금 {min_trading_value}억+, 시총 {min_market_cap}억+")
-        print(f"  결과: {len(result)}개 종목\n")
+        print(f"  조건: 거래대금 {min_trading_value}억+, 시총 {min_market_cap}억+")
+        print(f"  결과: {len(result)}개 종목 (델타 기준)\n")
 
         for _, row in filtered.head(10).iterrows():
-            code = str(row['code']).zfill(6)
+            code = row['code']
             name = row.get('name', code)
-            vol = row['변동폭']
+            price_delta = row.get('price_delta_pct', 0)
             value = row.get('trading_value_억', 0)
             chg = row.get('change_pct', 0)
-            print(f"    {name}({code}): 변동폭 {vol:.1f}%, 등락률 {chg:+.1f}%, 거래대금 {value:.0f}억")
+            direction = "↑" if price_delta > 0 else "↓" if price_delta < 0 else "→"
+            print(f"    {name}({code}): 델타 {direction}{abs(price_delta):.2f}%, 등락률 {chg:+.1f}%, 거래대금 {value:.0f}억")
 
         return result
 
@@ -1060,6 +1079,51 @@ def get_volatile_stocks(
         print(f"변동성 종목 조회 오류: {e}")
         import traceback
         traceback.print_exc()
+        return []
+
+
+def _get_volatile_stocks_fallback(
+    count: int,
+    min_volatility_pct: float,
+    max_change_pct: float,
+    min_trading_value: int,
+    min_market_cap: int,
+) -> List[str]:
+    """CSV 1개일 때 기존 변동폭 방식 사용"""
+    try:
+        scores_dir = Path(__file__).parent / "output" / "intraday_scores"
+        csv_files = sorted(scores_dir.glob("*.csv"), reverse=True)
+
+        if not csv_files:
+            return _get_volatile_stocks_pykrx(count, min_volatility_pct, min_trading_value, min_market_cap)
+
+        latest_file = csv_files[0]
+        df = pd.read_csv(latest_file, encoding='utf-8-sig')
+
+        print(f"\n[변동폭 기준] {latest_file.name}")
+
+        df['변동폭'] = ((df['high'] - df['low']) / df['close'] * 100).round(2)
+
+        if 'trading_value_억' not in df.columns:
+            df['trading_value_억'] = 0
+        if 'prev_marcap' not in df.columns:
+            df['prev_marcap'] = 0
+
+        filtered = df[
+            (df['변동폭'] >= min_volatility_pct) &
+            (df['change_pct'].abs() < max_change_pct) &
+            (df['trading_value_억'] >= min_trading_value) &
+            (df['prev_marcap'] >= min_market_cap * 100_000_000)
+        ].copy()
+
+        filtered = filtered.sort_values('변동폭', ascending=False)
+        result = filtered.head(count)['code'].astype(str).str.zfill(6).tolist()
+
+        print(f"  결과: {len(result)}개 종목\n")
+        return result
+
+    except Exception as e:
+        print(f"폴백 조회 오류: {e}")
         return []
 
 
