@@ -2159,7 +2159,7 @@ class AutoTrader:
             user_id=self.user_id,
             start_date=today_str,
             end_date=today_str,
-            side='매수'
+            side='buy'
         ) or []
 
         # 종목별 매수 시간 매핑
