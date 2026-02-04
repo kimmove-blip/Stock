@@ -180,10 +180,35 @@ class ScalpingSimulator:
             return 1
         return max(1, self.investment // price)
 
+    def load_real_holdings(self):
+        """실제 보유 종목 로드"""
+        if not self.execute_mode or not self.kis_client:
+            return
+
+        try:
+            balance = self.kis_client.get_account_balance()
+            for h in balance.get('holdings', []):
+                if h.get('quantity', 0) > 0:
+                    code = h.get('stock_code', '')
+                    self.real_positions[code] = {
+                        'quantity': h.get('quantity'),
+                        'entry_price': h.get('avg_price', 0),
+                        'strategy': 'existing',
+                        'stock_name': h.get('stock_name', code),
+                    }
+            print(f"[실제보유] {len(self.real_positions)}개 종목 로드")
+        except Exception as e:
+            print(f"[실제보유] 로드 실패: {e}")
+
     def execute_buy(self, stock_code: str, stock_name: str, price: int, strategy: str) -> bool:
         """실제 매수 주문 실행"""
         if not self.execute_mode or not self.kis_client:
             return True  # 시뮬레이션 모드
+
+        # 이미 보유 중인 종목은 스킵
+        if stock_code in self.real_positions:
+            print(f"[스킵] {stock_name}: 이미 보유 중")
+            return False
 
         quantity = self.calculate_quantity(price)
         try:
@@ -1328,6 +1353,10 @@ async def main():
         execute_mode=args.execute,
         kis_client=kis_client,
     )
+
+    # 실제 주문 모드일 때 기존 보유종목 로드
+    if args.execute:
+        simulator.load_real_holdings()
 
     # 시그널 핸들러
     def shutdown(sig, frame):
