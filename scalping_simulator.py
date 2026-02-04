@@ -460,9 +460,13 @@ class ScalpingSimulator:
 # 실시간 시뮬레이션 (WebSocket 없이 폴링)
 # ============================================================
 
-async def run_polling_simulation(simulator: ScalpingSimulator, poll_interval: float = 2.0, kis_client=None):
-    """폴링 방식 시뮬레이션 (KIS REST API, 2초 간격)"""
+async def run_polling_simulation(simulator: ScalpingSimulator, poll_interval: float = 2.0, kis_client=None, volatile_count: int = 10):
+    """폴링 방식 시뮬레이션 (KIS REST API, 2초 간격)
+
+    동적 종목 업데이트: 5분마다 인트라데이 스코어 CSV에서 변동성 상위 종목 재선정
+    """
     print(f"\n실시간 시뮬레이션 시작 ({poll_interval}초 간격 폴링)")
+    print("동적 종목 업데이트: 5분마다 변동성 상위 종목 재선정")
     print("종료: Ctrl+C\n")
 
     # 전일 데이터 로드
@@ -476,6 +480,11 @@ async def run_polling_simulation(simulator: ScalpingSimulator, poll_interval: fl
     last_prices = {}
     update_count = 0
 
+    # 동적 종목 업데이트용 변수
+    last_stock_update = datetime.now()
+    last_csv_file = None
+    stock_update_interval = 300  # 5분 (초)
+
     while True:
         now = datetime.now()
 
@@ -484,6 +493,59 @@ async def run_polling_simulation(simulator: ScalpingSimulator, poll_interval: fl
             print(f"[{now.strftime('%H:%M:%S')}] 시뮬레이션 시간이 아닙니다 (09:00~15:30)")
             await asyncio.sleep(10)
             continue
+
+        # 동적 종목 업데이트 (5분마다)
+        if volatile_count > 0 and (now - last_stock_update).total_seconds() >= stock_update_interval:
+            try:
+                scores_dir = Path(__file__).parent / "output" / "intraday_scores"
+                csv_files = sorted(scores_dir.glob("*.csv"), reverse=True)
+
+                if csv_files:
+                    latest_file = csv_files[0]
+
+                    # 새 파일이 있으면 종목 업데이트
+                    if last_csv_file != latest_file.name:
+                        print(f"\n[{now.strftime('%H:%M:%S')}] 종목 업데이트 감지: {latest_file.name}")
+
+                        # 현재 보유 종목 (포지션 있는 종목은 유지)
+                        holding_codes = set()
+                        for trade in simulator.scalping_trades + simulator.breakout_trades:
+                            if not trade.is_closed:
+                                holding_codes.add(trade.stock_code)
+
+                        # 새 변동성 종목 조회
+                        new_stocks = get_volatile_stocks(count=volatile_count)
+
+                        if new_stocks:
+                            # 보유 종목 + 새 종목 병합
+                            merged_codes = list(holding_codes) + [c for c in new_stocks if c not in holding_codes]
+                            merged_codes = merged_codes[:volatile_count + len(holding_codes)]  # 최대 개수 제한
+
+                            # 새로 추가된 종목
+                            added = [c for c in merged_codes if c not in simulator.stock_codes]
+                            removed = [c for c in simulator.stock_codes if c not in merged_codes and c not in holding_codes]
+
+                            if added or removed:
+                                simulator.stock_codes = merged_codes
+
+                                # 새 종목 이름 캐시
+                                for code in added:
+                                    if code not in stock_names:
+                                        stock_names[code] = stock.get_market_ticker_name(code)
+
+                                # 새 종목 전일 데이터 로드
+                                simulator.load_prev_day_data()
+
+                                print(f"  추가: {[stock_names.get(c, c) for c in added]}")
+                                print(f"  제거: {[stock_names.get(c, c) for c in removed]}")
+                                print(f"  현재 추적: {len(simulator.stock_codes)}개\n")
+
+                        last_csv_file = latest_file.name
+
+                last_stock_update = now
+
+            except Exception as e:
+                print(f"[종목 업데이트 오류] {e}")
 
         # 현재가 조회 (KIS REST API 사용)
         try:
@@ -779,12 +841,13 @@ class WebSocketSimulator:
 async def run_websocket_simulation(
     simulator: ScalpingSimulator,
     user_id: int = 2,
+    volatile_count: int = 10,
 ):
     """WebSocket 기반 실시간 시뮬레이션"""
     if not WEBSOCKET_AVAILABLE:
         print("[오류] WebSocket 모듈을 사용할 수 없습니다.")
         print("폴링 모드로 전환합니다.")
-        await run_polling_simulation(simulator, poll_interval=2.0, kis_client=None)
+        await run_polling_simulation(simulator, poll_interval=2.0, kis_client=None, volatile_count=volatile_count)
         return
 
     # API 키 조회
@@ -1102,12 +1165,13 @@ async def main():
         print(f"[KIS] 클라이언트 초기화 실패: {e}")
 
     # 실행 모드 선택
+    volatile_count = args.volatile if args.volatile > 0 else 0
     if args.websocket:
         print("[모드] WebSocket 실시간")
-        await run_websocket_simulation(simulator, user_id=args.user_id)
+        await run_websocket_simulation(simulator, user_id=args.user_id, volatile_count=volatile_count)
     else:
         print("[모드] 폴링 (2초 간격, KIS REST API)")
-        await run_polling_simulation(simulator, poll_interval=2.0, kis_client=kis_client)
+        await run_polling_simulation(simulator, poll_interval=2.0, kis_client=kis_client, volatile_count=volatile_count)
 
 
 if __name__ == "__main__":
