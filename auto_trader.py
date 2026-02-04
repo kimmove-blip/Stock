@@ -39,6 +39,7 @@ from trading.buy_sell_logic import (
     check_hold_condition,
     should_buy_advanced,
     get_change_limit_by_marcap,
+    get_time_based_stop_loss,
 )
 from technical_analyst import TechnicalAnalyst
 from market_screener import MarketScreener
@@ -2017,9 +2018,14 @@ class AutoTrader:
         print(f"  장중 스크리닝 시작: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
         print("=" * 60)
 
-        # 장 시간 체크 (09:00 ~ 15:20)
+        # 장 시간 체크 (09:00 ~ 15:20) - 야간 거래 완전 차단
         now = datetime.now()
-        if now.hour < 9 or (now.hour == 15 and now.minute > 20) or now.hour > 15:
+        # 야간 거래 방지 (16시 이후 ~ 다음날 9시 이전)
+        if now.hour >= 16 or now.hour < 9:
+            print(f"  [야간거래 차단] 장외 시간 매매 금지 (현재: {now.strftime('%H:%M')})")
+            return {"status": "skipped", "reason": "night_trading_blocked"}
+        # 정규장 시간 체크 (09:00 ~ 15:20)
+        if (now.hour == 15 and now.minute > 20):
             print(f"  장 운영 시간이 아닙니다. (09:00 ~ 15:20)")
             return {"status": "skipped", "reason": "outside_market_hours"}
 
@@ -2336,16 +2342,21 @@ class AutoTrader:
             if scores_with_delta:
                 print(f"  델타 스코어 로드: {len(scores_with_delta)}개 종목")
 
-        # 필터링 조건 출력
+        # 필터링 조건 출력 (시간대별 전략)
         if self.buy_conditions:
             print(f"\n[4] 매수 후보 필터링 중 (커스텀 조건)...")
         elif use_advanced:
-            if hour == 9:
-                print(f"\n[4] 매수 후보 필터링 중 (EarlySurge: MACD+MA+등락률0~8% / 오전: V2,V4조건)...")
+            minute = datetime.now().minute
+            if hour == 9 and 10 <= minute <= 25:
+                print(f"\n[4] 매수 후보 필터링 중 [EarlySurge 09:10~25] V2>=85, V4>=60, MACD+MA...")
             elif hour < 11:
-                print(f"\n[4] 매수 후보 필터링 중 (오전: V2>=70, V4>=50, 상승률<=5%)...")
+                print(f"\n[4] 매수 후보 필터링 중 [오전] V2>=80, V4>=55 (보수적)...")
+            elif hour < 13:
+                print(f"\n[4] 매수 후보 필터링 중 [골든타임 11~12시] V2>=70, V4>=45 (완화)...")
+            elif hour < 15:
+                print(f"\n[4] 매수 후보 필터링 중 [오후] V2>=85, V4>=60 (강화)...")
             else:
-                print(f"\n[4] 매수 후보 필터링 중 (기본: V2>=70, V1<50, V4델타<=0, 상승률<=3%)...")
+                print(f"\n[4] 매수 후보 필터링 중 (정리매도 시간)...")
         else:
             print(f"\n[4] 매수 후보 필터링 중 ({score_version.upper()}>={min_score})...")
 

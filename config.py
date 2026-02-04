@@ -103,34 +103,62 @@ class StrategyConfig:
     """
     매매 전략 임계값 설정
 
-    이 값들은 백테스트 결과를 기반으로 최적화됨 (2026-02-03 기준)
+    이 값들은 백테스트 결과를 기반으로 최적화됨 (2026-02-04 기준)
+    시간대별 전략 분리: Early Surge, 오전, 골든타임, 오후
     """
 
-    # === 매수 조건 (should_buy_advanced) ===
-    # 오전/오후 공통
-    BUY_V2_MIN = 55          # V2 최소 점수 (기존 70에서 완화)
-    BUY_V4_MIN = 40          # V4 최소 점수 (기존 50에서 완화)
+    # === 시간대 정의 ===
+    EARLY_SURGE_START = (9, 10)   # 09:10 (hour, minute)
+    EARLY_SURGE_END = (9, 25)     # 09:25
+    MORNING_END_HOUR = 11         # 오전 전략: ~10:55
+    GOLDEN_HOUR_START = 11        # 골든타임 시작: 11:00
+    GOLDEN_HOUR_END = 13          # 골든타임 종료: 12:55
+    AFTERNOON_END = (14, 50)      # 오후 전략 종료: 14:50
+    CLOSING_START = (14, 55)      # 정리매도 시작: 14:55
 
-    # 오후 추가 조건
-    BUY_V4_DELTA_MAX = 0     # V4 델타 최대값 (급등중 제외)
+    # === 매수 조건 (should_buy_advanced) - 시간대별 ===
+    # Early Surge (09:10~09:25) - 엄격
+    EARLY_V2_MIN = 85            # V2 최소 점수
+    EARLY_V4_MIN = 60            # V4 최소 점수
+
+    # 오전 (09:30~10:55) - 보수적
+    MORNING_V2_MIN = 80          # V2 최소 점수
+    MORNING_V4_MIN = 55          # V4 최소 점수
+
+    # 골든타임 (11:00~12:55) - 완화 (59.3% 승률, +0.88% 수익률)
+    GOLDEN_V2_MIN = 70           # V2 최소 점수 (완화!)
+    GOLDEN_V4_MIN = 45           # V4 최소 점수 (완화!)
+
+    # 오후 (13:00~14:50) - 강화
+    AFTERNOON_V2_MIN = 85        # V2 최소 점수
+    AFTERNOON_V4_MIN = 60        # V4 최소 점수
+
+    # 기본값 (하위 호환)
+    BUY_V2_MIN = 75              # V2 기본 최소 점수
+    BUY_V4_MIN = 50              # V4 기본 최소 점수
+    BUY_V4_DELTA_MAX = 0         # V4 델타 최대값 (급등중 제외)
 
     # === 홀딩 조건 (check_hold_condition) ===
-    HOLD_V5_MIN = 70         # V5 이상이면 홀딩 (추가상승 여력)
-    HOLD_V4_MIN = 55         # V4 이상이면 홀딩
-    HOLD_V2_MIN = 60         # V2 이상이면 홀딩
+    HOLD_V5_STRONG = 70          # V5 이상이면 강력 홀딩 (익일까지)
+    HOLD_V5_MIN = 60             # V5 이상이면 일반 홀딩
+    HOLD_V4_MIN = 55             # V4 이상이면 홀딩
+    HOLD_V2_MIN = 60             # V2 이상이면 홀딩
 
     # === 매도 조건 ===
-    SELL_V4_MAX = 40         # V4 미만이면 매도
-    SELL_V2_MAX = 50         # V2 미만 AND V4 < 45 이면 매도
-    SELL_V4_COMBINED = 45    # V2/V4 복합 조건용
+    SELL_V4_MAX = 40             # V4 미만이면 매도
+    SELL_V2_MAX = 50             # V2 미만 AND V4 < 45 이면 매도
+    SELL_V4_COMBINED = 45        # V2/V4 복합 조건용
 
-    # === 손절 ===
-    STOP_LOSS_RATE = 7.0     # 손절 기준 (%)
+    # === 손절 (시간대별 차등 적용) ===
+    STOP_LOSS_RATE = 7.0         # 기본 손절 기준 (%)
+    STOP_LOSS_MORNING = 5.0      # 오전 손절 (빠른 손절)
+    STOP_LOSS_GOLDEN = 7.0       # 골든타임 손절 (현행 유지)
+    STOP_LOSS_AFTERNOON = 4.0    # 오후 손절 (더 빠른 손절)
 
     # === 시총별 상승률 제한 ===
-    CHANGE_LIMIT_LARGE = 5.0   # 대형주 (1조+): 5%
-    CHANGE_LIMIT_MID = 10.0    # 중형주 (3000억~1조): 10%
-    CHANGE_LIMIT_SMALL = 15.0  # 소형주 (3000억 미만): 15%
+    CHANGE_LIMIT_LARGE = 5.0     # 대형주 (1조+): 5%
+    CHANGE_LIMIT_MID = 10.0      # 중형주 (3000억~1조): 10%
+    CHANGE_LIMIT_SMALL = 15.0    # 소형주 (3000억 미만): 15%
 
 
 class TelegramConfig:
