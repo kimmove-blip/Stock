@@ -272,18 +272,27 @@ result = calculate_score_v4_with_investor(df, investor_data)
 | 저장 경로 | `output/intraday_scores/YYYYMMDD_HHMM.csv` |
 | 로그 | `/tmp/intraday_scores.log` |
 
-#### 크론 스케줄
+#### 크론 스케줄 (2026-02-05 업데이트)
 
-> **중요: 크론은 반드시 `sudo crontab -e` (root)로 설정!**
-> - kimhc 크론 사용 금지 (로그 파일 권한 문제 발생)
-> - `/tmp/intraday_scores.log`가 root 소유이므로 kimhc 크론이 쓰기 불가
+> **중요: root 크론탭 사용** (`sudo crontab -e`)
 
-| 시간 | 스코어 기록 | auto_trader |
-|------|-------------|-------------|
-| 09:00, 09:05 | ✓ | ✗ (장 초반 노이즈) |
-| 09:10 ~ 15:10 | ✓ | ✓ (5분 간격) |
-| 15:15 ~ 15:40 | ✓ | ✗ (마감 구간) |
-| 15:45 | ✓ | ✗ (장 마감 후) |
+| 시간 | 스크립트 | 설명 |
+|------|----------|------|
+| 06:50 | `morning_briefing.py --save --email` | 아침 시황 브리핑 |
+| 07:00 | `record_intraday_scores.py --filter` | 장전 종목 필터링 |
+| 08:00 | 헬스체크 | API 서버 확인/재시작 |
+| 08:30 | `execute_pending_sells.py` | pending_sell 매도 실행 |
+| 09:00, 09:05 | `record_intraday_scores.py --kis` | 스코어만 (장 초반 노이즈) |
+| 09:10~14:55 (5분) | `record_intraday_scores.py --kis --call-auto-trader` | 스코어 + 자동매매 |
+| 15:00~15:10 (5분) | `record_intraday_scores.py --kis --call-auto-trader` | 마지막 매매 |
+| 15:15~15:45 (5분) | `record_intraday_scores.py --kis` | 스코어만 (마감 구간) |
+| 16:00 | `daily_trade_report.py --all --email` | 일일 매매 보고서 |
+| 18:00 | `daily_top100.py --email` | TOP100 스크리닝 |
+
+> **특징:**
+> - `flock -n /tmp/intraday.lock`: 중복 실행 방지
+> - `--kis`: 한투 API 연동 (체결강도/수급 데이터)
+> - `--call-auto-trader`: auto_trader.py 순차 호출 (메모리 절약)
 
 ```bash
 # 기본 실행 (V1, V2, V4, V5)

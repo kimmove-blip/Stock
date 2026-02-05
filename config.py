@@ -117,26 +117,32 @@ class StrategyConfig:
     CLOSING_START = (14, 55)      # 정리매도 시작: 14:55
 
     # === 매수 조건 (should_buy_advanced) - 시간대별 ===
-    # Early Surge (09:10~09:25) - 엄격
-    EARLY_V2_MIN = 85            # V2 최소 점수
-    EARLY_V4_MIN = 60            # V4 최소 점수
+    # Early Surge (09:10~09:25) - v2.2 완화
+    EARLY_V2_MIN = 70            # V2 최소 점수 (85→80→70)
+    EARLY_V4_MIN = 45            # V4 최소 점수 (60→55→45)
 
-    # 오전 (09:30~10:55) - 보수적
-    MORNING_V2_MIN = 80          # V2 최소 점수
-    MORNING_V4_MIN = 55          # V4 최소 점수
+    # 오전 (09:30~10:55) - v2.2 완화
+    MORNING_V2_MIN = 70          # V2 최소 점수 (80→75→70)
+    MORNING_V4_MIN = 45          # V4 최소 점수 (55→50→45)
 
-    # 골든타임 (11:00~12:55) - 완화 (59.3% 승률, +0.88% 수익률)
-    GOLDEN_V2_MIN = 70           # V2 최소 점수 (완화!)
-    GOLDEN_V4_MIN = 45           # V4 최소 점수 (완화!)
+    # 골든타임 (11:00~12:55) - 완화 유지
+    GOLDEN_V2_MIN = 70           # V2 최소 점수
+    GOLDEN_V4_MIN = 45           # V4 최소 점수
 
-    # 오후 (13:00~14:50) - 강화
-    AFTERNOON_V2_MIN = 85        # V2 최소 점수
-    AFTERNOON_V4_MIN = 60        # V4 최소 점수
+    # 오후 (13:00~14:50) - v2.2 완화
+    AFTERNOON_V2_MIN = 70        # V2 최소 점수 (85→80→70)
+    AFTERNOON_V4_MIN = 45        # V4 최소 점수 (60→55→45)
 
     # 기본값 (하위 호환)
     BUY_V2_MIN = 75              # V2 기본 최소 점수
     BUY_V4_MIN = 50              # V4 기본 최소 점수
+    BUY_V5_MIN = 45              # V5 최소 점수 (2026-02-05 추가)
     BUY_V4_DELTA_MAX = 0         # V4 델타 최대값 (급등중 제외)
+    MAX_BUY_PER_RUN = 5          # 1회 실행당 최대 매수 종목 수 (v2.1)
+
+    # === 등락률 필터 (v2.1) ===
+    MIN_CHANGE_PCT = -5.0        # 최소 등락률 (%)
+    MAX_CHANGE_PCT = 10.0        # 최대 등락률 (%) - 급등주 필터
 
     # === 홀딩 조건 (check_hold_condition) ===
     HOLD_V5_STRONG = 70          # V5 이상이면 강력 홀딩 (익일까지)

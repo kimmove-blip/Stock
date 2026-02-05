@@ -225,9 +225,14 @@ def should_buy_advanced(scores: dict, current_hour: int, use_time_filter: bool =
     """
     v2 = scores.get('v2', 0)
     v4 = scores.get('v4', 0)
+    v5 = scores.get('v5', 0)
     v1 = scores.get('v1', 50)
     v4_delta = scores.get('v4_delta', 0)
     signals = signals or []
+
+    # === V5 최소 조건 (2026-02-05 추가) ===
+    if v5 < SC.BUY_V5_MIN:
+        return False, f"V5={v5}<{SC.BUY_V5_MIN} (추가상승 여력 부족)"
 
     # === 정리매도 시간 (14:55 이후) - 매수 금지 ===
     if current_hour == 14 and current_minute >= 55:
@@ -240,7 +245,7 @@ def should_buy_advanced(scores: dict, current_hour: int, use_time_filter: bool =
         has_macd_bull = 'MACD_BULL' in signals
         has_ma_signal = any(s in signals for s in ['MA_ALIGNED', 'MA_STEEP', 'MA_20_STEEP', 'MA_20_VERY_STEEP'])
         has_volume_signal = any(s in signals for s in ['VOLUME_EXPLOSION', 'VOLUME_SURGE', 'VOLUME_SURGE_3X', 'VOLUME_HIGH'])
-        change_ok = 0 <= change_pct <= 8
+        change_ok = SC.MIN_CHANGE_PCT <= change_pct <= SC.MAX_CHANGE_PCT
 
         if has_macd_bull and has_ma_signal and change_ok:
             # Early Surge는 시그널 기반이므로 V2/V4 조건 완화
