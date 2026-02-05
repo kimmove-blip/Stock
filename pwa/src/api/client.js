@@ -79,6 +79,8 @@ export const top100API = {
   },
   history: (days = 7) => api.get(`/top100/history?days=${days}`),
   stockHistory: (code) => api.get(`/top100/stock/${code}`),
+  // 연구 기반 AI 추천 (2026-02-05)
+  researchPicks: () => api.get('/top100/research-picks'),
 };
 
 // 실시간 시세 API (한국투자증권)

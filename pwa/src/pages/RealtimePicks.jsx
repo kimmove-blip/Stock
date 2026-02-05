@@ -60,10 +60,11 @@ export default function RealtimePicks() {
   const hasSeenAnimation = sessionStorage.getItem('realtimeAnalyzingSeen');
   const [showAnalyzing, setShowAnalyzing] = useState(!hasSeenAnimation);
 
-  // TOP100 데이터 조회 (종목 목록) - 사용자의 스코어 엔진 사용
+  // 연구 기반 AI 추천 종목 조회 (2026-02-05)
   const { data, isLoading } = useQuery({
-    queryKey: ['top100', scoreVersion],
-    queryFn: () => top100API.list(null, scoreVersion).then((res) => res.data),
+    queryKey: ['researchPicks'],
+    queryFn: () => top100API.researchPicks().then((res) => res.data),
+    refetchInterval: 1000 * 60 * 5, // 5분마다 자동 갱신
   });
 
   // 보유종목/관심종목 데이터
@@ -204,11 +205,33 @@ export default function RealtimePicks() {
         </button>
       </div>
 
+      {/* 전략 요약 (연구 기반) */}
+      {data?.strategy_summary && (
+        <div className="flex flex-wrap gap-2 mb-3">
+          {data.strategy_summary.volume_explosion > 0 && (
+            <span className="bg-red-100 text-red-600 text-xs px-2 py-1 rounded-full">
+              🔥 거래량폭발 {data.strategy_summary.volume_explosion}
+            </span>
+          )}
+          {data.strategy_summary.volume_breakout > 0 && (
+            <span className="bg-orange-100 text-orange-600 text-xs px-2 py-1 rounded-full">
+              📈 거래량돌파 {data.strategy_summary.volume_breakout}
+            </span>
+          )}
+          {data.strategy_summary.gap_reversal > 0 && (
+            <span className="bg-blue-100 text-blue-600 text-xs px-2 py-1 rounded-full">
+              🔄 갭다운역전 {data.strategy_summary.gap_reversal}
+            </span>
+          )}
+        </div>
+      )}
+
       {/* 마지막 업데이트 시간 */}
       <div className="text-xs text-gray-500 mb-3">
         {lastUpdate
           ? `실시간 시세: ${lastUpdate.toLocaleTimeString('ko-KR')}`
           : '시세 조회 중...'}
+        {data?.time && <span className="ml-2">| 분석: {data.time}</span>}
       </div>
 
       {/* 종목 리스트 */}
@@ -243,10 +266,30 @@ export default function RealtimePicks() {
               </div>
               <div className="flex-1">
                 <h3 className="font-semibold text-gray-800">{stockData.name}</h3>
-                <div className="flex items-center gap-1.5">
+                <div className="flex items-center gap-1.5 flex-wrap">
                   <p className="text-sm text-gray-500">{stockData.code}</p>
-                  {isInPortfolio(stock.code) && (
+                  {stockData.strategy === 'volume_explosion' && (
+                    <span className="bg-red-100 text-red-600 text-[10px] px-1.5 py-0.5 rounded font-medium">
+                      🔥폭발
+                    </span>
+                  )}
+                  {stockData.strategy === 'volume_breakout' && (
+                    <span className="bg-orange-100 text-orange-600 text-[10px] px-1.5 py-0.5 rounded font-medium">
+                      📈돌파
+                    </span>
+                  )}
+                  {stockData.strategy === 'gap_reversal' && (
                     <span className="bg-blue-100 text-blue-600 text-[10px] px-1.5 py-0.5 rounded font-medium">
+                      🔄역전
+                    </span>
+                  )}
+                  {stockData.volume_ratio >= 2 && (
+                    <span className="bg-purple-100 text-purple-600 text-[10px] px-1.5 py-0.5 rounded font-medium">
+                      VOL {stockData.volume_ratio}x
+                    </span>
+                  )}
+                  {isInPortfolio(stock.code) && (
+                    <span className="bg-green-100 text-green-600 text-[10px] px-1.5 py-0.5 rounded font-medium">
                       보유
                     </span>
                   )}
@@ -279,8 +322,14 @@ export default function RealtimePicks() {
                   <p className="text-sm text-gray-400">-</p>
                 )}
               </div>
-              <div className="bg-orange-100 text-orange-600 px-2 py-1 rounded-lg text-sm font-medium">
-                {stockData.score}점
+              <div className={`px-2 py-1 rounded-lg text-sm font-medium ${
+                stockData.win_rate >= 75
+                  ? 'bg-red-100 text-red-600'
+                  : stockData.win_rate >= 70
+                    ? 'bg-orange-100 text-orange-600'
+                    : 'bg-yellow-100 text-yellow-600'
+              }`}>
+                {stockData.win_rate || stockData.score}%
               </div>
             </div>
           );
