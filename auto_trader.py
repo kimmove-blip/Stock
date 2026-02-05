@@ -38,12 +38,13 @@ from trading.buy_sell_logic import (
     evaluate_conditions,
     check_hold_condition,
     should_buy_advanced,
+    should_buy_research_based,
     get_change_limit_by_marcap,
     get_time_based_stop_loss,
 )
 from technical_analyst import TechnicalAnalyst
 from market_screener import MarketScreener
-from config import AutoTraderConfig, TelegramConfig, OUTPUT_DIR, SIGNAL_NAMES_KR
+from config import AutoTraderConfig, TelegramConfig, OUTPUT_DIR, SIGNAL_NAMES_KR, StrategyConfig as SC
 
 # CSV 스코어 디렉토리
 INTRADAY_SCORES_DIR = Path(__file__).parent / "output" / "intraday_scores"
@@ -2346,15 +2347,16 @@ class AutoTrader:
         if self.buy_conditions:
             print(f"\n[4] 매수 후보 필터링 중 (커스텀 조건)...")
         elif use_advanced:
+            from config import StrategyConfig as SC
             minute = datetime.now().minute
             if hour == 9 and 10 <= minute <= 25:
-                print(f"\n[4] 매수 후보 필터링 중 [EarlySurge 09:10~25] V2>=85, V4>=60, MACD+MA...")
+                print(f"\n[4] 매수 후보 필터링 중 [EarlySurge 09:10~25] V2>={SC.EARLY_V2_MIN}, V4>={SC.EARLY_V4_MIN}, MACD+MA...")
             elif hour < 11:
-                print(f"\n[4] 매수 후보 필터링 중 [오전] V2>=80, V4>=55 (보수적)...")
+                print(f"\n[4] 매수 후보 필터링 중 [오전] V2>={SC.MORNING_V2_MIN}, V4>={SC.MORNING_V4_MIN}...")
             elif hour < 13:
-                print(f"\n[4] 매수 후보 필터링 중 [골든타임 11~12시] V2>=70, V4>=45 (완화)...")
+                print(f"\n[4] 매수 후보 필터링 중 [골든타임 11~12시] V2>={SC.GOLDEN_V2_MIN}, V4>={SC.GOLDEN_V4_MIN} (완화)...")
             elif hour < 15:
-                print(f"\n[4] 매수 후보 필터링 중 [오후] V2>=85, V4>=60 (강화)...")
+                print(f"\n[4] 매수 후보 필터링 중 [오후] V2>={SC.AFTERNOON_V2_MIN}, V4>={SC.AFTERNOON_V4_MIN}...")
             else:
                 print(f"\n[4] 매수 후보 필터링 중 (정리매도 시간)...")
         else:
@@ -2389,22 +2391,26 @@ class AutoTrader:
                 signals = stock.get("signals", [])
                 minute = datetime.now().minute
 
-                # 상승률 필터 (Early Surge는 0~8%, 오전 ~5%, 11시 이후 ~3%)
-                if hour == 9 and minute <= 30:
-                    max_change = 8.0  # Early Surge: 0~8%
-                elif hour < 11:
-                    max_change = 5.0
-                else:
-                    max_change = 3.0
+                # 등락률 필터 (config 설정 사용: -5% ~ 10%)
+                min_change = SC.MIN_CHANGE_PCT
+                max_change = SC.MAX_CHANGE_PCT
 
-                if change_pct > max_change:
-                    advanced_reasons[f"상승률>{max_change}%"] = advanced_reasons.get(f"상승률>{max_change}%", 0) + 1
+                if change_pct < min_change or change_pct > max_change:
+                    advanced_reasons[f"등락률범위외({min_change}~{max_change}%)"] = advanced_reasons.get(f"등락률범위외({min_change}~{max_change}%)", 0) + 1
                     continue
 
-                should_buy, reason = should_buy_advanced(
-                    scores, hour, use_time_filter=True,
-                    signals=signals, change_pct=change_pct, current_minute=minute
-                )
+                # 연구 기반 전략 사용 (2026-02-05)
+                if SC.USE_RESEARCH_STRATEGY:
+                    should_buy, reason = should_buy_research_based(
+                        scores, hour, minute,
+                        change_pct=change_pct, volume_ratio=volume_ratio,
+                        signals=signals
+                    )
+                else:
+                    should_buy, reason = should_buy_advanced(
+                        scores, hour, use_time_filter=True,
+                        signals=signals, change_pct=change_pct, current_minute=minute
+                    )
                 if not should_buy:
                     key = reason.split('=')[0] if '=' in reason else reason
                     advanced_reasons[key] = advanced_reasons.get(key, 0) + 1
@@ -2458,18 +2464,25 @@ class AutoTrader:
         if not candidates:
             return 0
 
+        from config import StrategyConfig as SC
+        max_buy_per_run = SC.MAX_BUY_PER_RUN  # 1회 최대 매수 종목 수
+
         print("\n[6] 매수 주문 실행 중...")
         base_investment = self.risk_manager.calculate_investment_amount()
         adjusted, multiplier, _ = get_adjusted_investment_amount(base_investment)
 
         if multiplier < 1.0:
             print(f"  [NASDAQ 조정] {base_investment:,}원 × {multiplier} = {adjusted:,}원")
-        print(f"  종목당 투자금: {adjusted:,}원 (주문가능: {max_buy_amt:,}원)")
+        print(f"  종목당 투자금: {adjusted:,}원 (주문가능: {max_buy_amt:,}원, 최대: {max_buy_per_run}종목)")
 
         remaining = max_buy_amt
         buy_count = 0
 
         for c in candidates:
+            # 최대 매수 종목 수 체크
+            if buy_count >= max_buy_per_run:
+                print(f"  최대 매수 종목 수 도달 ({max_buy_per_run}개) - 매수 중단")
+                break
             code = c["stock_code"]
             name = c["stock_name"]
             price = c["current_price"]

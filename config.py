@@ -144,6 +144,25 @@ class StrategyConfig:
     MIN_CHANGE_PCT = -5.0        # 최소 등락률 (%)
     MAX_CHANGE_PCT = 10.0        # 최대 등락률 (%) - 급등주 필터
 
+    # === 연구 기반 전략 (2026-02-05 추가) ===
+    # 1. 거래량 돌파 전략 (71% 승률)
+    VOLUME_BREAKOUT_MIN = 1.5    # 거래량 배율 최소 (20일 평균 대비)
+    VOLUME_BREAKOUT_STRONG = 2.0 # 강한 거래량 돌파
+    VOLUME_EXPLOSION = 3.0       # 거래량 폭발 (78%+ 승률)
+
+    # 2. 갭다운 역전 전략 (72% 승률)
+    GAP_DOWN_MIN = -3.0          # 갭다운 최소 (%)
+    GAP_DOWN_MAX = -0.5          # 갭다운 최대 (%)
+    GAP_DOWN_V4_MIN = 50         # 갭다운 시 V4 최소 (수급 양호)
+
+    # 3. ORB 전략 (Opening Range Breakout)
+    ORB_START_MINUTE = 0         # ORB 시작 (09:00)
+    ORB_END_MINUTE = 30          # ORB 종료 (09:30)
+    ORB_CHANGE_MIN = 1.0         # ORB 돌파 최소 등락률 (%)
+
+    # 연구 기반 전략 활성화
+    USE_RESEARCH_STRATEGY = True  # True: 연구 기반, False: 기존 스코어 기반
+
     # === 홀딩 조건 (check_hold_condition) ===
     HOLD_V5_STRONG = 70          # V5 이상이면 강력 홀딩 (익일까지)
     HOLD_V5_MIN = 60             # V5 이상이면 일반 홀딩
