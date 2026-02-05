@@ -244,7 +244,7 @@ def collect_all_stocks_for_date(
     kis_client,
     stocks: List[Dict],
     target_date: str,
-    use_5min: bool = True
+    use_5min: bool = False  # 스캘핑용: 1분봉 유지
 ) -> pd.DataFrame:
     """
     특정 날짜의 모든 종목 분봉 데이터 수집
@@ -348,7 +348,7 @@ def collect_historical_data(days: int = 60, top_n: int = 500):
         print(f"\n  [{i+1}/{len(dates_to_collect)}] {date} 수집 중...")
         start_time = time.time()
 
-        df = collect_all_stocks_for_date(kis_client, stocks, date, use_5min=True)
+        df = collect_all_stocks_for_date(kis_client, stocks, date, use_5min=False)
 
         if not df.empty:
             save_minute_bars(df, date)
@@ -387,7 +387,7 @@ def collect_today():
     print(f"\n{len(stocks)}개 종목 분봉 수집...")
 
     # 수집
-    df = collect_all_stocks_for_date(kis_client, stocks, today, use_5min=True)
+    df = collect_all_stocks_for_date(kis_client, stocks, today, use_5min=False)
 
     if not df.empty:
         save_minute_bars(df, today)

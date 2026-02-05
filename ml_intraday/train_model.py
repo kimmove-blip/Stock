@@ -497,8 +497,8 @@ def main():
     parser.add_argument(
         "--horizon",
         type=str,
-        default="10min",
-        choices=["5min", "10min", "30min"],
+        default="2min",  # 스캘핑 기본값
+        choices=["1min", "2min", "3min", "5min"],  # 스캘핑용
         help="예측 범위"
     )
     parser.add_argument(
