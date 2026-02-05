@@ -526,6 +526,36 @@ class TradeLogger:
             return datetime.strptime(holding["buy_date"], "%Y-%m-%d")
         return None
 
+    def get_first_buy_date(self, user_id: int, stock_code: str, days: int = 30) -> Optional[str]:
+        """
+        종목의 최초 매수일 조회 (trade_log 기반)
+
+        Args:
+            user_id: 사용자 ID
+            stock_code: 종목코드
+            days: 조회 기간 (일)
+
+        Returns:
+            최초 매수일 (YYYY-MM-DD) 또는 None
+        """
+        from datetime import datetime, timedelta
+        start_date = (datetime.now() - timedelta(days=days)).strftime('%Y-%m-%d')
+
+        query = """
+            SELECT MIN(trade_date) as first_buy_date
+            FROM trade_log
+            WHERE user_id = ? AND stock_code = ? AND side = 'buy'
+            AND trade_date >= ?
+        """
+
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(query, [user_id, stock_code, start_date])
+            row = cursor.fetchone()
+            if row and row['first_buy_date']:
+                return row['first_buy_date']
+        return None
+
     def get_trade_history(
         self,
         user_id: int = None,

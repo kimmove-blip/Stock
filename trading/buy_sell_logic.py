@@ -185,6 +185,90 @@ def check_hold_condition(scores: dict, profit_rate: float, stop_loss_rate: float
     return False, "조건미충족 홀딩"
 
 
+def check_exit_research_based(scores: dict, profit_rate: float, holding_days: int,
+                               current_hour: int = None, quantity: int = 0) -> Tuple[bool, str, float]:
+    """
+    연구 기반 청산 전략 (2026-02-05 추가)
+
+    567,000건 백테스트 기반:
+    1. 시간 기반 청산 (5일 보유가 최적)
+    2. 익절 전략 (+15% 전량, +8% 부분)
+    3. 손절 전략 (기존 유지)
+    4. 스코어 기반 청산 (기존 check_hold_condition)
+
+    Args:
+        scores: {'v2': y, 'v4': z, 'v5': w, ...}
+        profit_rate: 현재 수익률 (%)
+        holding_days: 보유 일수
+        current_hour: 현재 시간
+        quantity: 보유 수량 (부분 매도 계산용)
+
+    Returns:
+        (should_sell: bool, reason: str, sell_ratio: float)
+        sell_ratio: 1.0 = 전량, 0.5 = 50% 등
+    """
+    from datetime import datetime
+    if current_hour is None:
+        current_hour = datetime.now().hour
+
+    v5 = scores.get('v5', 50)
+    v4 = scores.get('v4', 50)
+    v2 = scores.get('v2', 50)
+
+    # === 1. 손절 (최우선, 스코어 무관) ===
+    stop_loss_rate = get_time_based_stop_loss(current_hour)
+    if profit_rate <= -stop_loss_rate:
+        return True, f"손절 ({profit_rate:.1f}% <= -{stop_loss_rate}%)", 1.0
+
+    # === 2. 익절 전략 (연구: 3:1 보상비율) ===
+    if SC.PROFIT_EXIT_ENABLED:
+        # 전량 익절: +15% 이상
+        if profit_rate >= SC.PROFIT_TARGET:
+            return True, f"익절목표 달성 ({profit_rate:.1f}% >= {SC.PROFIT_TARGET}%)", 1.0
+
+        # 부분 익절: +8% 이상 (V5 낮으면)
+        if profit_rate >= SC.PARTIAL_PROFIT and v5 < SC.HOLD_V5_MIN:
+            return True, f"부분익절 ({profit_rate:.1f}% >= {SC.PARTIAL_PROFIT}%, V5={v5})", SC.PARTIAL_SELL_RATIO
+
+    # === 3. 시간 기반 청산 (연구: 5일 최적) ===
+    if SC.TIME_EXIT_ENABLED and holding_days >= SC.MAX_HOLDING_DAYS:
+        # V5가 높으면 시간 청산 예외 (강한 모멘텀)
+        if v5 >= SC.TIME_EXIT_V5_EXCEPTION:
+            pass  # 시간 청산 스킵
+        # 수익 중이면 청산
+        elif profit_rate > 0:
+            return True, f"시간청산 ({holding_days}일 >= {SC.MAX_HOLDING_DAYS}일, +{profit_rate:.1f}%)", 1.0
+        # 손실 중이면 손실폭 작을 때만 청산
+        elif profit_rate > -3.0:
+            return True, f"시간청산 ({holding_days}일, {profit_rate:.1f}%)", 1.0
+
+    # === 4. V5 강력 홀딩 (익일까지 보유) ===
+    if v5 >= SC.HOLD_V5_STRONG:
+        return False, f"V5={v5}>={SC.HOLD_V5_STRONG} 강력홀딩", 0.0
+
+    # === 5. 스코어 기반 매도 (기존 로직) ===
+    # V4 < 40 이면 매도
+    if v4 < SC.SELL_V4_MAX:
+        return True, f"V4={v4}<{SC.SELL_V4_MAX} 수급악화 매도", 1.0
+
+    # V2 < 50 AND V4 < 45 이면 매도
+    if v2 < SC.SELL_V2_MAX and v4 < SC.SELL_V4_COMBINED:
+        return True, f"V2={v2}<{SC.SELL_V2_MAX} & V4={v4}<{SC.SELL_V4_COMBINED} 매도", 1.0
+
+    # === 6. 홀딩 조건 ===
+    if v5 >= SC.HOLD_V5_MIN and v4 >= 50:
+        return False, f"V5={v5} & V4={v4} 홀딩", 0.0
+
+    if v4 >= SC.HOLD_V4_MIN:
+        return False, f"V4={v4}>={SC.HOLD_V4_MIN} 홀딩", 0.0
+
+    if v2 >= SC.HOLD_V2_MIN:
+        return False, f"V2={v2}>={SC.HOLD_V2_MIN} 홀딩", 0.0
+
+    # === 7. 기본 홀딩 ===
+    return False, f"조건미충족 홀딩 (V2={v2}, V4={v4}, V5={v5})", 0.0
+
+
 def get_change_limit_by_marcap(marcap: float) -> float:
     """시총별 상승률 제한 반환
 

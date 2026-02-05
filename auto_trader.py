@@ -37,6 +37,7 @@ from trading.buy_sell_logic import (
     parse_condition,
     evaluate_conditions,
     check_hold_condition,
+    check_exit_research_based,
     should_buy_advanced,
     should_buy_research_based,
     get_change_limit_by_marcap,
@@ -2170,7 +2171,7 @@ class AutoTrader:
             side='buy'
         ) or []
 
-        # 종목별 매수 시간 매핑
+        # 종목별 매수 시간 매핑 (오늘)
         buy_times = {}
         for trade in today_trades:
             code = trade.get('stock_code', '')
@@ -2183,6 +2184,22 @@ class AutoTrader:
                         buy_times[code] = buy_time
                 except:
                     pass
+
+        # 종목별 보유 일수 계산 (연구 기반 청산용)
+        holding_days_map = {}
+        for h in holdings:
+            code = h.get("stock_code", "")
+            if code:
+                # 최초 매수일 조회 (최근 30일 내)
+                first_buy = self.trade_logger.get_first_buy_date(user_id, code, days=30)
+                if first_buy:
+                    try:
+                        first_buy_date = datetime.strptime(first_buy, '%Y-%m-%d').date()
+                        holding_days_map[code] = (now.date() - first_buy_date).days
+                    except:
+                        holding_days_map[code] = 0
+                else:
+                    holding_days_map[code] = 0
 
         MIN_HOLD_MINUTES = 30  # 최소 보유 시간 (분)
 
@@ -2209,13 +2226,24 @@ class AutoTrader:
                     hold_list.append(f"{stock_name}: 매수 후 {hold_minutes:.0f}분 (최소 {MIN_HOLD_MINUTES}분 보유)")
                     continue
 
-            # 개선된 홀딩/매도 판단 (V5 기반)
+            # 연구 기반 청산 전략 (2026-02-05)
+            holding_days = holding_days_map.get(stock_code, 0)
+
             if not self.sell_conditions and not is_closing_time:
-                should_sell, reason = check_hold_condition(stock_scores, profit_rate, stop_loss_rate)
+                # 연구 기반 청산 (시간+익절+스코어)
+                should_sell, reason, sell_ratio = check_exit_research_based(
+                    stock_scores, profit_rate, holding_days, hour, quantity
+                )
                 if should_sell:
-                    sell_reasons.append(reason)
+                    # 부분 매도 처리
+                    if sell_ratio < 1.0 and quantity > 1:
+                        partial_qty = max(1, int(quantity * sell_ratio))
+                        sell_reasons.append(f"{reason} (부분매도 {partial_qty}/{quantity})")
+                        quantity = partial_qty  # 매도 수량 조정
+                    else:
+                        sell_reasons.append(reason)
                 else:
-                    hold_list.append(f"{stock_name}: {reason}")
+                    hold_list.append(f"{stock_name}: {reason} (D+{holding_days})")
                     continue
             else:
                 # 손절 체크

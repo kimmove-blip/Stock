@@ -180,6 +180,20 @@ class StrategyConfig:
     STOP_LOSS_GOLDEN = 7.0       # 골든타임 손절 (현행 유지)
     STOP_LOSS_AFTERNOON = 4.0    # 오후 손절 (더 빠른 손절)
 
+    # === 연구 기반 청산 전략 (2026-02-05 추가) ===
+    # 시간 기반 청산 (567,000건 백테스트: 5일 보유가 최적)
+    MAX_HOLDING_DAYS = 5         # 최대 보유 기간 (일)
+    TIME_EXIT_ENABLED = True     # 시간 기반 청산 활성화
+
+    # 익절 전략 (3:1 보상비율 기반)
+    PROFIT_TARGET = 15.0         # 전량 익절 목표 (%)
+    PARTIAL_PROFIT = 8.0         # 부분 익절 기준 (%)
+    PARTIAL_SELL_RATIO = 0.5     # 부분 익절 시 매도 비율 (50%)
+    PROFIT_EXIT_ENABLED = True   # 익절 전략 활성화
+
+    # V5 기반 시간 청산 예외
+    TIME_EXIT_V5_EXCEPTION = 65  # V5 이상이면 시간 청산 예외
+
     # === 시총별 상승률 제한 ===
     CHANGE_LIMIT_LARGE = 5.0     # 대형주 (1조+): 5%
     CHANGE_LIMIT_MID = 10.0      # 중형주 (3000억~1조): 10%
