@@ -152,16 +152,19 @@ grep -E "ERROR|Exception|Traceback" /home/kimhc/Stock/logs/scalping_simulator.lo
 
 ## 6. 크론 존재 확인 (수시)
 
+> **중요: root 크론탭 사용** (2026-02-05 변경)
+> - `crontab -l` → `sudo crontab -l`
+
 ### 체크 명령어
 
 ```bash
-# 핵심 크론 존재 여부 (모두 1 이상이어야 함)
-echo "filter: $(crontab -l | grep -c filter_stocks)"
-echo "record: $(crontab -l | grep -c record_intraday)"
-echo "auto_trader: $(crontab -l | grep -c 'auto_trader.py')"
-echo "scalping: $(crontab -l | grep -c scalping_simulator)"
-echo "morning_briefing: $(crontab -l | grep -c morning_briefing)"
-echo "daily_top100: $(crontab -l | grep -c daily_top100)"
+# 핵심 크론 존재 여부 (모두 1 이상이어야 함) - root 크론탭
+echo "filter: $(sudo crontab -l | grep -c filter_stocks)"
+echo "record: $(sudo crontab -l | grep -c record_intraday)"
+echo "auto_trader: $(sudo crontab -l | grep -c 'auto_trader\|call-auto-trader')"
+echo "scalping: $(sudo crontab -l | grep -c scalping_simulator)"
+echo "morning_briefing: $(sudo crontab -l | grep -c morning_briefing)"
+echo "daily_top100: $(sudo crontab -l | grep -c daily_top100)"
 ```
 
 ### 알림 조건
@@ -285,3 +288,72 @@ crontab -l | grep -c record_intraday
 # 종목 필터
 /home/kimhc/Stock/venv/bin/python filter_stocks.py
 ```
+
+---
+
+## n8n 통합 모니터링 스크립트 (2026-02-05)
+
+> **중요**: root 크론탭 사용으로 변경됨
+
+```bash
+TODAY=$(date +%Y%m%d)
+DATE_DASH=$(date +%Y-%m-%d)
+
+# 1. 기본 시스템 체크
+FILTER_FILE="/home/kimhc/Stock/output/filtered_stocks_$TODAY.csv"
+[ -f "$FILTER_FILE" ] && FILTER_CNT=$(wc -l < "$FILTER_FILE" | tr -d ' \n') || FILTER_CNT=0
+
+# morning_briefing 로그 (없으면 SKIP)
+BRIEF_LOG="/tmp/morning_briefing.log"
+if [ -f "$BRIEF_LOG" ]; then
+  grep -q "$DATE_DASH" "$BRIEF_LOG" && BRIEF_OK="OK" || BRIEF_OK="FAIL"
+else
+  BRIEF_OK="SKIP"
+fi
+
+LAST_SCORE=$(ls -t /home/kimhc/Stock/output/intraday_scores/*.csv 2>/dev/null | head -1)
+[ -n "$LAST_SCORE" ] && SCORE_TIME=$(date -r "$LAST_SCORE" +%H:%M) || SCORE_TIME="N/A"
+SCORE_10M=$(find /home/kimhc/Stock/output/intraday_scores -name "*.csv" -mmin -10 | wc -l | tr -d ' \n')
+
+TRADE_TIME=$(grep "실행 시각" /tmp/auto_trader_all.log | tail -1 | grep -oP "\d{2}:\d{2}:\d{2}" | tail -1 | tr -d '\n')
+[ -z "$TRADE_TIME" ] && TRADE_TIME="N/A"
+TRADE_B=$(grep "$DATE_DASH" /tmp/auto_trader_all.log | grep -c '매수:' | tr -d ' \n')
+TRADE_S=$(grep "$DATE_DASH" /tmp/auto_trader_all.log | grep -c '매도:' | tr -d ' \n')
+
+pgrep -f "scalping_simulator" > /dev/null && SCAL_PROC="RUNNING" || SCAL_PROC="DEAD"
+SCAL_B=$(grep "$DATE_DASH" /home/kimhc/Stock/logs/scalping_mock_execute.log 2>/dev/null | grep -c 'BUY' | tr -d ' \n' || echo 0)
+SCAL_S=$(grep "$DATE_DASH" /home/kimhc/Stock/logs/scalping_mock_execute.log 2>/dev/null | grep -c 'SELL' | tr -d ' \n' || echo 0)
+
+HTTP=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:8000/health | tr -d ' \n')
+
+# root 크론탭 확인 (2026-02-05 변경)
+CRON_CNT=$(sudo crontab -l 2>/dev/null | grep -E "filter_stocks|record_intraday|auto_trader|scalping_simulator" | wc -l | tr -d ' \n')
+
+# 2. 스캘핑 상세 데이터
+S_FILE="/home/kimhc/Stock/output/scalping_simulation/summary_$TODAY.json"
+T_FILE="/home/kimhc/Stock/output/scalping_simulation/trades_$TODAY.json"
+
+if [ -f "$S_FILE" ]; then S_JSON=$(cat "$S_FILE" | tr -d '\n'); else S_JSON="{}"; fi
+
+if [ -f "$T_FILE" ]; then
+  H_JSON=$(jq -c '[.[] | select(.exit_time == null)]' "$T_FILE")
+  R_JSON=$(jq -c '.[-5:]' "$T_FILE")
+else
+  H_JSON="[]"
+  R_JSON="[]"
+fi
+
+# 3. 최종 JSON
+echo "{\"filter\":$FILTER_CNT, \"briefing\":\"$BRIEF_OK\", \"score\":{\"time\":\"$SCORE_TIME\",\"c10\":$SCORE_10M}, \"trade\":{\"time\":\"$TRADE_TIME\",\"b\":$TRADE_B,\"s\":$TRADE_S}, \"scalping\":{\"proc\":\"$SCAL_PROC\",\"b\":$SCAL_B,\"s\":$SCAL_S}, \"http\":\"$HTTP\", \"cron\":$CRON_CNT, \"scalping_detail\": {\"summary\": $S_JSON, \"holdings\": $H_JSON, \"recent\": $R_JSON}}"
+```
+
+### 이상감지 조건
+
+| 필드 | 정상 | 이상 |
+|------|------|------|
+| `filter` | >= 500 | < 500 |
+| `briefing` | "OK" 또는 "SKIP" | "FAIL" |
+| `score.c10` | >= 1 | 0 (10분간 CSV 없음) |
+| `http` | "200" | 그 외 |
+| `cron` | >= 3 | 0 |
+| `scalping.proc` | "RUNNING" (장중) | "DEAD" (장중) |
