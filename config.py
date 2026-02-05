@@ -185,11 +185,22 @@ class StrategyConfig:
     MAX_HOLDING_DAYS = 5         # 최대 보유 기간 (일)
     TIME_EXIT_ENABLED = True     # 시간 기반 청산 활성화
 
-    # 익절 전략 (3:1 보상비율 기반)
-    PROFIT_TARGET = 15.0         # 전량 익절 목표 (%)
-    PARTIAL_PROFIT = 8.0         # 부분 익절 기준 (%)
-    PARTIAL_SELL_RATIO = 0.5     # 부분 익절 시 매도 비율 (50%)
-    PROFIT_EXIT_ENABLED = True   # 익절 전략 활성화
+    # 익절 전략 - 트레일링 스탑 전용 (2026-02-05)
+    PROFIT_TARGET = None         # 고정 익절 비활성화
+    PARTIAL_PROFIT = None        # 부분 익절 비활성화
+    PARTIAL_SELL_RATIO = 0.0     # 부분 익절 안함
+    PROFIT_EXIT_ENABLED = False  # 고정 익절 비활성화 (트레일링만 사용)
+
+    # 트레일링 스탑 설정 (유일한 익절 방식)
+    TRAILING_STOP_ENABLED = True  # 트레일링 스탑 활성화
+    TRAILING_STOP_PCT = 5.0       # 고점 대비 -5% 하락 시 익절
+    TRAILING_STOP_MIN_PROFIT = 5.0   # 최소 +5% 수익 시부터 트레일링 적용 (10→5)
+    MOMENTUM_HOLD_V5 = 60         # V5 >= 60이면 추가 홀딩
+
+    # 상한가 근접 매도 금지
+    UPPER_LIMIT_HOLD_ENABLED = True  # 상한가 근접 시 매도 금지
+    UPPER_LIMIT_THRESHOLD = 3.0      # 상한가까지 3% 이내면 홀딩
+    STRONG_MOMENTUM_THRESHOLD = 20.0 # +20% 이상 상승 시 강한 모멘텀으로 판단 (대장주 추종 보호)
 
     # V5 기반 시간 청산 예외
     TIME_EXIT_V5_EXCEPTION = 65  # V5 이상이면 시간 청산 예외

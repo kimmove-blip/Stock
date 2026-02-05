@@ -493,6 +493,222 @@ def is_market_hours() -> bool:
     return market_open <= now <= market_close
 
 
+def get_yesterday_strong_from_csv() -> dict:
+    """어제 마지막 CSV에서 강세 종목 조회 (+20% 이상)"""
+    from datetime import timedelta
+
+    yesterday = datetime.now() - timedelta(days=1)
+    # 주말 처리 (토요일이면 금요일, 일요일이면 금요일)
+    while yesterday.weekday() >= 5:  # 5=토, 6=일
+        yesterday -= timedelta(days=1)
+
+    yesterday_str = yesterday.strftime('%Y%m%d')
+    csv_files = sorted(OUTPUT_DIR.glob(f"{yesterday_str}_*.csv"))
+
+    if not csv_files:
+        return {}
+
+    # 어제 마지막 파일 (장 마감 시점)
+    latest_file = csv_files[-1]
+    try:
+        df = pd.read_csv(latest_file)
+        df['code'] = df['code'].astype(str).str.zfill(6)
+
+        # +20% 이상 종목 (엄격한 기준)
+        strong = df[df['change_pct'] >= 20.0]
+        result = {}
+        for _, row in strong.iterrows():
+            result[row['code']] = {
+                'name': row['name'],
+                'prev_change': row['change_pct'],
+            }
+        return result
+    except Exception as e:
+        print(f"    어제 CSV 로드 실패: {e}")
+        return {}
+
+
+def run_upper_limit_tracker(records: list, recorded_at: datetime):
+    """
+    상한가 후보 추적 및 저장
+
+    인트라데이 스코어 데이터를 활용하여 상한가 후보 분석
+    - 거래량 폭발: 현재 CSV의 volume_ratio
+    - 어제 강세: 어제 마지막 CSV의 change_pct
+    - 강한 모멘텀: 현재 CSV의 change_pct
+    - 대장주-종속주: 실시간 등락률 비교
+    """
+    import json
+    from upper_limit_tracker import (
+        get_leader_follower_opportunities,
+        THEME_LEADERS
+    )
+
+    # 현재 등락률 맵 생성 (대장주-종속주 분석용)
+    today_changes = {}
+    stock_data = {}  # 전체 종목 데이터
+    for r in records:
+        code = r['code']
+        today_changes[code] = r['change_pct']
+        stock_data[code] = {
+            'name': r['name'],
+            'open': r['open'],
+            'high': r['high'],
+            'low': r['low'],
+            'close': r['close'],
+            'change_pct': r['change_pct'],
+            'volume': r['volume'],
+            'volume_ratio': r.get('volume_ratio', 1.0),
+            'v2': r['v2'],
+            'v4': r['v4'],
+            'v5': r['v5'],
+        }
+
+    candidates = []
+
+    # 0. 어제 강세 종목 로드 (+15% 이상)
+    yesterday_strong = get_yesterday_strong_from_csv()
+    if yesterday_strong:
+        print(f"    어제 강세 종목: {len(yesterday_strong)}개")
+
+    # 1. 대장주-종속주 분석
+    leader_follower = get_leader_follower_opportunities(today_changes)
+    for item in leader_follower:
+        code = item['code']
+        if code in stock_data:
+            sd = stock_data[code]
+            item.update({
+                'open': sd['open'],
+                'high': sd['high'],
+                'low': sd['low'],
+                'close': sd['close'],
+                'volume': sd['volume'],
+                'volume_ratio': sd['volume_ratio'],
+                'v2': sd['v2'],
+                'v4': sd['v4'],
+                'v5': sd['v5'],
+                'detected_at': recorded_at.strftime('%H:%M'),
+            })
+        candidates.append(item)
+
+    # 2. 거래량 폭발 (엄격한 기준: 7배 이상 + 10% 이상 + V2≥60)
+    for r in records:
+        vol_ratio = r.get('volume_ratio', 1.0)
+        change_pct = r['change_pct']
+        v2 = r.get('v2', 0)
+
+        # 엄격한 기준: 거래량 7배+, 등락률 10%+, V2 60+ (상한가 직전 신호만)
+        if vol_ratio >= 7.0 and change_pct >= 10.0 and v2 >= 60:
+            # 이미 대장주 추종에 포함되어 있으면 스킵
+            if any(c['code'] == r['code'] for c in candidates):
+                continue
+
+            candidates.append({
+                'code': r['code'],
+                'name': r['name'],
+                'open': r['open'],
+                'high': r['high'],
+                'low': r['low'],
+                'close': r['close'],
+                'change_pct': change_pct,
+                'volume': r['volume'],
+                'volume_ratio': round(vol_ratio, 1),
+                'v2': r['v2'],
+                'v4': r['v4'],
+                'v5': r['v5'],
+                'reason': f"거래량 {vol_ratio:.1f}배 폭발, +{change_pct:.1f}%",
+                'category': 'volume_explosion',
+                'upper_limit_prob': min(85, 45 + vol_ratio * 4 + change_pct),
+                'detected_at': recorded_at.strftime('%H:%M'),
+            })
+
+    # 3. 강한 모멘텀 (+15% 이상)
+    for r in records:
+        change_pct = r['change_pct']
+
+        if change_pct >= 15.0:
+            if any(c['code'] == r['code'] for c in candidates):
+                continue
+
+            candidates.append({
+                'code': r['code'],
+                'name': r['name'],
+                'open': r['open'],
+                'high': r['high'],
+                'low': r['low'],
+                'close': r['close'],
+                'change_pct': change_pct,
+                'volume': r['volume'],
+                'volume_ratio': r.get('volume_ratio', 1.0),
+                'v2': r['v2'],
+                'v4': r['v4'],
+                'v5': r['v5'],
+                'reason': f"강한 모멘텀 +{change_pct:.1f}%",
+                'category': 'strong_momentum',
+                'upper_limit_prob': min(85, 50 + change_pct * 1.5),
+                'detected_at': recorded_at.strftime('%H:%M'),
+            })
+
+    # 4. 어제 강세 (+20% 이상) → 오늘도 강한 양봉이면 상한가 후보
+    for code, info in yesterday_strong.items():
+        if code not in stock_data:
+            continue
+        if any(c['code'] == code for c in candidates):
+            continue
+
+        sd = stock_data[code]
+        today_change = sd['change_pct']
+        prev_change = info['prev_change']
+
+        # 엄격한 기준: 어제 +20%+ AND 오늘 +5%+
+        if prev_change >= 20.0 and today_change >= 5.0:
+            prev_change = info['prev_change']
+            candidates.append({
+                'code': code,
+                'name': info['name'],
+                'open': sd['open'],
+                'high': sd['high'],
+                'low': sd['low'],
+                'close': sd['close'],
+                'change_pct': today_change,
+                'volume': sd['volume'],
+                'volume_ratio': sd['volume_ratio'],
+                'v2': sd['v2'],
+                'v4': sd['v4'],
+                'v5': sd['v5'],
+                'prev_change': prev_change,
+                'reason': f"어제 +{prev_change:.1f}% 강세, 오늘 +{today_change:.1f}%",
+                'category': 'yesterday_strong',
+                'upper_limit_prob': min(80, 45 + prev_change * 1.2 + today_change * 1.5),
+                'detected_at': recorded_at.strftime('%H:%M'),
+            })
+
+    # 확률순 정렬
+    candidates.sort(key=lambda x: x.get('upper_limit_prob', 0), reverse=True)
+
+    # JSON 저장
+    output_path = PROJECT_ROOT / "output" / "upper_limit_candidates.json"
+    result = {
+        'time': recorded_at.strftime('%Y-%m-%d %H:%M:%S'),
+        'total_candidates': len(candidates),
+        'by_category': {
+            'leader_follower': len([c for c in candidates if c.get('category') == 'leader_follower']),
+            'volume_explosion': len([c for c in candidates if c.get('category') == 'volume_explosion']),
+            'strong_momentum': len([c for c in candidates if c.get('category') == 'strong_momentum']),
+            'yesterday_strong': len([c for c in candidates if c.get('category') == 'yesterday_strong']),
+            'consecutive_rise': 0,
+        },
+        'candidates': candidates[:30],
+    }
+
+    with open(output_path, 'w', encoding='utf-8') as f:
+        json.dump(result, f, ensure_ascii=False, indent=2)
+
+    print(f"    {len(candidates)}개 상한가 후보 저장 완료")
+    for c in candidates[:5]:
+        print(f"      - {c['name']}: {c.get('upper_limit_prob', 0):.0f}% ({c.get('category', '')})")
+
+
 def main():
     global USE_KIS_API
 
@@ -583,6 +799,14 @@ def main():
             print(f"    저장 완료: {filepath}")
         else:
             print("    저장 실패")
+
+    # 상한가 후보 추적 (장중에만)
+    if not args.dry_run and is_market_hours():
+        print("\n[3.5] 상한가 후보 추적...")
+        try:
+            run_upper_limit_tracker(records, recorded_at)
+        except Exception as e:
+            print(f"    상한가 추적 오류: {e}")
 
     # auto_trader 호출 (--call-auto-trader 옵션)
     if args.call_auto_trader and not args.dry_run and filepath:

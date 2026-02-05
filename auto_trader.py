@@ -2075,14 +2075,15 @@ class AutoTrader:
         # JSON 저장
         self._save_screening_json(top_stocks, stats, now)
 
-        # 14:55 이후 장마감 시간 - 신규 매수 금지
-        if now.hour == 15 or (now.hour == 14 and now.minute >= 55):
-            print(f"\n[4] 장마감 시간 - 신규 매수 없음")
+        # 14:50 이후 장마감 시간 - 신규 매수 금지 (수수료 손해 방지)
+        if now.hour == 15 or (now.hour == 14 and now.minute >= 50):
+            print(f"\n[4] 장마감 시간 (14:50+) - 신규 매수 없음")
             return {"status": "completed", "buy_count": 0, "sell_count": sell_count}
 
-        # 14:50 이후 매수 조건 강화
-        if now.hour == 14 and now.minute >= 50:
-            min_score += 5
+        # 14:30 이후 매수 조건 강화 (+10점, 정리매도 대비)
+        if now.hour == 14 and now.minute >= 30:
+            min_score += 10
+            print(f"  [14:30 이후] 매수 조건 강화: 최소 {min_score}점")
 
         # 4-5. 매수 후보 필터링
         filtered_candidates = self._filter_buy_candidates(
@@ -2155,6 +2156,7 @@ class AutoTrader:
                         scores_map[row['code']] = {
                             'v1': int(row.get('v1', 0)), 'v2': int(row.get('v2', 0)),
                             'v4': int(row.get('v4', 0)), 'v5': int(row.get('v5', 0)),
+                            'change_pct': float(row.get('change_pct', 0)),
                         }
             except Exception as e:
                 print(f"  점수 로드 실패: {e}")
@@ -2191,7 +2193,7 @@ class AutoTrader:
             code = h.get("stock_code", "")
             if code:
                 # 최초 매수일 조회 (최근 30일 내)
-                first_buy = self.trade_logger.get_first_buy_date(user_id, code, days=30)
+                first_buy = self.logger.get_first_buy_date(self.user_id, code, days=30)
                 if first_buy:
                     try:
                         first_buy_date = datetime.strptime(first_buy, '%Y-%m-%d').date()
@@ -2218,9 +2220,15 @@ class AutoTrader:
             current_score = stock_scores.get(score_version, 50)
             sell_reasons = []
 
-            # 최소 보유 시간 체크 (손절 제외)
+            # peak_profit_rate 조회 및 업데이트 (트레일링 스탑용)
+            peak_profit_rate = self.logger.get_peak_profit_rate(self.user_id, stock_code)
+            if profit_rate > peak_profit_rate:
+                peak_profit_rate = profit_rate
+                self.logger.update_peak_profit_rate(self.user_id, stock_code, peak_profit_rate)
+
+            # 최소 보유 시간 체크 (손절 제외, 정리매도 시간 제외)
             buy_time = buy_times.get(stock_code)
-            if buy_time and profit_rate > -stop_loss_rate:
+            if buy_time and profit_rate > -stop_loss_rate and not is_closing_time:
                 hold_minutes = (now - buy_time).total_seconds() / 60
                 if hold_minutes < MIN_HOLD_MINUTES:
                     hold_list.append(f"{stock_name}: 매수 후 {hold_minutes:.0f}분 (최소 {MIN_HOLD_MINUTES}분 보유)")
@@ -2228,11 +2236,13 @@ class AutoTrader:
 
             # 연구 기반 청산 전략 (2026-02-05)
             holding_days = holding_days_map.get(stock_code, 0)
+            change_rate = stock_scores.get('change_pct', 0)  # 당일 등락률
 
             if not self.sell_conditions and not is_closing_time:
-                # 연구 기반 청산 (시간+익절+스코어)
+                # 연구 기반 청산 (시간+익절+스코어+트레일링스탑)
                 should_sell, reason, sell_ratio = check_exit_research_based(
-                    stock_scores, profit_rate, holding_days, hour, quantity
+                    stock_scores, profit_rate, holding_days, now.hour, quantity,
+                    peak_profit_rate=peak_profit_rate, change_rate=change_rate
                 )
                 if should_sell:
                     # 부분 매도 처리
@@ -2727,6 +2737,21 @@ def run_for_all_users(dry_run: bool = False, min_score: int = 75):
         except Exception as e:
             import traceback
             traceback.print_exc()
+
+            # 텔레그램으로 에러 알림
+            try:
+                from telegram_notifier import TelegramNotifier
+                from config import TelegramConfig
+                notifier = TelegramNotifier()
+                error_msg = f"🚨 <b>AutoTrader 에러</b>\n\n"
+                error_msg += f"사용자: {user_id}\n"
+                error_msg += f"모드: {trade_mode}\n"
+                error_msg += f"에러: {str(e)[:200]}\n"
+                error_msg += f"시각: {datetime.now().strftime('%H:%M:%S')}"
+                notifier.send_message(TelegramConfig.CHAT_ID, error_msg)
+            except Exception:
+                pass  # 텔레그램 전송 실패 시 무시
+
             return {
                 'user_id': user_id,
                 'trade_mode': trade_mode,
@@ -2798,27 +2823,47 @@ def main():
 
     trader = AutoTrader(dry_run=args.dry_run, user_id=args.user_id, user_config=user_config)
 
-    if args.report:
-        trader.print_report(days=args.days)
-    elif args.intraday:
-        # 장중 10분 스크리닝 모드
-        # user_id가 지정된 경우 trade_mode, min_buy_score 조회
-        trade_mode = 'auto'
-        min_score = args.min_score
-        if args.user_id:
-            logger = TradeLogger()
-            settings = logger.get_auto_trade_settings(args.user_id)
-            if settings:
-                db_mode = settings.get('trade_mode', 'auto')
-                trade_mode = db_mode if db_mode in ('semi', 'auto') else 'auto'
-                # 사용자 설정의 min_buy_score 적용
-                user_min_score = settings.get('min_buy_score')
-                if user_min_score is not None:
-                    min_score = user_min_score
-                    print(f"[AutoTrader] 사용자 {args.user_id} min_buy_score: {min_score}점")
-        trader.run_intraday(min_score=min_score, trade_mode=trade_mode)
-    else:
-        trader.run()
+    try:
+        if args.report:
+            trader.print_report(days=args.days)
+        elif args.intraday:
+            # 장중 10분 스크리닝 모드
+            # user_id가 지정된 경우 trade_mode, min_buy_score 조회
+            trade_mode = 'auto'
+            min_score = args.min_score
+            if args.user_id:
+                logger = TradeLogger()
+                settings = logger.get_auto_trade_settings(args.user_id)
+                if settings:
+                    db_mode = settings.get('trade_mode', 'auto')
+                    trade_mode = db_mode if db_mode in ('semi', 'auto') else 'auto'
+                    # 사용자 설정의 min_buy_score 적용
+                    user_min_score = settings.get('min_buy_score')
+                    if user_min_score is not None:
+                        min_score = user_min_score
+                        print(f"[AutoTrader] 사용자 {args.user_id} min_buy_score: {min_score}점")
+            trader.run_intraday(min_score=min_score, trade_mode=trade_mode)
+        else:
+            trader.run()
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+
+        # 텔레그램으로 에러 알림
+        try:
+            from telegram_notifier import TelegramNotifier
+            from config import TelegramConfig
+            notifier = TelegramNotifier()
+            error_msg = f"🚨 <b>AutoTrader 에러</b>\n\n"
+            error_msg += f"사용자: {args.user_id or 'N/A'}\n"
+            error_msg += f"에러: {str(e)[:200]}\n"
+            error_msg += f"시각: {datetime.now().strftime('%H:%M:%S')}"
+            notifier.send_message(TelegramConfig.CHAT_ID, error_msg)
+            print(f"[텔레그램] 에러 알림 전송 완료")
+        except Exception as te:
+            print(f"[텔레그램] 에러 알림 전송 실패: {te}")
+
+        raise  # 에러 재발생 (스크립트 비정상 종료)
 
 
 if __name__ == "__main__":

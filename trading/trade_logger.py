@@ -556,6 +556,47 @@ class TradeLogger:
                 return row['first_buy_date']
         return None
 
+    def get_peak_profit_rate(self, user_id: int, stock_code: str) -> float:
+        """
+        종목의 고점 수익률 조회 (트레일링 스탑용)
+
+        Args:
+            user_id: 사용자 ID
+            stock_code: 종목코드
+
+        Returns:
+            고점 수익률 (%) - 없으면 0.0
+        """
+        query = """
+            SELECT peak_profit_rate FROM holdings
+            WHERE user_id = ? AND stock_code = ?
+        """
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(query, [user_id, stock_code])
+            row = cursor.fetchone()
+            if row and row['peak_profit_rate']:
+                return float(row['peak_profit_rate'])
+        return 0.0
+
+    def update_peak_profit_rate(self, user_id: int, stock_code: str, peak_rate: float):
+        """
+        종목의 고점 수익률 업데이트
+
+        Args:
+            user_id: 사용자 ID
+            stock_code: 종목코드
+            peak_rate: 새 고점 수익률 (%)
+        """
+        query = """
+            UPDATE holdings SET peak_profit_rate = ?, updated_at = CURRENT_TIMESTAMP
+            WHERE user_id = ? AND stock_code = ?
+        """
+        with self._get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(query, [peak_rate, user_id, stock_code])
+            conn.commit()
+
     def get_trade_history(
         self,
         user_id: int = None,
